@@ -231,5 +231,6 @@ wireless GIP/NDIS output are future work.
 
 GPL-2.0-or-later; see [LICENSE](LICENSE). The port retains xone/mt76 notices.
 ViGEmClient headers retain their MIT license under `third_party/vigem`.
-Windows DLLs/drivers are used from the operating system and are not redistributed.
+Xbox system DLLs/drivers are used from Windows and are not redistributed. Setup
+includes the official Python runtime with its own license and runtime dependencies.
 This is an independent project, not affiliated with Microsoft or the xone authors.

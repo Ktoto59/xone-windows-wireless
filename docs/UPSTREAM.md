@@ -27,7 +27,7 @@ not bundled in the project release. All project GPL source is included in Setup.
   were references; their hook implementation is not included.
 - [usbip-win2](https://github.com/vadimgrn/usbip-win2) is a separately installed
   dependency. This project does not redistribute its installers or kernel drivers.
-- Microsoft firmware, Windows DLLs/SYS files, public PDBs, driver-store backups and
+- Microsoft firmware, Xbox system DLLs/SYS files, public PDBs, driver-store backups and
   reverse-engineering dumps are not included. Public USB profiles contain generic
   model descriptors and synthetic serials, not the captured physical serials.
 
