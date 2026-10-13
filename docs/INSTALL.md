@@ -1,117 +1,92 @@
-# Installation details
+# Install and use alpha.4
 
-For the recommended GUI route, download the **Setup x64 EXE** from Releases and
-follow the first-run control panel. It includes its own Python runtime and handles
-dependency preparation and mapping without hand-editing JSON. See README and
-[installer details](INSTALLER.md). The instructions below describe the manual route.
+Use the **Setup x64 EXE** from the
+[alpha.4 release](https://github.com/Ktoto59/xone-windows-wireless/releases/tag/v0.1.0-alpha.4).
+It installs an invisible C++ background host and enables automatic startup.
+The ZIP is a source/development package; extracting it does not install the application.
 
-This preview is a user-mode transport and virtual USB/GIP bridge.
-It does not contain a new signed Xbox radio kernel driver. Its executables are
-not Authenticode-signed. The adapter uses Windows' signed in-box WinUSB driver;
-the virtual USB controller is supplied by the separately installed usbip-win2.
+## Requirements
 
-## Dependencies
+- Windows 11 x64, a logged-in user session and administrator approval for setup.
+- One external Xbox Wireless Adapter with hardware ID `045E:02FE`, connected during
+  setup. Other adapter variants and built-in Xbox radios are not supported here.
+- A supported Series controller, Xbox Wireless Headset 2021 (green rim), or Xbox
+  Wireless Headset 2024 (no green rim). One device per model is supported.
+- Internet access when the Microsoft adapter RAM firmware or USBip dependency is
+  missing. Setup downloads and verifies them; Python does not need to be installed.
 
-Use Windows 11 x64, Python 3.11+ and the Microsoft Visual C++ v14 x64 runtime.
-Python must be available as `python.exe` in PowerShell; verify `python --version`.
-The Python bridge uses the standard library and needs no pip packages.
+The current installer accepts the stock Microsoft `mt7612US` adapter driver or an
+existing WinUSB binding. It uses signed Windows drivers and signed upstream
+usbip-win2 0.9.8.1; it does not require Developer Mode, TESTSIGNING or a Secure Boot
+change. The project's own application/Setup executables are not Authenticode-signed.
 
-Install [usbip-win2 0.9.8.1](https://github.com/vadimgrn/usbip-win2/releases/tag/v.0.9.8.1)
-from its upstream release, including the client and virtual USB controller.
-The tested installation uses `C:\Program Files\USBip\usbip.exe`. Its installer
-can restart USB hubs and temporarily interrupt attached USB devices; follow the
-upstream instructions. This project does not change Secure Boot or test-signing.
+## Installation
 
-Windows must have the Microsoft `dc1-controller`, `xboxgip` and `usbaudio`
-components. USB/IP presents the captured wired device profiles to those drivers.
-Install Xbox Accessories separately from Microsoft's Store if you want its UI.
+1. Connect the adapter. Close an older xone control panel if it is open.
+2. Run `xone-windows-wireless-0.1.0-alpha.4-Setup-x64.exe` and click **Install**.
+3. Approve the Windows administrator prompt for dependency and adapter setup.
+   USB devices can briefly disconnect during the first USBip installation because
+   it restarts USB hubs. Restart Windows if Setup requests it.
+4. Turn on a supported device. If it has not been paired with this adapter, start
+   pairing on the device and briefly press the adapter's pairing button.
+5. Use the controller or play ordinary audio. The host identifies supported models,
+   saves their addresses locally and selects the latest connected headset for
+   default playback and microphone input.
 
-## Obtain firmware locally
+Setup obtains the matching firmware, preserves the stock binding when it changes
+it, and selects WinUSB for the physical adapter. Firmware is loaded into adapter
+RAM; it is not a persistent firmware update. The background host starts immediately
+and at the installing user's subsequent Windows sign-ins, without another normal
+UAC prompt. It is a user-session task, so it does not run before sign-in.
 
-The adapter RAM image is Microsoft's firmware, **not part of this distribution**.
-The bridge accepts only `FW_ACC_00U.bin` with SHA-256:
+There is no control window, tray icon, overlay, manual device mapping or normal
+backend-selection step. No Python or PowerShell process stays running. Individual
+applications with a pinned audio output may need their output changed once; they
+can ignore the Windows default. Headset volume, microphone mute and chat/game mix
+still follow the physical controls.
 
-```text
-48084d9fa53b9bb04358f3bb127b7495dc8f7bb0b3ca1437bd24ef2b6eabdf66
-```
+If Setup finishes but a device does not appear, follow
+[troubleshooting](TROUBLESHOOTING.md). Reconnecting the adapter once after a binding
+change may be necessary; regular use should not require changing drivers.
 
-With the stock adapter driver installed, try:
+## Upgrade
 
-```powershell
-.\scripts\Import-Firmware.ps1
-```
+Run the newer Setup EXE as the same Windows user. Same-folder installation preserves
+local configuration/recovery files and stops the owned background task before files
+are replaced. Setup enables the new automatic mode afterwards.
 
-The helper reads the local Windows driver store, verifies the hash and copies
-the matching image to `work/firmware/FW_ACC_00U.bin`. It makes no driver changes.
-If you already have that file:
+For a previous installation in another folder, alpha.4 can stop the recognized
+background task and copy validated device configuration and stock-binding metadata
+when the new installation has none. An unrecognized task or another running radio
+session can block setup; stop it from its own installation first. Recovery files in
+that previous folder are retained. Do not delete them until the upgrade works.
 
-```powershell
-.\scripts\Import-Firmware.ps1 -Path 'C:\path\to\FW_ACC_00U.bin'
-```
+The older alpha.3 control-panel/Python workflow is historical and is not required
+by this release. A fresh PC learns its own device addresses; do not copy another
+PC's local configuration or adapter backup into the installation.
 
-The upstream xone project documents a Microsoft Windows Update CAB containing
-the expected image in its [firmware acquisition script](https://github.com/medusalix/xone/blob/3484f603484782dd7551c64e5a33fc602b127051/install/firmware.sh).
-As an alternative, download that CAB from Microsoft's server and extract it with
-Windows `expand.exe`, then import and verify it:
+## Remove
 
-```powershell
-New-Item -ItemType Directory -Force work\downloads | Out-Null
-$firmwareCabUrl = 'https://download.windowsupdate.com/c/msdownload/update/driver/drvs/2017/07/1cd6a87c-623f-4407-a52d-c31be49e925c_e19f60808bdcbfbd3c3df6be3e71ffc52e43261e.cab'
-Invoke-WebRequest -Uri $firmwareCabUrl -OutFile work\downloads\adapter-driver.cab
-expand.exe -F:FW_ACC_00U.bin work\downloads\adapter-driver.cab work\downloads
-.\scripts\Import-Firmware.ps1 -Path work\downloads\FW_ACC_00U.bin
-```
+Keep the adapter connected to the original USB port and uninstall
+**xone-windows-wireless** from Windows **Installed apps**. Removal stops the owned
+host, removes its sign-in task and restores the stock adapter binding only when
+this installation owns the recovery metadata. Reconnect the adapter afterwards.
 
-The helper rejects other firmware hashes. The CAB and extracted image remain
-local. See the upstream script's Microsoft terms reference. Do not upload them
-with bug reports or source contributions.
+Shared USBip and private configuration/recovery files are retained. If removal
+cannot verify that the owned processes stopped or the stock binding was restored,
+it stops and keeps recovery data. Correct the reported problem and retry removal.
 
-## Bind exactly one adapter
+## Local files and privacy
 
-The public binding helper supports the external adapter `045E:02FE` with its
-stock `mt7612US` package. It refuses other hardware or unexpected driver state.
-Inspect the selection with `Switch-WinUSB.ps1 -Mode Plan`. `Bind` and `Restore`
-require an administrator PowerShell; changing binding requires a USB reconnect.
+The default application directory is
+`%LOCALAPPDATA%\Programs\xone-windows-wireless`.
+Private configuration is in `config/*.local.json`; small lifecycle/error snapshots
+and driver recovery data are in `work/`. Normal operation does not create text
+logs, packet captures or microphone recordings.
 
-Before binding, the script exports the original driver, saves its INF/section and
-the adapter's filter/interface registry values under `work/`. Only the selected
-instance changes. Keep that directory for restoration, and keep it private.
-For multiple matching adapters, supply `-InstanceId` explicitly.
+These files can contain physical addresses, instance IDs and local paths. They
+are not part of the public download. Do not attach the complete folders to an
+issue; report the model, Windows build, application version and symptoms instead.
 
-Do not run the stock driver, a discovery process and the new radio bridge
-against the same physical adapter simultaneously. Do not install the unsigned
-future-package INF found in `driver/`.
-
-## Device mapping
-
-The USB/GIP route needs each device's radio MAC and matching captured profile.
-See README for association discovery. The local configuration is:
-
-```json
-{
-  "Version": 1,
-  "AdapterInstanceId": "",
-  "Devices": [
-    { "Name": "controller", "Mac": "020000000003", "Profile": "controller-0b12-usb.json" }
-  ]
-}
-```
-
-Replace the fabricated MAC. An empty adapter ID selects one present `045E:02FE`
-adapter. Device names/MACs/profiles must be unique. Allowed profiles are
-`controller-0b12-usb.json`, `headset-0b17-usb.json`, `headset-0b32-usb.json`.
-Loopback USB and radio broker ports are assigned in pairs starting at 33240.
-Only one instance per captured profile is supported in this preview.
-
-Run `Run-UsbGip.ps1 -AudioBridge -NativeController` for the configured devices.
-Changing the configuration requires stopping and restarting the bridge.
-`-ConfigPath` can select a different private configuration file. Keep configs out
-of public repositories and release archives.
-
-## Alternatives
-
-`Run-Bridge.ps1` and the optional USB/GIP `-FallbackOutput native-gip` use the
-undocumented XboxGipSynthetic API. They require Developer Mode and administrator
-rights and expose a generic synthetic controller rather than the full native
-device configuration path. The older `vigem` option requires ViGEmBus and presents
-an Xbox 360 device. These alternatives are not the recommended headset route.
+This is an alpha tested on one development PC. Fresh installation on another PC,
+long-duration playback and broad sleep/resume behavior remain unverified.

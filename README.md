@@ -1,11 +1,11 @@
 # xone-windows-wireless
 
-Xbox Wireless Adapter support for Windows 11 x64, based on
-[medusalix/xone](https://github.com/medusalix/xone). Controllers and Xbox Wireless
-Headsets connect over the adapter's radio and use the existing Windows Xbox GIP
-and audio drivers.
+Connect Xbox Series controllers and Xbox Wireless Headsets 2021/2024 to Windows 11
+x64 through the external Xbox Wireless Adapter. Based on
+[medusalix/xone](https://github.com/medusalix/xone), with selected fixes from
+[dlundqvist/xone](https://github.com/dlundqvist/xone).
 
-The alpha.4 development installer provides an invisible C++ background host:
+The alpha.4 installer provides an invisible C++ background host:
 install once, approve adapter setup, and turn on your devices. It starts at sign-in,
 recognizes the supported models, reconnects them and selects the connected headset
 for playback and microphone input. There is no control window, tray icon, overlay,
@@ -21,11 +21,21 @@ used by this installer.
 
 ## Install
 
-1. Connect the external Xbox Wireless Adapter to the PC.
-2. Run `xone-windows-wireless-0.1.0-alpha.4-Setup-x64.exe` and approve Windows UAC
-   for setup. Internet access is needed for dependencies if they are not installed.
+Download **[Setup x64 EXE from alpha.4](https://github.com/Ktoto59/xone-windows-wireless/releases/tag/v0.1.0-alpha.4)**.
+The ZIP is for source/development use; it is not the automatic installer.
+
+1. Connect one external Xbox Wireless Adapter (`045E:02FE`) to the PC.
+2. Run `xone-windows-wireless-0.1.0-alpha.4-Setup-x64.exe`, click **Install**, and
+   approve Windows UAC for setup. Restart Windows if Setup requests it.
 3. Turn on your controller or headset. For a device that has never been paired
    with this adapter, use the ordinary pairing buttons on the device and adapter.
+
+No panel needs to be opened, no device addresses need to be entered, and no backend
+or audio device needs to be selected for normal use. Startup is enabled automatically
+for the installing user's Windows sign-in. Internet access is needed to obtain any
+missing firmware/dependencies. See the [installation guide](docs/INSTALL.md) for
+requirements, upgrades and removal, or [troubleshooting](docs/TROUBLESHOOTING.md)
+if a device does not work.
 
 Setup imports the exact Microsoft adapter RAM firmware, installs the verified
 USBip dependency if needed, backs up the stock adapter binding and selects WinUSB.
@@ -33,9 +43,9 @@ USB hubs may briefly restart while USBip is first installed. A Windows restart c
 be required by its driver installation. The application starts automatically in
 your logged-in user session and runs without administrator privileges.
 
-The portable archive is intended for source/development use; use Setup for automatic
-installation. The published [alpha.3 release](https://github.com/Ktoto59/xone-windows-wireless/releases/tag/v0.1.0-alpha.3)
-uses the earlier panel/Python supervisor and remains the previous checkpoint.
+The [alpha.3 release](https://github.com/Ktoto59/xone-windows-wireless/releases/tag/v0.1.0-alpha.3)
+uses the earlier panel/Python supervisor and remains available unchanged. Its
+manual first-run instructions do not apply to alpha.4.
 
 ## Supported models
 
@@ -53,7 +63,9 @@ disconnects, the host restores the previous active default where applicable and
 respects a later manual default-device change.
 
 Both headset revisions and a Series controller previously worked together with
-clean audio on the USB/GIP route. The new background implementation is a prerelease,
+clean audio on the USB/GIP route. The alpha.4 C++ host has been checked on one
+development PC; ordinary playback on the 2024 headset was clean during a short
+user check, with no stutters reported during that check. This is a prerelease,
 not a promise of years of unattended operation on every PC. Testing on other Windows
 builds, firmware versions and computers remains necessary.
 
@@ -77,7 +89,9 @@ adapter connected. Shared USBip and private recovery data are retained.
 ## Build and source
 
 Use Visual Studio 2022 C++ Build Tools and `scripts/Build-Appliance.cmd`.
-`Build-Installer.ps1 -IsccPath <ISCC.exe>` packages the C++ executables with Inno Setup.
+The installer also needs `outputs/xone-bind.exe`, built by `scripts/build.cmd`.
+`scripts/Build-Installer.ps1 -IsccPath <ISCC.exe>` builds/packages the C++ application
+with Inno Setup. See [installer details](docs/INSTALLER.md) for the source build order.
 PowerShell is used during installation/removal, not during ordinary operation.
 Historical Python research tools remain in source control but are excluded from
 this application package. See [architecture](docs/ARCHITECTURE.md),

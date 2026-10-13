@@ -1,5 +1,13 @@
 # Experimental C++ bridge
 
+**Alpha.4 uses this C++ data path as the default**, managed by an invisible C++
+background host. End users should follow [INSTALL.md](INSTALL.md); the installer
+does not include the old backend-selection panel or a Python runtime.
+
+The manual commands and panel workflow below record the development transition
+from alpha.3. They are not the alpha.4 setup instructions. For the current source
+build/package order, see [INSTALLER.md](INSTALLER.md).
+
 This development backend moves USB/IP, GIP forwarding and headset PCM conversion
 into the radio executable. It replaces the three Python data servers and their
 intermediate radio TCP connections. Windows still uses the signed USBip bus and

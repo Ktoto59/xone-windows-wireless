@@ -1,5 +1,8 @@
 # Automatic C++ installer
 
+For end-user requirements, installation, upgrades and removal, see
+[INSTALL.md](INSTALL.md). This page describes the implementation and source build.
+
 The alpha.4 development package installs three executables: `xone-background.exe`,
 `xone-probe-cpp.exe` and the installation-only `xone-bind.exe`. Python, the control
 panel, synthetic GIP probes and packet-test executables are not shipped as runtime.
@@ -32,5 +35,22 @@ The source checkout's prior direct-GIP audio experiments are not included in the
 application runtime. The new installer/runtime is a prerelease; software checks and
 single-PC hardware observations do not establish cross-PC or long-term reliability.
 
-Build: `scripts/Build-Appliance.cmd`, then
-`scripts/Build-Installer.ps1 -IsccPath <Inno Setup ISCC.exe>`.
+## Build from source
+
+Use Windows x64 with Visual Studio 2022 C++ Build Tools, a Windows SDK and Inno Setup.
+Run from the checkout root:
+
+```powershell
+# Supplies outputs/xone-bind.exe, used only for installation/removal.
+.\scripts\build.cmd
+# Builds the C++ host/data path, packages source/binaries and compiles Setup.
+.\scripts\Build-Installer.ps1 -IsccPath 'C:\path\to\ISCC.exe'
+```
+
+`Build-Installer.ps1` invokes `Build-Appliance.cmd`, which writes candidates to
+`outputs/appliance-candidate` instead of overwriting a running installation.
+`-SkipBuild` is for packaging already-built candidates, not for a fresh checkout.
+Artifacts are written to `dist/`; the public manifest identifies the source commit
+and file hashes. Local configuration, firmware, captures and driver backups are
+excluded. Historical Python research sources remain in Git and are omitted from
+the application package.
