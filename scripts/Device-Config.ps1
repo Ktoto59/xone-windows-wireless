@@ -16,12 +16,13 @@ function Read-XoneDeviceConfig([string]$Path,[switch]$AllowEmpty){
     $taskEntries=@($taskConfig.Devices)
     if(($taskEntries.Count -lt 1 -and -not $AllowEmpty) -or $taskEntries.Count -gt 3){throw 'Configure between one and three radio devices.'}
     $taskNames=@{};$taskMacs=@{};$taskProfiles=@{};$taskIndex=0;$taskDevices=@()
+    $taskAutomatic=[bool]$taskConfig.AutoDetect
     foreach($taskEntry in $taskEntries){
         $taskName=[string]$taskEntry.Name
         $taskMac=([string]$taskEntry.Mac -replace '[:-]','').ToLowerInvariant()
         $taskProfile=[string]$taskEntry.Profile
         if($taskName -notmatch '^[a-z][a-z0-9-]{0,23}$' -or $taskNames.ContainsKey($taskName)){throw 'Each device needs a unique lowercase name (letters, digits, hyphens).'}
-        if($taskMac -notmatch '^[0-9a-f]{12}$' -or $taskMac -eq '000000000000' -or $taskMacs.ContainsKey($taskMac)){throw 'Each device needs a unique six-byte radio MAC address.'}
+        if($taskMac -notmatch '^[0-9a-f]{12}$' -or ((-not $taskAutomatic -or $taskMac -ne '000000000000') -and ($taskMac -eq '000000000000' -or $taskMacs.ContainsKey($taskMac)))){throw 'Each device needs a unique six-byte radio MAC address.'}
         if($taskProfile -notin @('headset-0b32-usb.json','headset-0b17-usb.json','controller-0b12-usb.json')){throw 'Only the three captured device profiles are supported.'}
         if($taskProfiles.ContainsKey($taskProfile)){throw 'This preview supports one device per profile; duplicate virtual serials are not supported.'}
         $taskProfiles[$taskProfile]=$true

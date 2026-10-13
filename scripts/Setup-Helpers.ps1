@@ -84,7 +84,7 @@ function Get-XoneDownload([string]$Url,[string]$Path,[string]$Hash=''){
         Move-Item -LiteralPath $temporary -Destination $Path
     }finally{if(Test-Path -LiteralPath $temporary){Remove-Item -LiteralPath $temporary}}
 }
-function Initialize-XonePrerequisites([string]$Root){
+function Initialize-XonePrerequisites([string]$Root,[switch]$AllowPendingRestart){
     if(-not (Test-Path -LiteralPath (Join-Path $Root 'outputs/xone-probe-cpp.exe')) -and -not (Test-Path -LiteralPath (Join-Path $Root 'runtime/python/python.exe'))){throw 'The bridge runtime is missing. Reinstall the application.'}
     if(-not (Test-XoneFirmware $Root)){
         try{& (Join-Path $Root 'scripts/Import-Firmware.ps1')}catch{
@@ -106,11 +106,15 @@ function Initialize-XonePrerequisites([string]$Root){
     Get-XoneDownload 'https://github.com/vadimgrn/usbip-win2/releases/download/v.0.9.8.1/USBip-0.9.8.1-x64.exe' $installer $script:XoneUsbipHash
     $signature=Get-AuthenticodeSignature -LiteralPath $installer
     if($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Scheibling Consulting AB'){throw 'USBip publisher/signature verification failed.'}
-    $log=Join-Path $Root 'work/usbip-setup.log'
-    $arguments='/VERYSILENT /SP- /SUPPRESSMSGBOXES /NORESTART /RESTARTEXITCODE=3010 /NOCLOSEAPPLICATIONS /NORESTARTAPPLICATIONS /COMPONENTS="main,client" /TASKS="" /LOG='+ (Quote-XonePath $log)
-    $process=Start-Process -FilePath $installer -ArgumentList $arguments -Verb RunAs -WindowStyle Hidden -PassThru -Wait
-    if($process.ExitCode -eq 3010){throw 'USBip installed successfully and requires a Windows restart. Restart, then reopen this wizard.'}
-    if($process.ExitCode -ne 0){throw ('USBip installation failed (code '+$process.ExitCode+'). See work/usbip-setup.log.')}
+    $arguments='/VERYSILENT /SP- /SUPPRESSMSGBOXES /NORESTART /RESTARTEXITCODE=3010 /NOCLOSEAPPLICATIONS /NORESTARTAPPLICATIONS /COMPONENTS="main,client" /TASKS=""'
+    $process=Start-Process -FilePath $installer -ArgumentList $arguments -Verb RunAs -WindowStyle Hidden -PassThru
+    [void]$process.Handle;$process.WaitForExit()
+    if($process.ExitCode -eq 3010){
+        Write-XoneJson (Join-Path $Root 'work/setup-restart-required.json') @{Required=$true;Reason='USBip driver installation'}
+        if($AllowPendingRestart){return}
+        throw 'USBip installed successfully and requires a Windows restart.'
+    }
+    if($process.ExitCode -ne 0){throw ('USBip installation failed (code '+$process.ExitCode+').')}
     if(-not (Get-XoneUsbipStatus).Ready){throw 'USBip installed but its virtual controller is not ready. Restart Windows and reopen this wizard.'}
 }
 function Set-XoneSetupConfig([string]$Root,[string]$AdapterId,$Entries){
@@ -138,7 +142,7 @@ function Set-XoneBridgeBackend([string]$Root,[ValidateSet('cpp','python')][strin
     $value | Add-Member -NotePropertyName BridgeBackend -NotePropertyValue $Backend -Force
     Write-XoneJson $path $value
 }
-function Initialize-XoneApplication([string]$Root,[string]$InstanceId){
+function Initialize-XoneApplication([string]$Root,[string]$InstanceId,[switch]$AllowPendingRestart){
     $InstanceId=Resolve-XoneAdapterInstance $InstanceId
     $path=Join-Path $Root 'config/devices.local.json'
     $config=Read-XoneJson $path
@@ -149,7 +153,7 @@ function Initialize-XoneApplication([string]$Root,[string]$InstanceId){
     $service=(Get-PnpDeviceProperty -InstanceId $InstanceId -KeyName DEVPKEY_Device_Service).Data
     if($service -notin @('mt7612US','WinUSB')){throw 'The adapter uses an unsupported driver. Open Advanced settings to inspect it.'}
     Stop-XoneManagedBridge $Root;Assert-XoneRadioIdle
-    Initialize-XonePrerequisites $Root
+    Initialize-XonePrerequisites $Root -AllowPendingRestart:$AllowPendingRestart
     $switched=$false
     if($service -eq 'mt7612US'){
         & (Join-Path $Root 'scripts/Switch-WinUSB.ps1') -Mode Bind -InstanceId $InstanceId
@@ -159,7 +163,7 @@ function Initialize-XoneApplication([string]$Root,[string]$InstanceId){
     if($switched){
         & "$env:windir\System32\pnputil.exe" /restart-device $InstanceId | Out-Null
         $reconnect=$LASTEXITCODE -notin @(0,3010)
-        if($LASTEXITCODE -eq 3010){throw 'Windows requires a restart to finish adapter setup. Restart and reopen the app.'}
+        if($LASTEXITCODE -eq 3010){Write-XoneJson (Join-Path $Root 'work/setup-restart-required.json') @{Required=$true;Reason='Adapter driver installation'};if(-not $AllowPendingRestart){throw 'Windows requires a restart to finish adapter setup.'}}
     }
     if(-not $config){$config=[pscustomobject]@{Version=1;AdapterInstanceId=$InstanceId;BridgeBackend='cpp';Devices=@()}}
     $config.AdapterInstanceId=$InstanceId
@@ -167,6 +171,31 @@ function Initialize-XoneApplication([string]$Root,[string]$InstanceId){
     Write-XoneJson $path $config
     Write-XoneJson (Join-Path $Root 'work/application-setup.json') @{Complete=$true;ReconnectRequired=$reconnect;UpdatedUtc=[datetime]::UtcNow.ToString('o')}
     return [pscustomobject]@{ReconnectRequired=$reconnect}
+}
+function Move-XonePreviousInstallation([string]$Root){
+    $preferences=Read-XoneJson (Join-Path $Root 'config/app.local.json')
+    $sid=if($preferences.OwnerSid){[string]$preferences.OwnerSid}else{[Security.Principal.WindowsIdentity]::GetCurrent().User.Value}
+    if($sid -notmatch '^S-1-5-21-\d+-\d+-\d+-\d+$'){throw 'Invalid installation owner.'}
+    $task=Get-ScheduledTask -TaskName ('xone-windows-wireless-'+$sid) -ErrorAction SilentlyContinue
+    if(-not $task){return}
+    $actions=@($task.Actions)
+    if($actions.Count -ne 1 -or $actions[0].Arguments -or [IO.Path]::GetFileName($actions[0].Execute) -ne 'xone-background.exe'){throw 'The existing startup task is not an owned xone background host.'}
+    $oldRoot=Split-Path -Parent (Split-Path -Parent $actions[0].Execute)
+    if([IO.Path]::GetFullPath($oldRoot) -eq [IO.Path]::GetFullPath($Root)){return}
+    # Never execute scripts/commands from the old installation with setup rights.
+    foreach($name in @('maintenance.stop','usb-gip.stop')){[IO.File]::WriteAllText((Join-Path $oldRoot ('work/'+$name)),'stop')}
+    $state=Read-XoneJson (Join-Path $oldRoot 'work/maintenance-status.json');$deadline=[datetime]::UtcNow.AddSeconds(35)
+    while($state -and (Test-XoneProcess $state.Process) -and [datetime]::UtcNow -lt $deadline){Start-Sleep -Milliseconds 200}
+    if($state -and (Test-XoneProcess $state.Process)){throw 'The previous installation did not stop; its recovery data is intact.'}
+    Stop-ScheduledTask -TaskName $task.TaskName -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName $task.TaskName -Confirm:$false
+    $oldConfig=Join-Path $oldRoot 'config/devices.local.json';$newConfig=Join-Path $Root 'config/devices.local.json'
+    if(-not [IO.File]::Exists($newConfig) -and [IO.File]::Exists($oldConfig)){[void](Read-XoneDeviceConfig $oldConfig -AllowEmpty);Copy-Item -LiteralPath $oldConfig -Destination $newConfig}
+    $backup=Read-XoneJson (Join-Path $oldRoot 'work/binding-state.json')
+    if($backup -and -not [IO.File]::Exists((Join-Path $Root 'work/binding-state.json'))){
+        if($backup.InstanceId -notmatch '^USB\\VID_045E&PID_02FE\\[^\\\r\n]+$' -or $backup.Service -ne 'mt7612US' -or $backup.InfName -notmatch '^oem\d+\.inf$' -or $backup.Section -ne 'MTWLAN.ndi'){throw 'Previous adapter recovery metadata is invalid.'}
+        Write-XoneJson (Join-Path $Root 'work/binding-state.json') $backup
+    }
 }
 function Add-XoneApplicationDevice([string]$Root,[string]$InstanceId,[ValidateSet('controller-0b12-usb.json','headset-0b17-usb.json','headset-0b32-usb.json')][string]$Profile){
     $path=Join-Path $Root 'config/devices.local.json'

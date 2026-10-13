@@ -25,6 +25,7 @@ extern "C" {
 #include "usbip_native_output.hpp"
 #include "stop_file_watch.hpp"
 #include "audio_scheduling.hpp"
+extern "C" void xone_logging_enabled(int);
 
 namespace {
 std::atomic_bool interrupted=false;
@@ -83,7 +84,7 @@ struct Options {
     std::vector<std::wstring> native_peers;
     unsigned seconds=30;
     unsigned slot=0,large=16000,small_motor=0;
-    bool verbose=false,pair=false,virtual_xinput=false;
+    bool verbose=false,pair=false,virtual_xinput=false,automatic_usb=false,quiet=false;
 };
 Options options(int argc,wchar_t **argv) {
     Options result;
@@ -94,6 +95,8 @@ Options options(int argc,wchar_t **argv) {
         if (key==L"--verbose") result.verbose=true;
         else if (key==L"--pair-beacon") result.pair=true;
         else if (key==L"--virtual-xinput") result.virtual_xinput=true;
+        else if(key==L"--automatic-usb")result.automatic_usb=true;
+        else if(key==L"--quiet")result.quiet=true;
         else {
             if (i+1>=argc) throw std::runtime_error("Missing value for " + xone::utf8(key));
             const std::wstring value=argv[++i];
@@ -121,7 +124,7 @@ Options options(int argc,wchar_t **argv) {
                 if(!std::all_of(mac.begin(),mac.end(),[](wchar_t x){return (x>=L'0'&&x<=L'9') || (x>=L'a'&&x<=L'f') || (x>=L'A'&&x<=L'F');}) || name.empty() || name.size()>24 || !std::all_of(name.begin(),name.end(),[](wchar_t x){return (x>=L'a'&&x<=L'z') || (x>=L'0'&&x<=L'9') || x==L'-';}))throw std::runtime_error("Invalid native USB MAC/name");
                 size_t consumed=0;const auto port=std::stoul(value.substr(a+1,b-a-1),&consumed);if(consumed!=b-a-1 || port<1024 || port>65535)throw std::runtime_error("Invalid native USB port");
                 const auto pid=std::stoul(value.substr(b+1,c-b-1),&consumed,16);if(consumed!=c-b-1 || (pid!=0x0b32 && pid!=0x0b17 && pid!=0x0b12))throw std::runtime_error("Unsupported native USB profile");
-                for(const auto &r:result.native_routes)if(!_wcsicmp(r.mac.c_str(),mac.c_str()) || r.name==name || r.port==port || r.pid==pid)throw std::runtime_error("Native USB routes must be unique");
+                for(const auto &r:result.native_routes)if((mac!=L"000000000000" && !_wcsicmp(r.mac.c_str(),mac.c_str())) || r.name==name || r.port==port || r.pid==pid)throw std::runtime_error("Native USB routes must be unique");
                 result.native_routes.push_back({std::move(mac),std::move(name),static_cast<uint16_t>(port),static_cast<uint16_t>(pid)});
             }
             else if(key==L"--native-peer"){
@@ -149,7 +152,7 @@ Options options(int argc,wchar_t **argv) {
         }
     }
     if(result.usb_gip_fallback!=L"none" && result.output!=L"usb-gip")throw std::runtime_error("USB GIP fallback requires --output usb-gip");
-    if(!result.native_peers.empty() && result.output!=L"native-gip")throw std::runtime_error("Native peers require --output native-gip");
+    if(!result.native_peers.empty() && result.output!=L"native-gip" && !(result.output==L"usb-gip" && result.automatic_usb))throw std::runtime_error("Saved peers require native-gip or automatic USB mode");
     if(!result.native_routes.empty() && (result.output!=L"usb-gip" || !result.usb_gip_mac.empty() || !result.usb_gip_peers.empty() || result.usb_gip_fallback!=L"none" || result.status_file.empty()))throw std::runtime_error("Direct C++ USB needs --output usb-gip, --status-file and no Python/fallback routes");
     if(!result.usb_gip_peers.empty()){
         if(result.output!=L"usb-gip" || result.usb_gip_mac.empty())throw std::runtime_error("Additional USB peers require --output usb-gip and --usb-gip-mac");
@@ -364,7 +367,7 @@ int radio_test(const Options &opt,bool controller=false,bool run=false) {
         if(!run || (opt.usb_gip_mac.empty() && opt.native_routes.empty()) || opt.virtual_xinput)throw std::runtime_error("USB GIP requires run, a USB route, and no virtual XInput flag");
         std::vector<std::unique_ptr<xone::RawGipOutput>> brokers;
         if(!opt.native_routes.empty()){
-            for(const auto &r:opt.native_routes){const auto path=std::filesystem::path(opt.status_file).parent_path()/(L"usb-gip-"+r.name+L"-radio-status.json");brokers.push_back(std::make_unique<xone::NativeUsbOutput>(r.port,unhex(r.mac),r.pid,r.pid!=0x0b12,path.wstring()));}
+            for(const auto &r:opt.native_routes){const auto path=std::filesystem::path(opt.status_file).parent_path()/(L"usb-gip-"+r.name+L"-radio-status.json");brokers.push_back(std::make_unique<xone::NativeUsbOutput>(r.port,unhex(r.mac),r.pid,r.pid!=0x0b12,path.wstring(),opt.automatic_usb,opt.verbose));}
         }else{
             brokers.push_back(std::make_unique<xone::UsbGipBroker>(opt.usb_gip_port,unhex(opt.usb_gip_mac)));
             for(const auto &[mac,port]:opt.usb_gip_peers)brokers.push_back(std::make_unique<xone::UsbGipBroker>(port,unhex(mac)));
@@ -402,7 +405,7 @@ int radio_test(const Options &opt,bool controller=false,bool run=false) {
         std::unique_ptr<xone::AudioOutput> audio_output;
         if(run && native_output)audio_output=std::make_unique<xone::NativeAudioOutput>();
         xone::Session session(mt,output.get(),!run || opt.verbose,audio_output.get(),raw_output.get());
-        if(opt.output==L"native-gip"){
+        if(opt.output==L"native-gip" || opt.automatic_usb){
             session.enable_native_reconnect();
             for(const auto &peer:opt.native_peers)session.remember_peer(unhex(peer));
         }
@@ -450,7 +453,7 @@ int radio_test(const Options &opt,bool controller=false,bool run=false) {
         try {
             while (!interrupted && std::chrono::steady_clock::now()<end && !stop_watch.requested()) {
                 receiver.check(); for (const auto &event:receiver.drain()) session.process(event); session.tick();save_status(true);
-                std::cout.flush();tick_timer.wait(session.audio_active() || opt.output==L"usb-gip"?1:5);
+                std::cout.flush();tick_timer.wait(session.audio_active() || (raw_output && raw_output->audio_active())?1:5);
             }
             session.close();save_status(false);
         } catch (...) {
@@ -487,7 +490,6 @@ int radio_test(const Options &opt,bool controller=false,bool run=false) {
 }
 int wmain(int argc,wchar_t **argv) {
     std::cout.setf(std::ios::unitbuf);
-    SetUnhandledExceptionFilter(xone_crash_trace);
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCtrlHandler(console_handler,TRUE);
     try {
@@ -501,6 +503,8 @@ int wmain(int argc,wchar_t **argv) {
             return 0;
         }
         const auto opt=options(argc,argv);
+        if(opt.quiet){std::cout.setstate(std::ios::failbit);std::cerr.setstate(std::ios::failbit);xone_logging_enabled(0);}
+        else SetUnhandledExceptionFilter(xone_crash_trace);
         if (command==L"list") {
             const auto list=xone::adapters();
             for (const auto &d : list) std::cout << xone::utf8(d.name) << "\n  instance=" << xone::utf8(d.instance)

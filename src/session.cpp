@@ -275,8 +275,8 @@ void Session::process(const RadioEvent &e,std::chrono::steady_clock::time_point 
         pair_scan_last_=std::chrono::steady_clock::now();
         pair_deadline_=pair_scan_last_+std::chrono::seconds(60);break;
     case RadioEvent::Kind::association: {
-        if(raw_output_ && !pairing_ && !output_ && !audio_output_ && !raw_output_->target(e.address))return;
-        if(native_reconnect_ && !pairing_ && !known_peer(e.address))return;
+        if(raw_output_ && !raw_output_->automatic() && !pairing_ && !output_ && !audio_output_ && !raw_output_->target(e.address))return;
+        if(native_reconnect_ && !(raw_output_ && raw_output_->automatic()) && !pairing_ && !known_peer(e.address))return;
         for(const auto &c:clients_) if(c && c->address==e.address) {
             // Debounce immediate WLAN retries. A later association from a known
             // USB peer must not inherit the previous Windows/GIP generation.
@@ -327,12 +327,23 @@ void Session::process(const RadioEvent &e,std::chrono::steady_clock::time_point 
         } break;
     case RadioEvent::Kind::gip:
         if(e.wcid && e.wcid<=16 && clients_[e.wcid-1]) {
+            const auto parsed=parse_gip(e.payload);
+            auto &client=*clients_[e.wcid-1];
+            if(raw_output_ && raw_output_->automatic() && !raw_output_->target(client.address)){
+                for(const auto &p:parsed)if(p.command==2 && (p.options&47)==32 && p.payload.size()>=28){
+                    const auto vendor=static_cast<uint16_t>(p.payload[8]|(uint16_t(p.payload[9])<<8));
+                    const auto product=static_cast<uint16_t>(p.payload[10]|(uint16_t(p.payload[11])<<8));
+                    if(raw_output_->claim(client.address,vendor,product)){raw_output_->event(1,e.wcid,client.address);remember_peer(client.address);break;}
+                }
+                // Unknown profiles must not receive local auth/audio commands.
+                if(!raw_output_->target(client.address))break;
+            }
             if(raw_output_ && raw_output_->target(clients_[e.wcid-1]->address)){
-                const auto packets=parse_gip(e.payload);
+                const auto &packets=parsed;
                 if(!packets.empty())clients_[e.wcid-1]->raw_gip_seen=true;
                 // Audio has a separate IPC type and never enters interrupt IN.
                 for(const auto &p:packets)raw_output_->event(p.command==0x60?4:2,e.wcid,encode_gip(p));
-            }else {const auto packets=parse_gip(e.payload);if(!packets.empty())clients_[e.wcid-1]->raw_gip_seen=true;for(const auto &p:packets)clients_[e.wcid-1]->receive(p);}
+            }else {const auto &packets=parsed;if(!packets.empty())clients_[e.wcid-1]->raw_gip_seen=true;for(const auto &p:packets)clients_[e.wcid-1]->receive(p);}
         }break;
     default: break;
     }
@@ -358,7 +369,7 @@ void Session::tick(std::chrono::steady_clock::time_point now) {
     // No global firmware reset/channel change: other controllers/audio keep going.
     for(uint8_t w=1;w<=16;++w){
         const auto &c=clients_[w-1];
-        if(c && known_peer(c->address) && !c->raw_gip_seen &&
+        if(c && (known_peer(c->address) || (raw_output_ && raw_output_->automatic())) && !c->raw_gip_seen &&
            c->raw_recovery_attempts<3 && now-c->associated_at>=std::chrono::seconds(5))
             recover_raw_client(w,now);
     }

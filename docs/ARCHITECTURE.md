@@ -2,10 +2,10 @@
 
 ```text
 Physical Xbox Wireless Adapter (WinUSB)
-    xone-derived MT76 radio transport and client/session manager (C++)
-        loopback per-device GIP brokers
-            Python USB/IP and radio/USB audio adaptation
-                usbip-win2 virtual USB controller
+    invisible C++ background host (sign-in startup, recovery, audio defaults)
+        xone-derived MT76 radio transport and client/session manager (C++)
+            per-model C++ USB/IP servers and radio/USB audio adaptation
+                signed usbip-win2 virtual USB controller
                     Windows dc1-controller / xboxgip / usbaudio
                         XInput, WGI, Windows audio, Xbox Accessories
 ```
@@ -77,8 +77,10 @@ attempt with clean user-confirmed audio, without physical USB reset; broader
 reconnection reliability remains pending.
 
 In the default USB-only route, automatic discovery advertises reconnect availability
-after manual pairing closes, but only configured addresses are admitted/responded
-to. Scanning continues with an empty table, pauses for a ten-second enrollment grace
+after manual pairing closes. The alpha.4 automatic catalog identifies supported
+model announcements and claims a free model slot; saved addresses seed reconnect
+discovery. Unknown pairing requests still require the physical pairing button.
+Scanning continues with an empty table, pauses for a ten-second enrollment grace
 after a pair response and stays paused with any occupied peer slot. Shutdown closes
 discovery. Manual enrollment and automatic discovery are separate policy states.
 
@@ -86,6 +88,10 @@ Status snapshots use atomic publication and bounded sharing-error retries so a
 temporary file lock does not stop all devices. Physical battery status is observed
 without rewriting GIP. Xbox Accessories still displays a wired/Connected label;
 that UI limitation is separate from receiving battery data in XInput/WGI.
+
+Normal application mode disables text/packet logging and publishes only changed
+connection/ownership/error state. Historical Python and direct GIP tools remain
+research sources; they are not resident parts of the alpha.4 application.
 
 ## Future wireless driver
 

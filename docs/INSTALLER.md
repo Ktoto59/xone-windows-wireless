@@ -1,89 +1,36 @@
-# Installer and first-run control panel
+# Automatic C++ installer
 
-**Development branch, not released:** the application shell now has one
-**Set up adapter** action, automatic address enrollment after a model is selected,
-an **Add device** dialog and a startup checkbox. The advanced panel remains
-available. Installer packaging records the startup preference; background setup
-starts after the first-run preparation succeeds. This shell currently controls
-the USB/GIP fallback. Integration of the [direct GIP candidate](DIRECT-GIP.md) and
-its protected elevated background host is not finished. The published alpha.3
-installer below keeps its original panel and workflow.
+The alpha.4 development package installs three executables: `xone-background.exe`,
+`xone-probe-cpp.exe` and the installation-only `xone-bind.exe`. Python, the control
+panel, synthetic GIP probes and packet-test executables are not shipped as runtime.
 
-`xone-windows-wireless-0.1.0-alpha.3-Setup-x64.exe` is the recommended download.
-It targets Windows 11 x64 and installs per user under
-`%LOCALAPPDATA%\Programs\xone-windows-wireless`. Start menu and optional desktop
-shortcuts open a WinForms first-run panel. Install/source files are included;
-private configuration and recovery files are created locally only.
+Setup performs dependency preparation and adapter binding with Windows UAC, then
+registers a limited interactive-user sign-in task. The host is a C++ Windows-subsystem
+executable with no visible window. An invisible event receiver handles device and
+power notifications; it does not present UI or an overlay. Ordinary runtime starts
+only C++ radio and USBip client processes. No elevated scheduled task is registered.
 
-## What happens when
+Three model slots are created automatically. RF announcements select the tested
+model's USB/GIP profile; physical addresses are saved only in local configuration.
+The old headset's RF product 0B31 uses its wired 0B17 profile. Unknown models are
+not forwarded to a captured profile, and a second simultaneous device of one
+model cannot replace the slot's active peer.
 
-- **Setup** copies application files, source/licenses and a private Python runtime.
-  It registers an uninstall entry. No adapter or driver change happens at this stage.
-- **Prepare dependencies** first looks for the exact adapter RAM firmware in the
-  local Windows driver store. If absent, it downloads the Microsoft CAB documented
-  by upstream xone and checks the extracted firmware SHA-256. Firmware is not in Setup.
-  If USBip is absent, it downloads USBip 0.9.8.1 x64 from the upstream release,
-  checks the pinned SHA-256 and valid Scheibling Consulting AB Authenticode signature,
-  and invokes its installer with UAC. Only `main,client` components are selected.
-  Existing USBip is not downgraded or replaced; unsupported versions require manual
-  resolution. USB hubs may restart briefly. A requested PC restart is reported and
-  never performed automatically.
-- **Use WinUSB** backs up and changes exactly the selected adapter through the
-  existing checked binding helper. It requests UAC. A physical USB reconnect follows.
-- **Search for device** stops this app's bridge and observes radio association
-  addresses for up to 90 seconds, without creating virtual Windows outputs. The
-  user chooses the model and address. It supports one controller and one of each
-  headset profile; it does not infer a model from an address. Other devices must be off.
-- **Start bridge** uses the standard USB/GIP route without elevation and with
-  unlimited sessions. A control-panel close does not stop it.
-  **Enable automatic mode** also starts the background host at Windows sign-in;
-  Setup offers this option by default. It waits for first-run setup to finish.
-  **Stop bridge** stops the current session; **Disable automatic mode** also removes
-  sign-in startup. This is a user-session task, not a service running before login.
-- **Restore stock driver** stops this app's bridge and uses only its saved state.
-  **Uninstall** closes no unrelated USBip sessions, stops this app's bridge, and
-  restores the binding it owns. It refuses deletion if restoration cannot be
-  verified. Connect the adapter to its original USB port and approve UAC. Private
-  `work/`, local config and the shared USBip installation are retained.
+Normal radio operation uses `--quiet`. Transport status publication contains
+connection ownership/generation changes rather than continuously increasing packet
+counters. The background host writes status only on changes, owns its child radio
+through a Windows job, and detaches only USBip ports it imported. Detailed radio
+status remains available with an explicit development `--verbose` launch.
 
-An existing development/portable WinUSB installation can remain selected, but its
-original recovery folder is still needed. Setup does not import another folder's
-MAC mapping, firmware or driver backups, or claim ownership of its binding.
+Audio routing matches the Windows audio device's USB hardware identity rather than
+its display name. The newest connected headset is selected for all default playback
+and capture roles. Saved defaults are restored only when still owned by this host;
+a later user-selected default is not overwritten during restoration. Application-
+specific pinned outputs are outside this policy.
 
-## Runtime provenance
+The source checkout's prior direct-GIP audio experiments are not included in the
+application runtime. The new installer/runtime is a prerelease; software checks and
+single-PC hardware observations do not establish cross-PC or long-term reliability.
 
-Python **3.13.16** is the official x64 embeddable package:
-
-- Source: https://www.python.org/ftp/python/3.13.16/python-3.13.16-embed-amd64.zip
-- SHA-256: `97dae5274cc54867065e8d5a3226e48c35017ed332a0fdb0e27d5b5821961297`
-- Release/license: https://www.python.org/downloads/release/python-31316/
-- Original `LICENSE.txt` ships alongside the runtime.
-
-The runtime's `python313._pth` adds only the shipped source/application directories.
-It does not load user packages, install pip, modify PATH or register a system Python.
-The Python DLLs and their upstream runtime dependencies are the only runtime DLLs
-redistributed here. Microsoft Xbox system drivers and firmware are not bundled.
-
-USBip 0.9.8.1 is downloaded at first setup, not redistributed inside Setup:
-
-- Release: https://github.com/vadimgrn/usbip-win2/releases/tag/v.0.9.8.1
-- SHA-256: `38cad6d4432b52d5bb9409d9ad03b72fdffc4ada4cd3a48fbeca1a2752a8518a`
-
-The Setup EXE and project tools are **not Authenticode-signed**. They do not install
-an unsigned kernel driver or change test-signing/Secure Boot policy. Use the published
-SHA256SUMS file to verify the release. The program remains a research preview with
-the same hardware/reconnection/battery limitations as the portable bridge.
-
-## Build and verification
-
-Use the existing C++ builds, Inno Setup 6.7.3 and Windows' .NET Framework C# compiler.
-`Build-Installer.ps1 -IsccPath <ISCC.exe>` creates Setup and a matching portable ZIP
-from Git-tracked source and explicitly allowed project EXEs. Work logs, firmware,
-local configs and third-party installer caches are excluded. The private Python
-download is checksum-verified at build time; runtime licenses are preserved.
-
-The software checks cover mapping validation, discovery parsing, download checksum
-failure, process identity and uninstall guards. Package extraction and file-only
-install/uninstall can be tested without invoking Prepare/Bind/Discover/Start. A
-successful packaging test does not certify driver installation on every Windows
-build; hardware setup on a fresh machine is still preview validation.
+Build: `scripts/Build-Appliance.cmd`, then
+`scripts/Build-Installer.ps1 -IsccPath <Inno Setup ISCC.exe>`.

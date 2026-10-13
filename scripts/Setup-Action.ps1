@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 [CmdletBinding()]
-param([Parameter(Mandatory=$true)][ValidateSet('Prepare','Bind','Restore','Remove','Upgrade','Start','Stop','Discover','AutomaticEnable','AutomaticDisable','UseCpp','UsePython','Configure','Enroll','InitializePreferences')][string]$Action,
+param([Parameter(Mandatory=$true)][ValidateSet('Prepare','Bind','Restore','Remove','Upgrade','Start','Stop','Discover','AutomaticEnable','AutomaticDisable','AutomaticSetup','UseCpp','UsePython','Configure','Enroll','InitializePreferences')][string]$Action,
       [string]$InstanceId='',[string]$ResultPath='',[string]$DiscoveryPath='',[string]$Profile='',
       [ValidateSet('on','off')][string]$Startup='on')
 $ErrorActionPreference='Stop'
@@ -9,9 +9,18 @@ $taskRoot=Split-Path -Parent $PSScriptRoot
 $taskResult=[ordered]@{Success=$false;Action=$Action;Error=$null}
 try{
     switch($Action){
-        InitializePreferences {Write-XoneJson (Join-Path $taskRoot 'config/app.local.json') @{Version=1;AutoStart=($Startup -eq 'on')}}
+        InitializePreferences {Write-XoneJson (Join-Path $taskRoot 'config/app.local.json') @{Version=1;AutoStart=($Startup -eq 'on');OwnerSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value}}
         Prepare {Initialize-XonePrerequisites $taskRoot}
         Configure {$taskResult.ReconnectRequired=(Initialize-XoneApplication $taskRoot $InstanceId).ReconnectRequired}
+        AutomaticSetup {
+            Move-XonePreviousInstallation $taskRoot
+            $taskResult.ReconnectRequired=(Initialize-XoneApplication $taskRoot $InstanceId -AllowPendingRestart).ReconnectRequired
+            $path=Join-Path $taskRoot 'config/devices.local.json';$config=Read-XoneJson $path
+            $config | Add-Member -NotePropertyName AutoDetect -NotePropertyValue $true -Force
+            $config | Add-Member -NotePropertyName BridgeBackend -NotePropertyValue cpp -Force
+            Write-XoneJson $path $config
+            $preferences=Read-XoneJson (Join-Path $taskRoot 'config/app.local.json');if(-not $preferences){$preferences=[pscustomobject]@{Version=1;AutoStart=$true;OwnerSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value}};$preferences.AutoStart=$true;Write-XoneJson (Join-Path $taskRoot 'config/app.local.json') $preferences
+        }
         Enroll {Add-XoneApplicationDevice $taskRoot $InstanceId $Profile}
         Bind {
             Stop-XoneManagedBridge $taskRoot;Assert-XoneRadioIdle

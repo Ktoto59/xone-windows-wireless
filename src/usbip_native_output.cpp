@@ -7,10 +7,13 @@
 #include "usbip_native_output.hpp"
 #include "usbip_native_core.hpp"
 #include "latest_snapshot.hpp"
+#include "appliance_config.hpp"
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <tuple>
+#include <atomic>
 namespace xone {
 namespace {
 struct Client {
@@ -42,7 +45,7 @@ Bytes import_header(bool ok){return {1,17,0,3,0,0,0,static_cast<uint8_t>(ok?0:1)
 }
 struct NativeUsbOutput::Impl {
     struct Message {uint8_t kind,wcid;uint32_t token=0;int status=0;Bytes data;};
-    Bytes mac;usbip::Profile profile;usbip::Core core;bool audio;
+    Bytes mac;usbip::Profile profile;usbip::Core core;bool audio,automatic,diagnostics;uint16_t product;uint8_t bound_wcid=0;
     SOCKET listener=INVALID_SOCKET;WSAEVENT accept_event=WSA_INVALID_EVENT;
     HANDLE wake=nullptr,timer=nullptr;std::thread thread;std::mutex mutex;
     bool stopping=false;std::string error;std::deque<Message> inbox;std::vector<RawGipTransmit> tx;
@@ -50,7 +53,11 @@ struct NativeUsbOutput::Impl {
     std::unique_ptr<LatestSnapshot> status_writer;
     std::optional<std::pair<uint8_t,uint64_t>> previous_lifecycle;
     usbip::Core::Clock::time_point last_status{};bool mmcss=false,peer_error=false;DWORD mmcss_error=0;
-    Impl(uint16_t port,Bytes address,uint16_t pid,bool with_audio,const std::wstring &status):mac(std::move(address)),profile(usbip::profile(pid,with_audio)),core(profile,with_audio),audio(with_audio){
+    std::string previous_minimal;
+    std::atomic_uint64_t address_revision=0;
+    std::atomic_bool streaming_audio=false;
+    std::optional<std::tuple<bool,uint8_t,uint64_t,bool,uint64_t>> published_life;
+    Impl(uint16_t port,Bytes address,uint16_t pid,bool with_audio,const std::wstring &status,bool auto_select,bool trace):mac(std::move(address)),profile(usbip::profile(pid,with_audio)),core(profile,with_audio),audio(with_audio),automatic(auto_select),diagnostics(trace),product(pid){
         if(mac.size()!=6 || port<1024)throw usbip::Error("Invalid native USB route");
         WSADATA data{};if(WSAStartup(MAKEWORD(2,2),&data))throw usbip::Error("Cannot initialize sockets");
         try{
@@ -83,11 +90,18 @@ struct NativeUsbOutput::Impl {
     }
     void publish(bool connected=true){
         if(!status_writer)return;const auto &s=core.stats();const auto now=usbip::Core::Clock::now();const auto life=std::pair{s.wcid,s.generation};
+        const auto current_life=std::tuple{connected,s.wcid,s.generation,peer_error,address_revision.load()};
+        if(!diagnostics && published_life==current_life)return;
         if(connected && previous_lifecycle==life && now-last_status<std::chrono::seconds(2))return;
         std::ostringstream json;json<<std::boolalpha<<"{\"RadioConnected\":"<<connected<<",\"Ready\":"<<(connected && core.ready())<<",\"Wcid\":"<<unsigned(s.wcid)<<",\"Generation\":"<<s.generation
-            <<",\"Backend\":\"cpp\",\"RxPackets\":"<<s.rx<<",\"TxPackets\":"<<s.tx<<",\"AudioBridge\":"<<audio<<",\"AudioLayoutSupported\":"<<s.layout
+            <<",\"Backend\":\"cpp\",\"PeerProtocolError\":"<<peer_error<<",\"Mac\":\"";
+        {std::lock_guard lock(mutex);constexpr char hex[]="0123456789abcdef";for(auto b:mac)json<<hex[b>>4]<<hex[b&15];}
+        json<<'"';
+        if(!diagnostics){json<<'}';const auto text=json.str();status_writer->publish(text);previous_minimal=text;published_life=current_life;return;}
+        json
+            <<",\"RxPackets\":"<<s.rx<<",\"TxPackets\":"<<s.tx<<",\"AudioBridge\":"<<audio<<",\"AudioLayoutSupported\":"<<s.layout
             <<",\"AudioRxPackets\":"<<s.audio_rx<<",\"AudioTxPackets\":"<<s.audio_tx<<",\"UsbAudioInCompletions\":"<<s.capture_slots<<",\"CaptureDroppedFrames\":"<<s.dropped
-            <<",\"CaptureQueueHighWater\":"<<s.capture_high_water<<",\"Mmcss\":"<<mmcss<<",\"MmcssError\":"<<mmcss_error<<",\"PeerProtocolError\":"<<peer_error<<"}";
+            <<",\"CaptureQueueHighWater\":"<<s.capture_high_water<<",\"Mmcss\":"<<mmcss<<",\"MmcssError\":"<<mmcss_error<<"}";
         status_writer->publish(json.str());previous_lifecycle=life;last_status=now;
     }
     void parse(Client &c){
@@ -108,6 +122,7 @@ struct NativeUsbOutput::Impl {
         }
     }
     void service(){
+        streaming_audio=audio && core.ready() && core.stats().layout;
         if(imported && !imported->dead){for(auto &reply:core.replies())imported->send(std::move(reply));}else core.replies();
         auto requests=core.outbound();
         {std::lock_guard lock(mutex);
@@ -161,10 +176,19 @@ struct NativeUsbOutput::Impl {
         publish(false);if(scheduling)AvRevertMmThreadCharacteristics(scheduling);
     }
 };
-NativeUsbOutput::NativeUsbOutput(uint16_t port,Bytes mac,uint16_t pid,bool audio,std::wstring status):impl_(std::make_unique<Impl>(port,std::move(mac),pid,audio,status)){}
+NativeUsbOutput::NativeUsbOutput(uint16_t port,Bytes mac,uint16_t pid,bool audio,std::wstring status,bool automatic,bool diagnostics):impl_(std::make_unique<Impl>(port,std::move(mac),pid,audio,status,automatic,diagnostics)){}
 NativeUsbOutput::~NativeUsbOutput()=default;
-bool NativeUsbOutput::target(std::span<const uint8_t> mac)const{return std::equal(mac.begin(),mac.end(),impl_->mac.begin(),impl_->mac.end());}
-void NativeUsbOutput::event(uint8_t kind,uint8_t wcid,std::span<const uint8_t> data){impl_->post({kind,wcid,0,0,{data.begin(),data.end()}});}
+bool NativeUsbOutput::target(std::span<const uint8_t> mac)const{std::lock_guard lock(impl_->mutex);return std::equal(mac.begin(),mac.end(),impl_->mac.begin(),impl_->mac.end());}
+bool NativeUsbOutput::automatic()const{return impl_->automatic;}
+bool NativeUsbOutput::audio_active()const{return impl_->streaming_audio.load();}
+bool NativeUsbOutput::claim(std::span<const uint8_t> mac,uint16_t vendor,uint16_t product){
+    if(!impl_->automatic || vendor!=0x045e || usb_model(product)!=impl_->product || mac.size()!=6)return false;
+    std::lock_guard lock(impl_->mutex);if(impl_->bound_wcid)return false;impl_->mac.assign(mac.begin(),mac.end());++impl_->address_revision;return true;
+}
+void NativeUsbOutput::event(uint8_t kind,uint8_t wcid,std::span<const uint8_t> data){
+    {std::lock_guard lock(impl_->mutex);if(kind==1)impl_->bound_wcid=wcid;else if(kind==3)impl_->bound_wcid=0;}
+    impl_->post({kind,wcid,0,0,{data.begin(),data.end()}});
+}
 std::vector<RawGipTransmit> NativeUsbOutput::poll(){std::lock_guard lock(impl_->mutex);if(!impl_->error.empty())throw usbip::Error(impl_->error);auto out=std::move(impl_->tx);impl_->tx.clear();return out;}
 void NativeUsbOutput::complete(uint8_t wcid,uint32_t token,int status){impl_->post({17,wcid,token,status,{}});}
 }

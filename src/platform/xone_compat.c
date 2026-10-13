@@ -38,9 +38,11 @@ int request_firmware(const struct firmware **out, const char *name, struct devic
 void release_firmware(const struct firmware *fw) { free((void *)fw); }
 void msleep(unsigned ms) { Sleep(ms); }
 void usleep_range(unsigned low, unsigned high) { (void)high; Sleep((low+999)/1000); }
+static bool xone_logging=true;
+void xone_logging_enabled(int enabled){xone_logging=enabled!=0;}
 void xone_log(struct device *dev, bool error, const char *fmt, ...) {
     va_list args;
-    if (!error && !dev->verbose) return;
+    if (!xone_logging || (!error && !dev->verbose)) return;
     va_start(args, fmt);
     vfprintf(error ? stderr : stdout, fmt, args);
     va_end(args);

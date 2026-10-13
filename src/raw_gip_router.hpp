@@ -15,6 +15,13 @@ public:
     bool target(std::span<const uint8_t> mac)const override{
         return std::any_of(outputs_.begin(),outputs_.end(),[&](const auto &p){return p->target(mac);});
     }
+    bool automatic()const override{return std::any_of(outputs_.begin(),outputs_.end(),[](const auto &p){return p->automatic();});}
+    bool audio_active()const override{return std::any_of(outputs_.begin(),outputs_.end(),[](const auto &p){return p->audio_active();});}
+    bool claim(std::span<const uint8_t> mac,uint16_t vendor,uint16_t product)override{
+        if(target(mac))return true;
+        for(const auto &p:outputs_)if(p->claim(mac,vendor,product))return true;
+        return false;
+    }
     void event(uint8_t kind,uint8_t wcid,std::span<const uint8_t> data={})override{
         if(!wcid || wcid>16)throw std::runtime_error("Invalid routed USB GIP WCID");
         auto &owner=owners_[wcid-1];

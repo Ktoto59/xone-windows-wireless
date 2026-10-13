@@ -466,6 +466,28 @@ int main() {
             e.kind=RadioEvent::Kind::lost;session.process(e);check(raw.events.back().kind==3 && session.status().empty(),"Raw removal not forwarded");
             session.close();
         });
+        test("Automatic USB claims only a supported announcement and forwards the handshake",[]{
+            struct Raw final:RawGipOutput{
+                Bytes mac;std::vector<uint8_t> events;Bytes announcement;
+                bool automatic()const override{return true;}
+                bool target(std::span<const uint8_t> address)const override{return !mac.empty() && std::equal(mac.begin(),mac.end(),address.begin(),address.end());}
+                bool claim(std::span<const uint8_t> address,uint16_t vendor,uint16_t product)override{if(!mac.empty() || vendor!=0x045e || product!=0x0b32)return false;mac.assign(address.begin(),address.end());return true;}
+                void event(uint8_t kind,uint8_t,std::span<const uint8_t> data)override{events.push_back(kind);if(kind==2)announcement.assign(data.begin(),data.end());}
+                std::vector<RawGipTransmit> poll()override{return {};}
+                void complete(uint8_t,uint32_t,int)override{}
+            } raw;
+            usb_device usb{};device dev{};xone_mt76 mt{};mt.dev=&dev;mt.udev=&usb;mt.channel=&mt.channels[0];mt.channel->index=165;
+            usb.control=[](void *,u8,u8 type,u16,u16,void *data,u16 n,unsigned)->int{if(type&128)std::memset(data,0,n);return n;};
+            usb.bulk=[](void *,u8,void *,int n,int *actual,unsigned)->int{if(actual)*actual=n;return 0;};
+            Session session(mt,nullptr,false,nullptr,&raw);session.enable_native_reconnect();
+            RadioEvent e;e.kind=RadioEvent::Kind::association;e.address={2,0,0,0,0,1};session.process(e);
+            check(raw.events.empty(),"Automatic profile chosen before identification");
+            Bytes payload(28);payload[8]=0x34;payload[9]=0x12;payload[10]=0x32;payload[11]=0x0b;
+            e.kind=RadioEvent::Kind::gip;e.wcid=1;e.payload=encode_gip({2,32,1,0,payload});session.process(e);check(raw.events.empty(),"Wrong vendor claimed a profile");
+            payload[8]=0x5e;payload[9]=4;e.payload=encode_gip({2,32,1,0,payload});session.process(e);
+            check(raw.events==std::vector<uint8_t>({1,2}) && raw.announcement==e.payload && session.known_peers().size()==1,"Automatic claim lost association or announcement");
+            session.close();check(raw.events.back()==3,"Automatic output not removed");
+        });
         test("USB brokers isolate WCIDs, equal completion tokens and reassociation",[]{
             struct Raw final:RawGipOutput{
                 uint8_t id;unsigned events=0;

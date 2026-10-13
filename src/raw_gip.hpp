@@ -9,6 +9,9 @@ class RawGipOutput {
 public:
     virtual ~RawGipOutput()=default;
     virtual bool target(std::span<const uint8_t> mac) const=0;
+    virtual bool automatic()const{return false;}
+    virtual bool audio_active()const{return false;}
+    virtual bool claim(std::span<const uint8_t>,uint16_t,uint16_t){return false;}
     virtual void event(uint8_t kind,uint8_t wcid,std::span<const uint8_t> data={})=0;
     virtual std::vector<RawGipTransmit> poll()=0;
     virtual void complete(uint8_t wcid,uint32_t token,int status)=0;

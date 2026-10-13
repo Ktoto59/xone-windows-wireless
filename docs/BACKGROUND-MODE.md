@@ -1,5 +1,32 @@
 # Automatic background bridge
 
+## Current alpha.4 application
+
+The installer now enables `xone-background.exe`, an invisible C++ user-session
+host, automatically. Its only resident child is the C++ radio/USB-GIP executable;
+USBip attach/detach commands run briefly on connection changes. PowerShell is used
+for setup/removal only. No Python runtime, panel, tray or overlay is installed.
+
+Supported models are identified from their radio announcements and saved in local
+configuration. First-time pairing still uses the ordinary device/adapter buttons.
+The host imports each model independently, restores its virtual USB generation
+after reconnect and chooses the latest connected headset as the Windows default
+playback/capture device. A later manual default change is respected on restoration.
+
+The host waits for device, power, process and state-change notifications. Normal
+operation writes no text logs; small ownership/error snapshots change on lifecycle
+transitions. Retry delays are bounded. Startup runs with limited privileges at
+Windows sign-in, rather than as a service before sign-in.
+
+The new 2024 headset was confirmed to play clean ordinary audio in a short check
+with this host. Long-term stability, fresh installation on another PC and broad
+sleep/resume behavior are still pending. See [INSTALLER.md](INSTALLER.md).
+
+## Historical alpha.3 supervisor
+
+The remainder of this document records the earlier implementation and its hardware
+observations. Its panel/Python workflow is not the alpha.4 installation flow.
+
 Status: included in alpha.3. These changes are not in the frozen alpha.2 download.
 This path uses the existing signed WinUSB, usbip-win2 and Windows
 GIP/audio drivers. No new kernel driver, driver certification, test signing or

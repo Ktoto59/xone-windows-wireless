@@ -62,7 +62,7 @@ static bool supported(const std::wstring &instance) {
     return false;
 }
 std::vector<DeviceInfo> adapters() {
-    InfoSet all{SetupDiGetClassDevsW(nullptr,nullptr,nullptr,DIGCF_PRESENT|DIGCF_ALLCLASSES)};
+    InfoSet all{SetupDiGetClassDevsW(nullptr,L"USB",nullptr,DIGCF_PRESENT|DIGCF_ALLCLASSES)};
     if (all.value == INVALID_HANDLE_VALUE) throw std::runtime_error(win_error(GetLastError()));
     std::vector<DeviceInfo> result;
     for (DWORD i = 0;;++i) {

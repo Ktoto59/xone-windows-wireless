@@ -16,15 +16,16 @@ try{
     if($LASTEXITCODE -ne 0 -or -not $taskFiles.Count){throw 'Package from a Git source checkout.'}
     foreach($taskFile in $taskFiles){
         if($taskFile -match '^(work|outputs|build|dist|runtime)/' -or $taskFile -match '\.local\.json$'){throw 'Private or generated file unexpectedly tracked.'}
+        if($taskFile.EndsWith('.py')){continue} # Historical research sources stay in Git, not the application.
         $taskDestination=Join-Path $taskStage $taskFile
         [void][IO.Directory]::CreateDirectory((Split-Path -Parent $taskDestination))
         Copy-Item -LiteralPath (Join-Path $taskRoot $taskFile) -Destination $taskDestination
     }
     $taskOutput=Join-Path $taskStage 'outputs'
     [void][IO.Directory]::CreateDirectory($taskOutput)
-    foreach($taskBinary in @('xone-probe.exe','xone-probe-cpp.exe','xone-background.exe','xone-bind.exe','native-gip-probe.exe','native-audio-probe.exe','audio-endpoint-test.exe','usb-reference-dump.exe','etw-trace-dump.exe','protocol-tests.exe','session-tests.exe','xone-control.exe')){
+    foreach($taskBinary in @('xone-probe-cpp.exe','xone-background.exe','xone-bind.exe')){
         $taskSource=Join-Path $taskRoot ('outputs/'+$taskBinary)
-        if($LauncherDir -and $taskBinary -in @('xone-control.exe','xone-background.exe')){$taskSource=Join-Path $LauncherDir $taskBinary}
+        if($LauncherDir -and $taskBinary -in @('xone-probe-cpp.exe','xone-background.exe')){$taskSource=Join-Path $LauncherDir $taskBinary}
         if(-not (Test-Path -LiteralPath $taskSource)){throw ('Missing release binary: '+$taskBinary)}
         Copy-Item -LiteralPath $taskSource -Destination $taskOutput
     }

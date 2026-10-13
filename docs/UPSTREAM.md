@@ -46,3 +46,10 @@ The project source and corresponding prebuilt user-mode tools are distributed
 under GPL-2.0-or-later. The complete GPL v2 text is in the root `LICENSE` file.
 Third-party notices and licenses remain with their sources/headers.
 Microsoft and dependency names identify compatibility targets, not affiliation.
+
+The C++ background host uses nlohmann/json 3.12.0 (MIT), retained in
+`third_party/json` with its license. The single-header SHA-256 is
+`aaf127c04cb31c406e5b04a63f1ae89369fccde6d8fa7cdda1ed4f32dfc5de63`.
+Windows audio endpoint topology follows Microsoft's Core Audio interfaces. The
+desktop audio policy ABI is also described by EarTrumpet's `IPolicyConfigWin7`;
+no EarTrumpet application code, hooks or binaries are bundled.
