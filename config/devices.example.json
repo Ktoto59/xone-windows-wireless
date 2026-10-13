@@ -1,0 +1,9 @@
+{
+  "Version": 1,
+  "AdapterInstanceId": "",
+  "Devices": [
+    { "Name": "new", "Mac": "020000000001", "Profile": "headset-0b32-usb.json" },
+    { "Name": "old", "Mac": "020000000002", "Profile": "headset-0b17-usb.json" },
+    { "Name": "controller", "Mac": "020000000003", "Profile": "controller-0b12-usb.json" }
+  ]
+}

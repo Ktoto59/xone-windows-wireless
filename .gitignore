@@ -1,0 +1,15 @@
+/work/
+/outputs/
+/build/
+*.user
+*.pdb
+__pycache__/
+*.pyc
+
+/dist/
+/config/*.local.json
+*.etl
+*.evtx
+*.dmp
+*.zip
+*.map

@@ -1,0 +1,41 @@
+; SPDX-License-Identifier: GPL-2.0-or-later
+; Optional future package. Not installable until a signed catalog is supplied.
+; The current development binding uses the already signed Windows inbox INF.
+[Version]
+Signature="$Windows NT$"
+Class=USBDevice
+ClassGUID={88BAE032-5A81-49f0-BC3D-A4FF138216D6}
+Provider=%Provider%
+CatalogFile=xone-winusb.cat
+DriverVer=10/12/2026,0.1.0.0
+PnpLockdown=1
+
+[Manufacturer]
+%Provider%=Models,NTamd64.10.0
+
+[Models.NTamd64.10.0]
+%Adapter%=Install,USB\VID_045E&PID_02FE
+
+[Install.NT]
+Include=winusb.inf
+Needs=WINUSB.NT
+
+[Install.NT.Services]
+Include=winusb.inf
+Needs=WINUSB.NT.Services
+
+[Install.NT.HW]
+Include=winusb.inf
+Needs=WINUSB.NT.HW
+AddReg=Interface
+DelReg=OldFilter
+
+[Interface]
+HKR,,DeviceInterfaceGUIDs,0x00010000,"{215E9D83-9720-4A4C-8CF2-E8F40E366C21}"
+
+[OldFilter]
+HKR,,UpperFilters
+
+[Strings]
+Provider="xone Windows development"
+Adapter="Xbox Wireless Adapter (xone experimental WinUSB transport)"

@@ -1,0 +1,15 @@
+{
+  "Model": "Xbox Wireless Headset 2024",
+  "Vid": 1118,
+  "Pid": 2866,
+  "Revision": 12564,
+  "WindowsUsbSpeed": 1,
+  "DeviceDescriptor": "12010002ff47d0405e04320b143105060701",
+  "OsStringDescriptor": "14034d0053004600540031003000300090000390",
+  "ConfigurationDescriptor": "09024000020100c0000904000002ff47d00007050103400004070581034000040904010000ff47d0000904010102ff47d00007050201e4000107058201400001",
+  "ReferenceDriver": "dc1-controller + xboxgip; child usbaudio",
+  "ReferenceUsbAudioCleanConfirmed": true,
+  "ReferenceAccessoriesSettingsConfirmed": true,
+  "VirtualTransportVerified": false,
+  "Source": "Local read-only USB descriptor capture, 2026-10-12; physical serial omitted"
+}
