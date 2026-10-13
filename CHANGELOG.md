@@ -4,8 +4,11 @@
 
 - Override inherited BelowNormal scheduling for audio servers and the RF process
   with AboveNormal, and register audio event-loop threads with Windows MMCSS
-  Pro Audio. Live priority adjustment reduced reported stutters under system load;
-  complete elimination remains subject to hardware confirmation.
+  Pro Audio. Live priority adjustment reduced reported stutters under system load.
+  After applying the complete change and cold-resetting the adapter, the user
+  reported that playback returned and stutters appeared to be gone at the same
+  load. Warm radio restart still stalled before GIP exchange and needed USB replug;
+  long-term load behavior and recovery without physical reset remain unresolved.
 - Remove synchronous status-file writes from radio callbacks. Publish snapshots
   on a disk worker at most five times per second, including during idle periods.
   Verify USB requests remain responsive while a status write is blocked.

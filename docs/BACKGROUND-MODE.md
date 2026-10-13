@@ -31,6 +31,13 @@ contention does not directly block the audio event loop. These measures reduce
 avoidable scheduling delays; they do not guarantee uninterrupted playback under
 every system load or driver interrupt stall.
 
+On 2026-10-13, live priority adjustment reduced user-reported stutters. After
+installing the full scheduling/status-IO change, the radio associated but never
+started GIP exchange, even after headset power cycling. A physical USB replug
+restored the session; the user confirmed playback and reported stutters appeared
+to disappear at the same load. This is a limited subjective result, not a claim
+of reliable warm recovery or sustained performance under every workload.
+
 **Stop bridge** stops this session; enabled automatic mode returns at next
 sign-in. **Disable automatic mode** stops it and removes this installation's
 sign-in task. Device discovery/configuration, driver changes, upgrades and
