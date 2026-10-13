@@ -22,6 +22,15 @@ Scheduler with interactive, limited privileges and no stored password. It is a
 user-session background task, not a system service available before sign-in.
 The radio sessions are unlimited rather than expiring after 30 minutes.
 
+Audio servers and the radio process explicitly use AboveNormal process priority
+instead of inheriting BelowNormal from the scheduled host. The audio event-loop
+thread joins the Windows MMCSS Pro Audio task; failure to join is logged and does
+not stop devices. This does not modify global scheduler settings. Status snapshots
+are written by a separate disk worker at most five times per second, so filesystem
+contention does not directly block the audio event loop. These measures reduce
+avoidable scheduling delays; they do not guarantee uninterrupted playback under
+every system load or driver interrupt stall.
+
 **Stop bridge** stops this session; enabled automatic mode returns at next
 sign-in. **Disable automatic mode** stops it and removes this installation's
 sign-in task. Device discovery/configuration, driver changes, upgrades and

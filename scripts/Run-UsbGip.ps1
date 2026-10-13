@@ -15,6 +15,12 @@ function Test-TaskProcess($State){
     $taskProcess=Get-Process -Id $State.Pid -ErrorAction SilentlyContinue
     return $taskProcess -and $taskProcess.StartTime.ToUniversalTime().Ticks -eq [long]$State.StartTicks
 }
+function Set-TaskMediaPriority($Process){
+    # Scheduled background hosts can start children below normal priority.
+    # Audio and RF deadlines need preference over ordinary CPU-bound work.
+    try{$Process.PriorityClass=[Diagnostics.ProcessPriorityClass]::AboveNormal}
+    catch{Write-Output ('Could not set media priority: '+$_.Exception.Message)}
+}
 if(-not $Worker){
     if(Test-Path -LiteralPath $taskStatePath){
         $taskOld=Get-Content -LiteralPath $taskStatePath -Raw | ConvertFrom-Json
@@ -113,6 +119,7 @@ try{
         if($AudioProbe -and $taskDevice.Audio){$taskArgs+=' --audio-probe'}
         if($AudioBridge -and $taskDevice.Audio){$taskArgs+=' --audio-bridge'}
         $taskServer=Start-Process -FilePath $taskPython -ArgumentList $taskArgs -WorkingDirectory $taskRoot -WindowStyle Hidden -RedirectStandardOutput $taskDevice.ServerLog -RedirectStandardError $taskDevice.ServerError -PassThru
+        if($AudioBridge -and $taskDevice.Audio){Set-TaskMediaPriority $taskServer}
         $taskServers+=,$taskServer
         $taskDevice.Server=@{Pid=$taskServer.Id;StartTicks=$taskServer.StartTime.ToUniversalTime().Ticks};Save-TaskState
         $taskReadyDeadline=(Get-Date).AddSeconds(5)
@@ -124,6 +131,7 @@ try{
     $taskArgs='run --instance "'+$taskAdapterId+'" --output usb-gip --usb-gip-mac '+$taskDevices[0].Mac+' --usb-gip-port '+$taskDevices[0].RadioPort+' --usb-gip-fallback '+$FallbackOutput+' --status-file "'+$taskControllerStatus+'" --firmware "'+(Join-Path $taskRoot 'work\firmware\FW_ACC_00U.bin')+'" --seconds '+$Seconds+' --stop-file "'+$taskStopPath+'"'
     foreach($taskDevice in $taskDevices | Select-Object -Skip 1){$taskArgs+=' --usb-gip-peer '+$taskDevice.Mac+':'+$taskDevice.RadioPort}
     $taskRadio=Start-Process -FilePath (Join-Path $taskRoot 'outputs\xone-probe.exe') -ArgumentList $taskArgs -WorkingDirectory $taskRoot -WindowStyle Hidden -RedirectStandardOutput $taskState.RadioLog -RedirectStandardError $taskState.RadioError -PassThru
+    if($AudioBridge){Set-TaskMediaPriority $taskRadio}
     $taskState.Radio=@{Pid=$taskRadio.Id;StartTicks=$taskRadio.StartTime.ToUniversalTime().Ticks};Save-TaskState
     $taskDeadline=if($Seconds -eq 0){[datetime]::MaxValue}else{(Get-Date).AddSeconds($Seconds-2)}
     while((Get-Date) -lt $taskDeadline -and -not (Test-Path -LiteralPath $taskStopPath)){

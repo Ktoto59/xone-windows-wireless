@@ -4,13 +4,14 @@ from io import StringIO
 from pathlib import Path
 import struct
 import sys
+import threading
 from types import SimpleNamespace
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 from usb_headset_profile import HeadsetProfile
-from usbip_reference_server import ReferenceServer, transport_profile, main
+from usbip_reference_server import ReferenceServer, StatusPublisher, transport_profile, main
 
 
 class LifetimeTests(unittest.IsolatedAsyncioTestCase):
@@ -76,6 +77,28 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
             writer.close()
             await writer.wait_closed()
         self.assertEqual(self.handler.clients, 0)
+
+    async def test_blocked_status_disk_does_not_block_usb_requests(self):
+        started, release = threading.Event(), threading.Event()
+        publisher = StatusPublisher(None, lambda: {'Ready': True})
+        def slow_disk(snapshot):
+            started.set()
+            release.wait(3)
+        publisher.write = slow_disk
+        writer = None
+        try:
+            async with publisher:
+                self.assertTrue(await asyncio.to_thread(started.wait, 1))
+                reader, writer = await asyncio.open_connection('127.0.0.1', self.port)
+                writer.write(bytes.fromhex('0111800500000000'))
+                await writer.drain()
+                self.assertEqual(await asyncio.wait_for(reader.read(), .5), self.profile.usbip_device_list())
+                self.assertFalse(release.is_set(), 'USB request needed disk IO to complete')
+        finally:
+            release.set()
+            if writer:
+                writer.close()
+                await writer.wait_closed()
 
     async def test_import_fails_explicitly_without_radio_backend(self):
         reader, writer = await asyncio.open_connection('127.0.0.1', self.port)

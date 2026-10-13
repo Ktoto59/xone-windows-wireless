@@ -5,14 +5,15 @@ Does not bind physical USB, change drivers, or expose a network-wide listener.
 """
 import argparse
 import asyncio
+from contextlib import suppress
 import json
 from pathlib import Path
 import struct
 import sys
-import time
 from usb_headset_profile import HeadsetProfile
 from usbip_urb import UrbSession
 from usb_gip_radio import RadioBackend
+from windows_media import MediaScheduling
 
 
 class EnumerationBackend:
@@ -105,13 +106,44 @@ class ReferenceServer:
             self.clients -= 1
 
 
+class StatusPublisher:
+    """Publish bounded snapshots off the latency-sensitive event-loop thread."""
+    def __init__(self, path, snapshot, interval=.2):
+        self.path = path
+        self.snapshot = snapshot
+        self.interval = interval
+        self.task = None
+
+    def write(self, snapshot):
+        temporary = self.path.with_suffix('.tmp')
+        try:
+            temporary.write_text(json.dumps(snapshot), encoding='utf-8')
+            temporary.replace(self.path)
+        except OSError:
+            pass  # Observational IO contention must not stop radio/audio.
+
+    async def run(self):
+        while True:
+            # Copy counters on their owning thread before dispatching disk IO.
+            await asyncio.to_thread(self.write, self.snapshot())
+            await asyncio.sleep(self.interval)
+
+    async def __aenter__(self):
+        self.task = asyncio.create_task(self.run())
+        return self
+
+    async def __aexit__(self, *unused):
+        self.task.cancel()
+        with suppress(asyncio.CancelledError):
+            await self.task
+
+
 async def main(args):
     event_count = 0
     diagnostic_count = 0
-    last_status = 0
     backend = None
     def event(fields):
-        nonlocal event_count, diagnostic_count, last_status
+        nonlocal event_count, diagnostic_count
         event_count += 1
         diagnostic = fields.get('operation', '').startswith(('radio_', 'usb_audio_'))
         if diagnostic:
@@ -120,16 +152,6 @@ async def main(args):
             print(json.dumps(fields), flush=True)
         elif event_count == 1001:
             print(json.dumps({'operation': 'log_limit', 'limit': 1000}), flush=True)
-        if backend is not None and args.status_file:
-            now = time.monotonic()
-            if now-last_status > .2 or fields['operation'].startswith('radio_'):
-                temporary = args.status_file.with_suffix('.tmp')
-                temporary.write_text(json.dumps(backend.status()), encoding='utf-8')
-                try:
-                    temporary.replace(args.status_file)
-                    last_status = now
-                except PermissionError:
-                    pass  # A short concurrent snapshot read must not kill RF.
     profile = transport_profile(args.profile,args.audio_bridge)
     if args.radio_mac:
         interrupt,audio = radio_endpoints(profile)
@@ -148,7 +170,11 @@ async def main(args):
         print(f'Local radio broker at 127.0.0.1:{args.radio_port}', flush=True)
         event({'operation': 'radio_waiting'})
         async with radio_server, server:
-            await asyncio.sleep(args.seconds) if args.seconds else await asyncio.Future()
+            if args.status_file:
+                async with StatusPublisher(args.status_file, backend.status):
+                    await asyncio.sleep(args.seconds) if args.seconds else await asyncio.Future()
+            else:
+                await asyncio.sleep(args.seconds) if args.seconds else await asyncio.Future()
     else:
         async with server:
             await asyncio.sleep(args.seconds) if args.seconds else await asyncio.Future()
@@ -178,4 +204,9 @@ if __name__ == '__main__':
         parser.error('radio-mac must be twelve hex digits and cannot combine with enumeration-probe')
     if not 1024 <= arguments.radio_port <= 65535 or arguments.radio_port == arguments.port:
         parser.error('radio-port must be 1024..65535 and differ from USB/IP port')
-    asyncio.run(main(arguments))
+    # Register the actual event-loop thread, not the snapshot disk worker.
+    with MediaScheduling(arguments.audio_bridge) as scheduling:
+        if arguments.audio_bridge:
+            print(json.dumps({'operation': 'audio_scheduling', 'mmcss': bool(scheduling.handle),
+                              'error': scheduling.error}), flush=True)
+        asyncio.run(main(arguments))

@@ -2,6 +2,14 @@
 
 ## Unreleased — automatic background bridge and radio reconnection
 
+- Override inherited BelowNormal scheduling for audio servers and the RF process
+  with AboveNormal, and register audio event-loop threads with Windows MMCSS
+  Pro Audio. Live priority adjustment reduced reported stutters under system load;
+  complete elimination remains subject to hardware confirmation.
+- Remove synchronous status-file writes from radio callbacks. Publish snapshots
+  on a disk worker at most five times per second, including during idle periods.
+  Verify USB requests remain responsive while a status write is blocked.
+
 - Select the existing signed WinUSB/usbip-win2/Windows GIP path for deployment;
   abandon kernel certification/test-signing as a delivery requirement. The local
   development certificate trust was removed without changing boot security.
