@@ -42,10 +42,11 @@ class Session {
     void check(int result,const char *operation);
     void pairing(bool enabled);
     void remove(uint8_t wcid);
+    void recover_raw_client(uint8_t wcid,std::chrono::steady_clock::time_point now);
 public:
     explicit Session(xone_mt76 &mt,InputOutput *output=nullptr,bool trace=true,AudioOutput *audio_output=nullptr,RawGipOutput *raw_output=nullptr);
     ~Session();
-    void process(const RadioEvent &event);
+    void process(const RadioEvent &event,std::chrono::steady_clock::time_point now=std::chrono::steady_clock::now());
     void start_reconnect_window();
     void tick(std::chrono::steady_clock::time_point now=std::chrono::steady_clock::now());
     void close();

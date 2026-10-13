@@ -67,6 +67,15 @@ It does not detach unrelated USB/IP imports. The frozen alpha.2 manual launcher
 has no supervisor; its CLI defaults to a bounded session. Development background
 mode uses unlimited sessions and retries after worker exit/adapter return.
 
+The C++ session manager also recovers a configured raw USB/GIP peer whose initial
+association remains silent for five seconds. It removes only that firmware slot,
+invalidates its USB generation, and sends association again, up to three times.
+Receiving valid GIP stops this startup timer, so ordinary inactivity does not
+reset a working peer. Later known-peer association requests refresh the session
+after one-second debounce. One new-headset warm restart recovered on the first
+attempt with clean user-confirmed audio, without physical USB reset; broader
+reconnection reliability remains pending.
+
 Status snapshots use atomic publication and bounded sharing-error retries so a
 temporary file lock does not stop all devices. Physical battery status is observed
 without rewriting GIP. Xbox Accessories still displays a wired/Connected label;

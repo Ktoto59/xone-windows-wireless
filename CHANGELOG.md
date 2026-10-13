@@ -2,13 +2,23 @@
 
 ## Unreleased — automatic background bridge and radio reconnection
 
+- Recover configured USB/GIP peers that associate but send no initial GIP data:
+  after five seconds, invalidate only that peer's USB generation, clear its
+  firmware slot and resend association, up to three attempts. Established idle
+  peers and active siblings are preserved. Later reassociations refresh the
+  Windows/GIP generation; immediate WLAN retries are debounced for one second.
+- Confirm one warm bridge restart on the new headset without USB replug: the
+  first targeted recovery resumed audio, and the user confirmed clean playback.
+  Two new session regressions pass with the existing checks (35 session tests).
+  Repeated restarts, old-headset cycles and sleep/resume remain unvalidated.
+
 - Override inherited BelowNormal scheduling for audio servers and the RF process
   with AboveNormal, and register audio event-loop threads with Windows MMCSS
   Pro Audio. Live priority adjustment reduced reported stutters under system load.
   After applying the complete change and cold-resetting the adapter, the user
   reported that playback returned and stutters appeared to be gone at the same
-  load. Warm radio restart still stalled before GIP exchange and needed USB replug;
-  long-term load behavior and recovery without physical reset remain unresolved.
+  load. A later targeted session recovery restored one warm restart without USB
+  replug as recorded above; sustained load and repeated recovery remain unvalidated.
 - Remove synchronous status-file writes from radio callbacks. Publish snapshots
   on a disk worker at most five times per second, including during idle periods.
   Verify USB requests remain responsive while a status write is blocked.

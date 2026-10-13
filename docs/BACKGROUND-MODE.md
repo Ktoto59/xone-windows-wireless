@@ -38,6 +38,15 @@ restored the session; the user confirmed playback and reported stutters appeared
 to disappear at the same load. This is a limited subjective result, not a claim
 of reliable warm recovery or sustained performance under every workload.
 
+The subsequent targeted recovery change restored one warm bridge restart without
+USB replug: the peer was associated but silent, the first five-second recovery
+cleared/reassociated its firmware slot and refreshed its USB generation, then GIP
+and audio resumed. The user confirmed clean playback. Silent initial associations
+have at most three retries, and an established but idle peer is not reset by this
+timer. A later association from a configured peer refreshes its generation after
+one-second debounce; siblings retain their WCIDs and connections. Repeated warm
+restarts, old-headset power cycles and sleep/resume are still not verified.
+
 **Stop bridge** stops this session; enabled automatic mode returns at next
 sign-in. **Disable automatic mode** stops it and removes this installation's
 sign-in task. Device discovery/configuration, driver changes, upgrades and

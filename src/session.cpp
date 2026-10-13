@@ -45,6 +45,9 @@ struct Session::Client {
     GamepadCapabilities capabilities{};
     std::optional<BatteryStatus> battery;
     bool status_disconnected=false;
+    bool raw_gip_seen=false;
+    unsigned raw_recovery_attempts=0;
+    std::chrono::steady_clock::time_point associated_at=std::chrono::steady_clock::now();
     unsigned identify_attempts=0;
     std::chrono::steady_clock::time_point identify_retry=std::chrono::steady_clock::now()+std::chrono::seconds(1);
     bool gamepad=false;
@@ -238,9 +241,22 @@ void Session::start_reconnect_window() {
     pair_deadline_=std::chrono::steady_clock::now()+std::chrono::seconds(60);
     std::cout<<"STARTUP RECONNECT WINDOW seconds=60\n";
 }
-void Session::process(const RadioEvent &e) {
+void Session::recover_raw_client(uint8_t wcid,std::chrono::steady_clock::time_point now) {
+    auto &old=clients_[wcid-1];
+    const auto address=old->address;
+    const auto attempt=old->raw_gip_seen?0u:old->raw_recovery_attempts+1;
+    // Invalidate the USB generation before clearing the firmware's peer/key slot.
+    remove(wcid);
+    auto client=std::make_unique<Client>(*this,wcid,address);
+    client->associated_at=now;client->raw_recovery_attempts=attempt;
+    check(xone_mt76_associate_client(&mt_,wcid,client->address.data()),"Recover association");
+    clients_[wcid-1]=std::move(client);
+    raw_output_->event(1,wcid,address);
+    std::cout<<"RAW SESSION RECOVERY WCID="<<unsigned(wcid)<<" attempt="<<attempt<<'\n';
+}
+void Session::process(const RadioEvent &e,std::chrono::steady_clock::time_point now) {
     if(e.kind==RadioEvent::Kind::association || e.kind==RadioEvent::Kind::gip || e.kind==RadioEvent::Kind::client_command)
-        pair_scan_last_=std::chrono::steady_clock::now();
+        pair_scan_last_=now;
     switch(e.kind) {
     case RadioEvent::Kind::button:
         std::cout<<"ADAPTER BUTTON\n";pairing(true);
@@ -249,10 +265,18 @@ void Session::process(const RadioEvent &e) {
         pair_scan_last_=std::chrono::steady_clock::now();
         pair_deadline_=pair_scan_last_+std::chrono::seconds(60);break;
     case RadioEvent::Kind::association: {
-        for(const auto &c:clients_) if(c && c->address==e.address) return;
+        for(const auto &c:clients_) if(c && c->address==e.address) {
+            // Debounce immediate WLAN retries. A later association from a known
+            // USB peer must not inherit the previous Windows/GIP generation.
+            if(raw_output_ && raw_output_->target(e.address) &&
+               now-c->associated_at>=std::chrono::seconds(1) &&
+               (c->raw_gip_seen || c->raw_recovery_attempts<3))recover_raw_client(c->wcid,now);
+            return;
+        }
         const auto at=std::find_if(clients_.begin(),clients_.end(),[](const auto &c){return !c;});
         if(at==clients_.end()) throw std::runtime_error("Client table full");
         const auto wcid=static_cast<uint8_t>(at-clients_.begin()+1); auto client=std::make_unique<Client>(*this,wcid,e.address);
+        client->associated_at=now;
         check(xone_mt76_associate_client(&mt_,wcid,client->address.data()),"Associate client"); *at=std::move(client);
         if(raw_output_ && raw_output_->target(e.address))raw_output_->event(1,wcid,e.address);
         if(!pairing_) check(xone_mt76_set_led_mode(&mt_,XONE_MT_LED_ON),"Adapter LED");
@@ -288,8 +312,10 @@ void Session::process(const RadioEvent &e) {
     case RadioEvent::Kind::gip:
         if(e.wcid && e.wcid<=16 && clients_[e.wcid-1]) {
             if(raw_output_ && raw_output_->target(clients_[e.wcid-1]->address)){
+                const auto packets=parse_gip(e.payload);
+                if(!packets.empty())clients_[e.wcid-1]->raw_gip_seen=true;
                 // Audio has a separate IPC type and never enters interrupt IN.
-                for(const auto &p:parse_gip(e.payload))raw_output_->event(p.command==0x60?4:2,e.wcid,encode_gip(p));
+                for(const auto &p:packets)raw_output_->event(p.command==0x60?4:2,e.wcid,encode_gip(p));
             }else for(const auto &p:parse_gip(e.payload)) clients_[e.wcid-1]->receive(p);
         }break;
     default: break;
@@ -312,6 +338,14 @@ void Session::tick(std::chrono::steady_clock::time_point now) {
     }
     // Defer removal until dispatch/GipLink no longer owns the active client stack.
     for(uint8_t w=1;w<=16;++w)if(clients_[w-1] && clients_[w-1]->status_disconnected)remove(w);
+    // Recover a silent initial association, never an established but idle peer.
+    // No global firmware reset/channel change: other controllers/audio keep going.
+    for(uint8_t w=1;w<=16;++w){
+        const auto &c=clients_[w-1];
+        if(c && raw_output_ && raw_output_->target(c->address) && !c->raw_gip_seen &&
+           c->raw_recovery_attempts<3 && now-c->associated_at>=std::chrono::seconds(5))
+            recover_raw_client(w,now);
+    }
     if(pairing_ && now>=pair_deadline_)pairing(false);
     // Scan only with an empty client table: changing channel during auth/audio breaks it.
     if(pairing_ && now-pair_scan_last_>=std::chrono::seconds(2) &&
