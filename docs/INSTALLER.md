@@ -1,6 +1,6 @@
 # Installer and first-run control panel
 
-`xone-windows-wireless-0.1.0-alpha.2-Setup-x64.exe` is the recommended download.
+`xone-windows-wireless-0.1.0-alpha.3-Setup-x64.exe` is the recommended download.
 It targets Windows 11 x64 and installs per user under
 `%LOCALAPPDATA%\Programs\xone-windows-wireless`. Start menu and optional desktop
 shortcuts open a WinForms first-run panel. Install/source files are included;
@@ -26,8 +26,11 @@ private configuration and recovery files are created locally only.
   user chooses the model and address. It supports one controller and one of each
   headset profile; it does not infer a model from an address. Other devices must be off.
 - **Start bridge** uses the standard USB/GIP route without elevation and with
-  `-Seconds 0`. It continues until stopped, an error, or user logoff/shutdown.
-  A control-panel close does not stop it. There is no login autostart or service.
+  unlimited sessions. A control-panel close does not stop it.
+  **Enable automatic mode** also starts the background host at Windows sign-in;
+  Setup offers this option by default. It waits for first-run setup to finish.
+  **Stop bridge** stops the current session; **Disable automatic mode** also removes
+  sign-in startup. This is a user-session task, not a service running before login.
 - **Restore stock driver** stops this app's bridge and uses only its saved state.
   **Uninstall** closes no unrelated USBip sessions, stops this app's bridge, and
   restores the binding it owns. It refuses deletion if restoration cannot be

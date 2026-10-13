@@ -10,12 +10,13 @@ a standalone kernel driver.** The current implementation uses WinUSB,
 a user-mode radio bridge, and virtual USB/GIP devices through usbip-win2.
 Windows Xbox Accessories can discover the tested devices and open their settings.
 
-**Current source / alpha.3 candidate:** [automatic background mode](docs/BACKGROUND-MODE.md)
+**Alpha.3:** [automatic background mode](docs/BACKGROUND-MODE.md)
 adds sign-in startup, audio scheduling and bounded recovery using existing signed
 drivers. One new-headset warm restart recovered without USB replug, and the user
 reported that load-related audio stutters appeared to disappear. These changes
-are not in the public alpha.2 installer linked below; the candidate is not yet a
-published release.
+are included in the alpha.3 installer linked below. Old-headset automatic power-on
+and one warm restart with clean ordinary audio were also observed. This is still
+a prerelease tested on one PC, not a claim of reliable operation across all PCs.
 
 ## Tested hardware and behavior
 
@@ -33,7 +34,7 @@ with other adapters, Windows builds and firmware versions is not established.
 ## Known limitations
 
 - **The published alpha.2 can require pairing again after a 2021 headset power
-  cycle.** The alpha.3 candidate automatically discovers/re-enrolls configured
+  cycle.** Alpha.3 automatically discovers/re-enrolls configured
   peers; one ordinary old-headset power-on and a warm restart were observed,
   with clean ordinary audio after the latter. Repeated cycles remain unvalidated.
 - Xbox Accessories shows **Connected** rather than a wireless battery indicator,
@@ -48,7 +49,7 @@ with other adapters, Windows builds and firmware versions is not established.
   implemented. Do not start firmware updates through this bridge.
 - One device per captured profile is supported by the public configuration.
   Unconfigured clients have no Windows output with the default `none` fallback.
-- Current source / alpha.3 candidate supports per-user sign-in startup and bounded
+- Alpha.3 supports per-user sign-in startup and bounded
   recovery through **Enable automatic mode**. It runs in the user session and is
   unavailable before sign-in. The published alpha.2 has manual startup only.
   The command-line launcher defaults to 30 minutes; use `-Seconds 0` for unlimited.
@@ -68,7 +69,7 @@ driver backups and diagnostic captures are **not included**.
 
 ## Installation and first run
 
-Download **[Setup x64 (0.1.0-alpha.2)](https://github.com/Ktoto59/xone-windows-wireless/releases/download/v0.1.0-alpha.2/xone-windows-wireless-0.1.0-alpha.2-Setup-x64.exe)**
+Download **[Setup x64 (0.1.0-alpha.3)](https://github.com/Ktoto59/xone-windows-wireless/releases/download/v0.1.0-alpha.3/xone-windows-wireless-0.1.0-alpha.3-Setup-x64.exe)**
 from [Releases](https://github.com/Ktoto59/xone-windows-wireless/releases).
 
 1. Run Setup. It installs the application for your Windows account and adds a
@@ -84,7 +85,7 @@ from [Releases](https://github.com/Ktoto59/xone-windows-wireless/releases).
    Xbox devices off, power on or pair that device. Select its observed radio address,
    click **Finish search**, wait for the search to end, then **Add selected device**.
    Repeat for each model you own and click **Save devices**. No JSON editing is needed.
-5. On **Start / stop**, click **Start bridge**. For the alpha.3 candidate, choose
+5. On **Start / stop**, click **Start bridge**. For alpha.3, choose
    **Enable automatic mode** to also start at Windows sign-in. Power on your configured devices.
    Select the Xbox audio endpoint in Windows/app settings and open Xbox Accessories.
    Closing the panel leaves the bridge running; **Stop bridge** stops it. Start it

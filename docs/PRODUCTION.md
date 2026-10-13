@@ -3,9 +3,10 @@
 Status: design requirements, not a production reliability certification.
 The selected delivery path is the [automatic user-session bridge](BACKGROUND-MODE.md)
 on existing signed drivers. The custom kernel/signing path is not selected.
-The public alpha.2 release remains unchanged. New-headset clean playback and
-limited automatic recovery were confirmed in development; broader lifetime,
-warm-start and other-device behavior remain unvalidated.
+Alpha.3 includes the background bridge, audio scheduling and limited peer recovery;
+the alpha.2 assets remain unchanged. Clean playback and individual old/new-headset
+warm restarts were confirmed on one development PC. Broader lifetime, repeated
+restarts and behavior on other computers remain unvalidated.
 
 ## User experience
 

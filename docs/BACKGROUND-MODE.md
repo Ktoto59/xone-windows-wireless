@@ -1,7 +1,7 @@
 # Automatic background bridge
 
-Status: current development branch. These changes are not in the frozen public
-alpha.2 download. This path uses the existing signed WinUSB, usbip-win2 and Windows
+Status: included in alpha.3. These changes are not in the frozen alpha.2 download.
+This path uses the existing signed WinUSB, usbip-win2 and Windows
 GIP/audio drivers. No new kernel driver, driver certification, test signing or
 Secure Boot change is required by this implementation.
 

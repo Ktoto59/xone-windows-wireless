@@ -13,7 +13,8 @@ Firmware is imported or downloaded from Microsoft and is kept only on your PC.
 
 This uses a user-mode bridge and virtual USB/GIP devices. It is not a new signed
 native Xbox Wireless kernel driver. Xbox Accessories still shows Connected for
-battery status. The 2021 headset may require pairing after it is powered off/on.
+battery status. Configured peers are automatically discovered/re-enrolled after
+power-on, but repeated reconnect cycles are not yet validated on other PCs.
 Do not update firmware through this preview.
 
 Uninstall stops the bridge and restores the stock binding saved by this installation.

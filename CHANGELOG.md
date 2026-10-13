@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — automatic background bridge and radio reconnection
+## 0.1.0-alpha.3 — 2026-10-13
 
 - Keep discovery beacons/RX enabled for configured USB/GIP peers after manual
   enrollment closes. The default USB-only route rejects unknown associations
@@ -20,7 +20,7 @@
   Windows/GIP generation; immediate WLAN retries are debounced for one second.
 - Confirm one warm bridge restart on the new headset without USB replug: the
   first targeted recovery resumed audio, and the user confirmed clean playback.
-  Two new session regressions pass with the existing checks (35 session tests).
+  New session regressions pass with the existing checks (37 session tests total).
   Repeated restarts, old-headset cycles and sleep/resume remain unvalidated.
 
 - Override inherited BelowNormal scheduling for audio servers and the RF process
