@@ -38,10 +38,21 @@ Outputs: `outputs/native/xone-native.sys` and `xone-native.inf`. The script only
 compiles/links and copies the INF. No tests, driver installation, certificates,
 boot-security changes, adapter switching or live-bridge changes are performed.
 
-The first x64 binary was compiled on 2026-10-13. No kernel load or hardware
-validation has occurred. No signed catalog is supplied. This package is excluded
-from the public installer and must not be selected for a daily-use adapter.
-Compilation does not prove kernel lifetime, radio or GIP compatibility.
+The first x64 binary was compiled on 2026-10-13. Subsequent INF validation found
+and fixed the minimum Windows version decoration: this experiment targets Windows
+11 x64, build 22000 or newer. InfVerif /w and catalog generation then passed.
+The local .sys and .cat were separately test-signed for an explicitly authorized
+development trial. This is not Microsoft release signing; normal builds remain
+unsigned. No kernel load or hardware validation has occurred yet.
+
+The privileged `scripts/Prepare-NativeTest.ps1` handles explicit local certificate
+trust and boot-setting backup/rollback for that trial. It does not disable Secure
+Boot, change HVCI, suspend BitLocker, reboot or install the adapter driver. It
+rejects enabling TESTSIGNING while Secure Boot or unreviewed boot encryption
+protection is active. Preparation state is private and excluded from Git.
+
+The package remains excluded from the public installer. Compilation and package
+validation do not prove kernel lifetime, radio or GIP compatibility.
 
 Microsoft references: [NDIS registration](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ndis/nf-ndis-ndismregisterminiportdriver),
 [NDIS bus device objects](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ndis/nf-ndis-ndismgetdeviceproperty).

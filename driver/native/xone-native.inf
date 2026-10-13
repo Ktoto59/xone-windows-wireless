@@ -11,8 +11,8 @@ DriverVer=10/13/2026,0.2.0.0
 PnpLockdown=1
 
 [Manufacturer]
-%Provider%=Models,NTamd64.10.0
-[Models.NTamd64.10.0]
+%Provider%=Models,NTamd64.10.0...22000
+[Models.NTamd64.10.0...22000]
 %Adapter%=Native,USB\VID_045E&PID_02FE
 
 [Native.NT]
