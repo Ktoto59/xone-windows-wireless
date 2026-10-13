@@ -1,6 +1,11 @@
 # Installation details
 
-This preview is a portable user-mode transport and virtual USB/GIP bridge.
+For the recommended GUI route, download the **Setup x64 EXE** from Releases and
+follow the first-run control panel. It includes its own Python runtime and handles
+dependency preparation and mapping without hand-editing JSON. See README and
+[installer details](INSTALLER.md). The instructions below describe the manual route.
+
+This preview is a user-mode transport and virtual USB/GIP bridge.
 It does not contain a new signed Xbox radio kernel driver. Its executables are
 not Authenticode-signed. The adapter uses Windows' signed in-box WinUSB driver;
 the virtual USB controller is supplied by the separately installed usbip-win2.

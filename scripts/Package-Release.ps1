@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 [CmdletBinding()]
-param([ValidatePattern('^\d+\.\d+\.\d+(?:-[a-z0-9.]+)?$')][string]$Version='0.1.0-alpha.1')
+param([ValidatePattern('^\d+\.\d+\.\d+(?:-[a-z0-9.]+)?$')][string]$Version='0.1.0-alpha.2')
 $ErrorActionPreference='Stop'
 $taskRoot=Split-Path -Parent $PSScriptRoot
 $taskDist=Join-Path $taskRoot 'dist'
@@ -14,14 +14,14 @@ try{
     $taskFiles=@(& git ls-files)
     if($LASTEXITCODE -ne 0 -or -not $taskFiles.Count){throw 'Package from a Git source checkout.'}
     foreach($taskFile in $taskFiles){
-        if($taskFile -match '^(work|outputs|build|dist)/' -or $taskFile -match '\.local\.json$'){throw 'Private or generated file unexpectedly tracked.'}
+        if($taskFile -match '^(work|outputs|build|dist|runtime)/' -or $taskFile -match '\.local\.json$'){throw 'Private or generated file unexpectedly tracked.'}
         $taskDestination=Join-Path $taskStage $taskFile
         [void][IO.Directory]::CreateDirectory((Split-Path -Parent $taskDestination))
         Copy-Item -LiteralPath (Join-Path $taskRoot $taskFile) -Destination $taskDestination
     }
     $taskOutput=Join-Path $taskStage 'outputs'
     [void][IO.Directory]::CreateDirectory($taskOutput)
-    foreach($taskBinary in @('xone-probe.exe','xone-bind.exe','native-gip-probe.exe','native-audio-probe.exe','audio-endpoint-test.exe','usb-reference-dump.exe','etw-trace-dump.exe','protocol-tests.exe','session-tests.exe')){
+    foreach($taskBinary in @('xone-probe.exe','xone-bind.exe','native-gip-probe.exe','native-audio-probe.exe','audio-endpoint-test.exe','usb-reference-dump.exe','etw-trace-dump.exe','protocol-tests.exe','session-tests.exe','xone-control.exe')){
         $taskSource=Join-Path $taskRoot ('outputs/'+$taskBinary)
         if(-not (Test-Path -LiteralPath $taskSource)){throw ('Missing release binary: '+$taskBinary)}
         Copy-Item -LiteralPath $taskSource -Destination $taskOutput

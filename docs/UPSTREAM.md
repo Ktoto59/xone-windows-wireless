@@ -1,5 +1,13 @@
 # Upstream and licenses
 
+The Setup EXE also contains the official Python 3.13.16 embeddable runtime under
+the Python Software Foundation license and its included third-party notices.
+`runtime/python/LICENSE.txt` is preserved during installation. See
+[runtime provenance](INSTALLER.md#runtime-provenance) for the pinned archive.
+Inno Setup builds the installer; its runtime notices are retained by the compiler.
+USBip installers and Microsoft firmware are downloaded on the user's machine,
+not bundled in the project release. All project GPL source is included in Setup.
+
 - [medusalix/xone](https://github.com/medusalix/xone), base commit
   `3484f603484782dd7551c64e5a33fc602b127051`; GPL-2.0-or-later.
 - Imported MT76 sources retain their original xone/mt76 copyright notices.

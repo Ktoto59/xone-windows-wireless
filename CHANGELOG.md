@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.0-alpha.2 — 2026-10-13
+
+- Windows x64 Setup EXE with per-user installation, Start menu/desktop shortcuts
+  and an uninstall entry.
+- First-run WinForms control panel for dependency preparation, adapter binding,
+  association discovery and device mapping, bridge start/stop and stock restoration.
+- Isolated official Python 3.13.16 runtime included in Setup with its license.
+  USBip and firmware are obtained separately from their official sources and checked.
+- Uninstall/upgrade checks for a stopped bridge; removal restores only the saved
+  binding owned by that installation and refuses deletion when restoration fails.
+- Unlimited launcher sessions with `-Seconds 0`, used by the control panel.
+- Setup helper tests for checksum rejection, atomic mapping, radio-address parsing,
+  process identities and uninstall guards. No radio/audio protocol changes.
+
+Headset 2021 reconnection and Accessories' Connected battery label remain unresolved.
+The installer does not turn this user-mode/virtual USB prototype into a kernel driver.
+
 ## 0.1.0-alpha.1 — 2026-10-13
 
 First public snapshot of the working Windows x64 research prototype.

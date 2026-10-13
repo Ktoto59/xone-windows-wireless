@@ -1,0 +1,22 @@
+xone-windows-wireless research preview
+
+Setup installs this application for the current Windows user, including its source
+code and an isolated Python runtime. It adds a Start menu entry and an optional
+desktop shortcut. It does not change the adapter driver during file installation.
+
+The first-run control panel prepares dependencies and guides adapter selection,
+driver backup, WinUSB binding and radio device discovery. Preparing USBip requires
+Internet access and Windows administrator approval. USB hubs may restart briefly.
+Firmware is imported or downloaded from Microsoft and is kept only on your PC.
+
+This uses a user-mode bridge and virtual USB/GIP devices. It is not a new signed
+native Xbox Wireless kernel driver. Xbox Accessories still shows Connected for
+battery status. The 2021 headset may require pairing after it is powered off/on.
+Do not update firmware through this preview.
+
+Uninstall stops the bridge and restores the stock binding saved by this installation.
+Keep the adapter connected in its original USB port for that step. Private recovery
+data is retained. Shared USBip is not uninstalled automatically.
+
+The application's EXEs and this Setup EXE are not Authenticode-signed. The WinUSB
+driver comes from Windows; the USBip dependency is the signed upstream release.

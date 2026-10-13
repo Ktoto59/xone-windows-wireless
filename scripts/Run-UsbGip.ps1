@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 [CmdletBinding()]
-param([switch]$Stop,[switch]$Worker,[switch]$AudioProbe,[switch]$AudioBridge,[switch]$NewHeadsetOnly,[switch]$NativeController,[string]$ConfigPath='',[ValidateRange(30,3600)][int]$Seconds=1800,[ValidateSet('none','native-gip','vigem')][string]$FallbackOutput='none')
+param([switch]$Stop,[switch]$Worker,[switch]$AudioProbe,[switch]$AudioBridge,[switch]$NewHeadsetOnly,[switch]$NativeController,[string]$ConfigPath='',[ValidateScript({$_ -eq 0 -or ($_ -ge 30 -and $_ -le 86400)})][int]$Seconds=1800,[ValidateSet('none','native-gip','vigem')][string]$FallbackOutput='none')
 $ErrorActionPreference='Stop'
 $taskRoot=Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'Device-Config.ps1')
@@ -105,7 +105,8 @@ function Get-TaskExitError($Process,[string]$Label,[string]$ErrorPath){
 }
 try{
     Save-TaskState
-    $taskPython=(Get-Command python.exe).Source
+    $taskPython=Join-Path $taskRoot 'runtime/python/python.exe'
+    if(-not (Test-Path -LiteralPath $taskPython)){$taskPython=(Get-Command python.exe).Source}
     foreach($taskDevice in $taskDevices){
         if(Test-Path -LiteralPath $taskDevice.Status){Remove-Item -LiteralPath $taskDevice.Status}
         $taskArgs='"'+(Join-Path $taskRoot 'src\usbip_reference_server.py')+'" --profile "'+$taskDevice.Profile+'" --port '+$taskDevice.UsbPort+' --radio-port '+$taskDevice.RadioPort+' --radio-mac '+$taskDevice.Mac+' --seconds '+$Seconds+' --status-file "'+$taskDevice.Status+'"'
@@ -124,7 +125,7 @@ try{
     foreach($taskDevice in $taskDevices | Select-Object -Skip 1){$taskArgs+=' --usb-gip-peer '+$taskDevice.Mac+':'+$taskDevice.RadioPort}
     $taskRadio=Start-Process -FilePath (Join-Path $taskRoot 'outputs\xone-probe.exe') -ArgumentList $taskArgs -WorkingDirectory $taskRoot -WindowStyle Hidden -RedirectStandardOutput $taskState.RadioLog -RedirectStandardError $taskState.RadioError -PassThru
     $taskState.Radio=@{Pid=$taskRadio.Id;StartTicks=$taskRadio.StartTime.ToUniversalTime().Ticks};Save-TaskState
-    $taskDeadline=(Get-Date).AddSeconds($Seconds-2)
+    $taskDeadline=if($Seconds -eq 0){[datetime]::MaxValue}else{(Get-Date).AddSeconds($Seconds-2)}
     while((Get-Date) -lt $taskDeadline -and -not (Test-Path -LiteralPath $taskStopPath)){
         $taskRadio.Refresh()
         if($taskRadio.HasExited){throw (Get-TaskExitError $taskRadio 'Radio' $taskState.RadioError)}

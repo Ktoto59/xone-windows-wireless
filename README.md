@@ -5,8 +5,8 @@ Experimental Windows x64 Xbox Wireless Adapter transport based on
 and two Xbox Wireless Headset revisions over the adapter's radio and presents
 them to the existing Windows Xbox GIP and audio drivers.
 
-**This release is a working research preview, not a standalone kernel driver
-or a one-click driver installer.** The current implementation uses WinUSB,
+**This release is a working research preview with a Windows installer. It is not
+a standalone kernel driver.** The current implementation uses WinUSB,
 a user-mode radio bridge, and virtual USB/GIP devices through usbip-win2.
 Windows Xbox Accessories can discover the tested devices and open their settings.
 
@@ -40,23 +40,57 @@ with other adapters, Windows builds and firmware versions is not established.
   implemented. Do not start firmware updates through this bridge.
 - One device per captured profile is supported by the public configuration.
   Unconfigured clients have no Windows output with the default `none` fallback.
-- There is no background service or login autostart. A launcher session lasts
-  30 minutes by default, or at most one hour with `-Seconds 3600`.
+- There is no background service or login autostart. The control panel starts a
+  session until stopped or signed out. The command-line launcher defaults to
+  30 minutes; use `-Seconds 0` for an unlimited session.
 
 ## Requirements
 
-- Windows 11 x64, Windows PowerShell 5.1 and Python **3.11 or newer** on PATH.
-- Microsoft Visual C++ v14 x64 runtime for the prebuilt executables:
-  [official download instructions](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist).
+- Windows 11 x64 and Windows PowerShell 5.1. The installer includes an isolated
+  Python 3.13.16 runtime; a separate Python installation is unnecessary.
+- For the portable ZIP/source route, Python **3.11 or newer** on PATH.
 - The existing Microsoft Xbox GIP/audio drivers and Xbox Accessories application.
 - Signed [usbip-win2 0.9.8.1](https://github.com/vadimgrn/usbip-win2/releases/tag/v.0.9.8.1),
   including its client and virtual USB controller.
 - The exact Microsoft adapter RAM firmware described in [INSTALL.md](docs/INSTALL.md).
 
-Firmware, Microsoft system drivers, third-party installers, local device MACs,
+Firmware, Microsoft system drivers, USBip installers, local device MACs,
 driver backups and diagnostic captures are **not included**.
 
 ## Installation and first run
+
+Download **[Setup x64 (0.1.0-alpha.2)](https://github.com/Ktoto59/xone-windows-wireless/releases/download/v0.1.0-alpha.2/xone-windows-wireless-0.1.0-alpha.2-Setup-x64.exe)**
+from [Releases](https://github.com/Ktoto59/xone-windows-wireless/releases).
+
+1. Run Setup. It installs the application for your Windows account and adds a
+   Start menu shortcut. Leave **Open the first-run setup and control panel** checked.
+2. On **Adapter**, connect the external adapter and click **Prepare dependencies**.
+   The wizard imports firmware from your driver store or obtains it from Microsoft.
+   If needed, it downloads the pinned, signed USBip installer from its upstream
+   GitHub release and requests UAC. USB hubs can briefly restart. Restart Windows
+   if the wizard reports that a restart is required, then reopen the control panel.
+3. Select the adapter and click **Use WinUSB**, approve UAC, then unplug/reconnect
+   the adapter in the same port. The wizard saves its stock-driver recovery backup.
+4. On **Devices**, choose a model and click **Search for device**. With all other
+   Xbox devices off, power on or pair that device. Select its observed radio address,
+   click **Finish search**, wait for the search to end, then **Add selected device**.
+   Repeat for each model you own and click **Save devices**. No JSON editing is needed.
+5. On **Start / stop**, click **Start bridge**. Power on your configured devices.
+   Select the Xbox audio endpoint in Windows/app settings and open Xbox Accessories.
+   Closing the panel leaves the bridge running; **Stop bridge** stops it. Start it
+   again from the shortcut after signing in or restarting Windows.
+
+Internet access is needed only for missing dependencies/firmware. Python is private
+to this app and does not change your system Python or PATH. Setup and the project's
+EXEs are unsigned. There is no automatic firmware-update support.
+
+**Existing development/portable users:** stop your other radio bridge first. An
+adapter already on WinUSB does not need switching again. Recovery data belongs to
+the installation that switched it; this wizard does not guess or overwrite that
+backup. Keep that original folder to restore the driver. New installs are separate
+and do not migrate private device mappings automatically.
+
+### Portable ZIP / manual alternative
 
 Download the Windows x64 preview ZIP from [Releases](https://github.com/Ktoto59/xone-windows-wireless/releases)
 and extract it to a writable folder. The ZIP includes the executable tools and
@@ -128,7 +162,14 @@ backend and does not provide the same Accessories support.
 
 ## Restore the stock adapter driver
 
-Stop the bridge. In an administrator PowerShell run:
+From the installed control panel, use **Restore stock driver** on the Adapter tab
+and approve UAC, then reconnect the adapter. To uninstall, close the panel and use
+Windows **Installed apps** or the Start menu uninstall entry. Uninstall stops this
+installation's bridge and restores any stock binding it owns. If recovery cannot
+be verified (for example, the adapter is unplugged), uninstall stops and keeps the
+files. Private `work/` and local config remain for recovery; shared USBip is retained.
+
+For the manual route, stop the bridge. In an administrator PowerShell run:
 
 ```powershell
 .\scripts\Switch-WinUSB.ps1 -Mode Restore
@@ -150,7 +191,18 @@ cmd /c scripts\Build-EtwTraceDump.cmd
 python -m unittest discover -s tests -p "*_tests.py"
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\device_config_tests.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\launcher_snapshot_tests.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests\setup_helpers_tests.ps1
 ```
+
+To build Setup, install [Inno Setup 6.7.3](https://jrsoftware.org/isdl.php), then run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\Build-Installer.ps1 -IsccPath 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+```
+
+The build uses a clean Git allowlist, compiles the small .NET launcher, downloads
+the official Python embeddable package with a pinned SHA-256, and packages its
+license. See [installer details](docs/INSTALLER.md).
 
 The main build runs 14 protocol and 31 session tests. There are 64 Python tests
 for USB profiles, radio adaptation, USB/IP transport and URBs. PowerShell checks
