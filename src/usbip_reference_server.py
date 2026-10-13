@@ -148,10 +148,10 @@ async def main(args):
         print(f'Local radio broker at 127.0.0.1:{args.radio_port}', flush=True)
         event({'operation': 'radio_waiting'})
         async with radio_server, server:
-            await asyncio.sleep(args.seconds)
+            await asyncio.sleep(args.seconds) if args.seconds else await asyncio.Future()
     else:
         async with server:
-            await asyncio.sleep(args.seconds)
+            await asyncio.sleep(args.seconds) if args.seconds else await asyncio.Future()
 
 
 if __name__ == '__main__':
@@ -172,8 +172,8 @@ if __name__ == '__main__':
     arguments = parser.parse_args()
     if (arguments.audio_probe or arguments.audio_bridge) and not arguments.radio_mac:
         parser.error('audio options require radio-mac')
-    if not 0 <= arguments.port <= 65535 or not 1 <= arguments.seconds <= 3600:
-        parser.error('port must be 0..65535; seconds must be 1..3600')
+    if not 0 <= arguments.port <= 65535 or not 0 <= arguments.seconds <= 86400:
+        parser.error('port must be 0..65535; seconds must be 0 (until stopped) or 1..86400')
     if arguments.radio_mac and (arguments.enumeration_probe or len(arguments.radio_mac) != 12 or any(c not in '0123456789abcdefABCDEF' for c in arguments.radio_mac)):
         parser.error('radio-mac must be twelve hex digits and cannot combine with enumeration-probe')
     if not 1024 <= arguments.radio_port <= 65535 or arguments.radio_port == arguments.port:

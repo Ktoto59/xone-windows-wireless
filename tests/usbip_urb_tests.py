@@ -108,7 +108,10 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         self.sessions = []
         self.events = []
         async def connection(reader, writer):
-            session = UrbSession(self.profile, self.backend, timeout=.5, on_event=self.events.append)
+            # Byte-at-a-time debug Proactor writes can exceed .5s under load.
+            # Production uses Selector and a 120s timeout; keep this test bounded
+            # without making CPU scheduling part of the fragmentation assertion.
+            session = UrbSession(self.profile, self.backend, timeout=2, on_event=self.events.append)
             self.sessions.append(session)
             await session.run(reader, writer)
         self.server = await asyncio.start_server(connection, '127.0.0.1', 0)
@@ -126,7 +129,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(not s.pending for s in self.sessions))
 
     async def receive(self):
-        header = await asyncio.wait_for(self.reader.readexactly(48), 1)
+        header = await asyncio.wait_for(self.reader.readexactly(48), 3)
         values = struct.unpack('!IIIIIiiiii8s', header)
         if values[0] == 3:
             # Tests only request IN or zero-length OUT controls.

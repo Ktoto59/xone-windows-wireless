@@ -1,13 +1,47 @@
 import asyncio
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 import struct
 import sys
+from types import SimpleNamespace
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 from usb_headset_profile import HeadsetProfile
-from usbip_reference_server import ReferenceServer, transport_profile
+from usbip_reference_server import ReferenceServer, transport_profile, main
+
+
+class LifetimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_zero_duration_serves_requests_until_cancelled(self):
+        args = SimpleNamespace(profile=ROOT / 'driver/profiles/headset-0b32-usb.json',
+                               audio_bridge=False, audio_probe=False, radio_mac=None,
+                               enumeration_probe=False, port=0, seconds=0, status_file=None)
+        output = StringIO()
+        with redirect_stdout(output):
+            task = asyncio.create_task(main(args))
+            writer = None
+            try:
+                for _ in range(200):
+                    if output.getvalue() or task.done():
+                        break
+                    await asyncio.sleep(.01)
+                self.assertFalse(task.done(), 'Unlimited server stopped during startup')
+                port = int(output.getvalue().split('127.0.0.1:')[1].split(';')[0])
+                reader, writer = await asyncio.open_connection('127.0.0.1', port)
+                writer.write(bytes.fromhex('0111800500000000'))
+                await writer.drain()
+                expected = HeadsetProfile.load(args.profile).usbip_device_list()
+                self.assertEqual(await asyncio.wait_for(reader.read(), 3), expected)
+                self.assertFalse(task.done(), 'Unlimited server stopped after serving a request')
+            finally:
+                if writer:
+                    writer.close()
+                    await writer.wait_closed()
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
 
 
 class TransportTests(unittest.IsolatedAsyncioTestCase):
