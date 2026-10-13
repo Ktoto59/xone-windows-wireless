@@ -129,6 +129,15 @@ function Get-XoneDiscoveredMacs([string]$Text){
         if(-not $seen.ContainsKey($mac)){$seen[$mac]=$true;Write-Output $mac}
     }
 }
+function Set-XoneBridgeBackend([string]$Root,[ValidateSet('cpp','python')][string]$Backend){
+    if($Backend -eq 'cpp' -and -not [IO.File]::Exists((Join-Path $Root 'outputs/xone-probe-cpp.exe'))){throw 'This installation does not include the C++ bridge.'}
+    $path=Join-Path $Root 'config/devices.local.json'
+    [void](Read-XoneDeviceConfig $path)
+    $value=Read-XoneJson $path
+    if(-not $value){throw 'Save the device configuration before choosing a bridge.'}
+    $value | Add-Member -NotePropertyName BridgeBackend -NotePropertyValue $Backend -Force
+    Write-XoneJson $path $value
+}
 function Restore-XoneForRemoval([string]$Root){
     Assert-XonePanelClosed $Root
     Stop-XoneBridge $Root

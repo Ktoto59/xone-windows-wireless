@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 [CmdletBinding()]
-param([string]$RenderPreview='')
+param([string]$RenderPreview='',[ValidateRange(0,2)][int]$PreviewTab=0)
 $ErrorActionPreference='Stop'
 $script:taskRoot=Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'Setup-Helpers.ps1')
@@ -70,6 +70,7 @@ function Update-XoneUiStatus {
     }elseif($state -and (Test-XoneProcess $state.Worker)){
         if($state.Error){'Bridge error: '+$state.Error}else{'Bridge is running. Power on your configured devices.'}
     }elseif($state -and $state.Error){'Bridge stopped: '+$state.Error}else{'Bridge is stopped.'}
+    if($state -and $state.BridgeBackend){$taskBridgeStatus.Text+=' | Runtime: '+$state.BridgeBackend}
     $script:taskLastStatus=Get-Date
 }
 
@@ -137,13 +138,17 @@ $script:taskBridgeStatus=Add-XoneLabel $bridge 'Bridge is stopped.' 16 22 690 58
 [void](Add-XoneButton $bridge 'Refresh status' 480 97 230 {Update-XoneUiStatus})
 [void](Add-XoneButton $bridge 'Enable automatic mode' 16 143 330 {Start-XoneUiAction 'AutomaticEnable'})
 [void](Add-XoneButton $bridge 'Disable automatic mode' 363 143 347 {Start-XoneUiAction 'AutomaticDisable'})
-[void](Add-XoneLabel $bridge "Automatic mode starts at sign-in and recovers the bridge after USB loss or sleep.`r`nStop ends this session; automatic mode starts again at your next sign-in.`r`nDisable automatic mode stops it and removes its sign-in task.`r`nSelect the Xbox audio endpoint in Windows or your app.`r`n`r`nPreview: headset reconnection/audio quality still need hardware validation.`r`nAccessories can show Connected. Firmware updates are unavailable." 16 198 690 165)
+[void](Add-XoneLabel $bridge 'Bridge version:' 16 198 150 28)
+$script:taskBackendBox=[Windows.Forms.ComboBox]::new();$taskBackendBox.SetBounds(164,195,370,30);$taskBackendBox.DropDownStyle='DropDownList'
+[void]$taskBackendBox.Items.Add('C++ bridge (preview)');[void]$taskBackendBox.Items.Add('Python reference bridge');$taskBackendBox.SelectedIndex=1;$bridge.Controls.Add($taskBackendBox)
+[void](Add-XoneButton $bridge 'Apply and restart' 550 193 160 {Start-XoneUiAction $(if($taskBackendBox.SelectedIndex -eq 0){'UseCpp'}else{'UsePython'})})
+[void](Add-XoneLabel $bridge "Automatic mode starts at sign-in and recovers after USB loss or sleep.`r`nStop ends this session; Disable also removes the sign-in task.`r`nSelect the Xbox audio endpoint in Windows or your app.`r`nApplying a bridge version briefly interrupts audio; device pairing is preserved.`r`nPreview: reconnection and simultaneous devices need further validation.`r`nAccessories can show Connected. Firmware updates are unavailable." 16 235 690 128)
 [void](Add-XoneButton $bridge 'Open local logs' 16 371 215 {Start-Process -FilePath explorer.exe -ArgumentList (Quote-XonePath (Join-Path $taskRoot 'work'))})
 [void](Add-XoneButton $bridge 'Open documentation' 248 371 215 {Start-Process 'https://github.com/Ktoto59/xone-windows-wireless#installation-and-first-run'})
 $script:taskOperationLabel=Add-XoneLabel $taskForm 'Ready. Use the three tabs to complete the first-time setup.' 23 566 740 32
 
 $config=Read-XoneJson (Join-Path $taskRoot 'config/devices.local.json')
-if($config){$script:taskEntries=@($config.Devices);Refresh-XoneEntries}
+if($config){$script:taskEntries=@($config.Devices);Refresh-XoneEntries;if($config.BridgeBackend -eq 'cpp'){$taskBackendBox.SelectedIndex=0}}
 $timer=[Windows.Forms.Timer]::new();$timer.Interval=500
 $timer.Add_Tick({
     try{
@@ -174,6 +179,8 @@ $taskForm.Add_FormClosing({param($sender,$eventArgs)
 })
 try{
     if($RenderPreview){
+        $tabs.SelectedIndex=$PreviewTab
+        $taskForm.StartPosition='Manual';$taskForm.Location=[Drawing.Point]::new(-30000,-30000)
         $taskSetupStatus.Text="Bundled runtime: ready`r`nUSBip virtual controller: ready (0.9.8.1)`r`nAdapter firmware: verified`r`nAdapter driver: WinUSB"
         $taskForm.CreateControl();$taskForm.Show();[Windows.Forms.Application]::DoEvents()
         $bitmap=[Drawing.Bitmap]::new($taskForm.Width,$taskForm.Height)

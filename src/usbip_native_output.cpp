@@ -115,7 +115,9 @@ struct NativeUsbOutput::Impl {
             if(!reset_pending){if(tx.size()+requests.size()>128)throw usbip::Error("Native radio TX queue overflow");for(auto &request:requests)tx.push_back(std::move(request));}
         }
         const auto now=usbip::Core::Clock::now();
-        for(auto &c:clients){if(now-c->last>std::chrono::seconds(c->phase==2?120:5))c->dead=true;if(!c->dead)c->flush();}
+        // A live USB interrupt URB may wait indefinitely on an idle device.
+        // Limit only incomplete imports; TCP close and RF generation own lifetime.
+        for(auto &c:clients){if(c->phase!=2 && now-c->last>std::chrono::seconds(5))c->dead=true;if(!c->dead)c->flush();}
         std::erase_if(clients,[&](const auto &c){if(!c->dead)return false;if(c.get()==imported){core.detached();imported=nullptr;std::lock_guard lock(mutex);tx.clear();}return true;});
         publish();
     }

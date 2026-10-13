@@ -6,7 +6,11 @@
   event-driven threads, headset-clock pacing, bounded queues and MMCSS. Preserve
   the three captured USB profiles and the signed USBip/Windows GIP route.
   Descriptor equivalence, synthetic audio/cancellation and real loopback transport
-  checks pass; physical-device performance of this backend is not yet validated.
+  checks pass. An initial 2024-headset physical audio check was clean, but a later
+  stutter was reported under IDE activity; sustained reliability is unvalidated.
+- Add a control-panel selector for C++/Python with saved selection and background
+  restart. Keep established USB/GIP imports alive when idle; limit only incomplete
+  handshakes to five seconds.
 - Move radio status writes off the RF thread; disable routine audio packet logs,
   send diagnostics to a bounded ordinary worker and write statistics every two
   seconds while retaining prompt connection/generation updates.

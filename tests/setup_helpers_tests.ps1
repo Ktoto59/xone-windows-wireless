@@ -18,6 +18,16 @@ try{
     $invalid=@($first)+@([pscustomobject]@{Name='headset';Mac='020000000001';Profile='headset-0b32-usb.json'})
     Reject {Set-XoneSetupConfig $taskDirectory '' $invalid} 'Duplicate mapping was accepted'
     Check ((Read-XoneDeviceConfig $path).Devices.Count -eq 1) 'Invalid edit overwrote the working configuration'
+    Reject {Set-XoneBridgeBackend $taskDirectory cpp} 'Missing C++ binary accepted'
+    Check ((Read-XoneDeviceConfig $path).BridgeBackend -eq 'python') 'Failed backend selection changed configuration'
+    [void][IO.Directory]::CreateDirectory((Join-Path $taskDirectory 'outputs'))
+    [IO.File]::WriteAllText((Join-Path $taskDirectory 'outputs/xone-probe-cpp.exe'),'fixture; never executed')
+    Set-XoneBridgeBackend $taskDirectory cpp
+    Check ((Read-XoneDeviceConfig $path).BridgeBackend -eq 'cpp') 'C++ selection was not saved'
+    Set-XoneSetupConfig $taskDirectory '' $first
+    Check ((Read-XoneDeviceConfig $path).BridgeBackend -eq 'cpp') 'Saving devices lost backend selection'
+    Set-XoneBridgeBackend $taskDirectory python
+    Check ((Read-XoneDeviceConfig $path).Devices[0].Mac -eq $first[0].Mac) 'Switching backend changed the device address'
     Reject {Quote-XonePath "bad`"path"} 'Quoted argument accepted'
     Reject {Quote-XonePath "bad`npath"} 'Multiline argument accepted'
     Check ((Quote-XonePath 'C:\a folder\file.ps1') -eq '"C:\a folder\file.ps1"') 'Argument quoting changed spaces'

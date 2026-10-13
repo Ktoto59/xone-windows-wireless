@@ -8,9 +8,14 @@ a user-mode bridge, not a new kernel driver.
 
 The published alpha.3 installer still contains the previous backend. The C++
 implementation has passed descriptor equivalence, real loopback USB/IP transport,
-audio clock/fragment, cancellation and generation tests. **Physical-adapter audio,
-reconnection and performance of this backend have not yet been verified.** It is
-not the default and no performance improvement is claimed yet.
+audio clock/fragment, cancellation and generation tests. The 2024 headset was
+tested through the physical adapter: audio started after targeted session
+recovery, and the user confirmed clean playback initially. A later stutter was
+reported while using a heavy IDE project; its cause was not established. A
+60-second measurement used about 11 MB working set and 3.15% of one logical CPU
+(about 0.20% total on that 16-logical-CPU PC). This is not a matched comparison or
+a general performance guarantee. Controller/2021 headset operation on the C++
+backend, repeated power cycles and other PCs remain unverified.
 
 ## Build
 
@@ -31,9 +36,14 @@ loopback TCP only. It does not open the physical adapter or change drivers.
 
 ## Select the backend
 
-Complete the normal adapter/USBip setup and configure the existing supported
-profiles in the private `config/devices.local.json`. Stop the running automatic
-bridge from the control panel first, then add a top-level field to that JSON:
+Complete normal adapter/USBip setup and configure the supported devices. In the
+development control panel, open **Start / stop**, choose **C++ bridge (preview)**,
+then **Apply and restart**. Choose **Python reference bridge** and apply to return
+to the reference implementation. The selection is saved privately and the
+supervisor restarts without another UAC prompt or driver change.
+
+The equivalent manual configuration is a top-level field in the private
+`config/devices.local.json`, changed while the bridge is stopped:
 
 ```json
 "BridgeBackend": "cpp"
@@ -71,6 +81,8 @@ changes remain promptly visible. Radio status writes use a separate worker with
 one coalesced pending snapshot. No PCM or voice recordings are written.
 The C++ candidate also checks the stop marker on a separate 100-ms worker instead
 of making a filesystem call on every one-millisecond radio tick.
+An established USB import stays connected while idle; only incomplete handshakes
+have a five-second timeout. Pending interrupt reads are allowed to wait for input.
 
 These changes reduce avoidable work in time-critical threads. They do not prove
 that system freezes caused by memory pressure, DPCs or another application are

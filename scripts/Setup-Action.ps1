@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 [CmdletBinding()]
-param([Parameter(Mandatory=$true)][ValidateSet('Prepare','Bind','Restore','Remove','Upgrade','Start','Stop','Discover','AutomaticEnable','AutomaticDisable')][string]$Action,
+param([Parameter(Mandatory=$true)][ValidateSet('Prepare','Bind','Restore','Remove','Upgrade','Start','Stop','Discover','AutomaticEnable','AutomaticDisable','UseCpp','UsePython')][string]$Action,
       [string]$InstanceId='',[string]$ResultPath='',[string]$DiscoveryPath='')
 $ErrorActionPreference='Stop'
 $taskRoot=Split-Path -Parent $PSScriptRoot
@@ -34,6 +34,14 @@ try{
             if(-not $state -or -not (Test-XoneProcess $state.Radio)){throw 'The bridge did not become ready. Inspect the work logs.'}
         }
         Stop {Stop-XoneManagedBridge $taskRoot}
+        {$_ -in @('UseCpp','UsePython')} {
+            $backend=if($Action -eq 'UseCpp'){'cpp'}else{'python'}
+            if($backend -eq 'cpp' -and -not (Test-Path -LiteralPath (Join-Path $taskRoot 'outputs/xone-probe-cpp.exe'))){throw 'Build or install the C++ bridge first.'}
+            [void](Read-XoneDeviceConfig (Join-Path $taskRoot 'config/devices.local.json'))
+            Stop-XoneManagedBridge $taskRoot
+            Set-XoneBridgeBackend $taskRoot $backend
+            & (Join-Path $PSScriptRoot 'Set-AutomaticBridge.ps1') -Mode Start
+        }
         AutomaticEnable {& (Join-Path $PSScriptRoot 'Set-AutomaticBridge.ps1') -Mode Enable}
         AutomaticDisable {& (Join-Path $PSScriptRoot 'Set-AutomaticBridge.ps1') -Mode Disable}
         Discover {
