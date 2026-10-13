@@ -130,10 +130,16 @@ RadioEvent parse_radio(std::span<const uint8_t> bytes) {
         result.kind=RadioEvent::Kind::lost; result.wcid=body[0]; return result;
     }
     if (port!=0 && !(port==1 && event==12)) return {};
-    if (body.size()<32+24) throw std::runtime_error("Truncated MT76 RXWI / 802.11 frame");
+    if (body.size()<32) throw std::runtime_error("Truncated MT76 RXWI");
     const uint32_t rxinfo=le32(body,0),ctl=le32(body,4);
     result.wcid=static_cast<uint8_t>(ctl&255);
     body=body.subspan(32);
+    const size_t padding=(rxinfo&(1u<<14)) ? 2 : 0;
+    const size_t mpdu=(ctl>>16)&0x3fff;
+    // MT76 can loop its own beacon back with a size larger than the USB payload
+    // (dlundqvist/xone 83bd053). Drop it before reading any WLAN header.
+    if(body.size()<mpdu+padding)return {};
+    if(body.size()<24)throw std::runtime_error("Truncated 802.11 header");
     const uint16_t fc=le16(body,0), type=fc&0x00fc;
     size_t header=24;
     if ((fc&0x000c)==0x0008) {
@@ -141,10 +147,9 @@ RadioEvent parse_radio(std::span<const uint8_t> bytes) {
         if (fc&0x0080) header+=2;
         if ((fc&0x0080) && (fc&0x8000)) header+=4;
     }
-    const size_t padding=(rxinfo&(1u<<14)) ? 2 : 0;
-    const size_t mpdu=(ctl>>16)&0x3fff;
-    if (mpdu<header || body.size()<mpdu+padding) throw std::runtime_error("Invalid MPDU length or padding");
+    if (mpdu<header) throw std::runtime_error("Invalid MPDU length or padding");
     result.address.assign(body.begin()+10,body.begin()+16);
+    if(type==0x0000 && ((result.address[0]&1) || std::all_of(result.address.begin(),result.address.end(),[](uint8_t b){return b==0;})))return {};
     const auto payload=body.subspan(header+padding,mpdu-header);
     result.payload.assign(payload.begin(),payload.end());
     if (type==0x0088) result.kind=RadioEvent::Kind::gip;

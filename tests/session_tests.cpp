@@ -238,7 +238,43 @@ int main() {
             e.kind=RadioEvent::Kind::association;e.address={2,2,3,4,5,6};session.process(e);
             session.tick(start+std::chrono::seconds(5));check(mt.channel->index==1,"Channel changed during client handshake");
             e.kind=RadioEvent::Kind::lost;e.wcid=1;session.process(e);session.tick(start+std::chrono::seconds(7));check(mt.channel->index==6,"Empty channel scan did not resume");
-            session.tick(start+std::chrono::seconds(40));check(!session.pairing_active() && mt.channel->index==6,"Pairing timeout scanned another channel");session.close();
+            session.tick(start+std::chrono::seconds(70));check(!session.pairing_active() && mt.channel->index==6,"Pairing timeout scanned another channel");session.close();
+        });
+        test("Startup reconnect window expires and repeated button pauses scanning",[]{
+            usb_device usb{};device dev{};xone_mt76 mt{};mt.dev=&dev;mt.udev=&usb;
+            usb.control=[](void *,u8,u8 type,u16,u16,void *data,u16 n,unsigned)->int{if(type&128)std::memset(data,0,n);return n;};
+            usb.bulk=[](void *,u8,void *,int n,int *actual,unsigned)->int{if(actual)*actual=n;return 0;};
+            for(size_t n=0;n<XONE_MT_NUM_CHANNELS;++n)mt.channels[n].index=static_cast<u8>(n+1);mt.channel=&mt.channels[0];
+            Session session(mt);session.start_reconnect_window();const auto start=std::chrono::steady_clock::now();
+            check(session.pairing_active(),"Startup did not open the association filter");
+            session.tick(start+std::chrono::seconds(59));check(session.pairing_active(),"Startup window ended before 60 seconds");
+            session.tick(start+std::chrono::seconds(61));check(!session.pairing_active(),"Startup window did not expire");
+            RadioEvent button;button.kind=RadioEvent::Kind::button;session.process(button);
+            session.tick(std::chrono::steady_clock::now()+std::chrono::milliseconds(2100));const auto channel=mt.channel;
+            session.process(button);session.tick(std::chrono::steady_clock::now()+std::chrono::milliseconds(1900));
+            check(mt.channel==channel,"Repeated button rotated away from a newly pairing peer");session.close();
+        });
+        test("Configured USB peers reconnect without button; unknown peers still require it",[]{
+            struct Raw final:RawGipOutput{
+                std::vector<std::pair<uint8_t,uint8_t>> events;
+                bool target(std::span<const uint8_t> mac)const override{return mac.size()==6 && mac[0]==2;}
+                void event(uint8_t kind,uint8_t wcid,std::span<const uint8_t>)override{events.emplace_back(kind,wcid);}
+                std::vector<RawGipTransmit> poll()override{return {};}
+                void complete(uint8_t,uint32_t,int)override{}
+            }raw;
+            usb_device usb{};device dev{};xone_mt76 mt{};mt.dev=&dev;mt.udev=&usb;mt.channel=&mt.channels[0];mt.channel->index=165;
+            unsigned writes=0;usb.context=&writes;
+            usb.control=[](void *,u8,u8 type,u16,u16,void *data,u16 n,unsigned)->int{if(type&128)std::memset(data,0,n);return n;};
+            usb.bulk=[](void *p,u8,void *,int n,int *actual,unsigned)->int{++*static_cast<unsigned *>(p);if(actual)*actual=n;return 0;};
+            Session session(mt,nullptr,false,nullptr,&raw);RadioEvent e;e.kind=RadioEvent::Kind::association;e.address={2,0,0,0,0,1};session.process(e);
+            const auto target=e.address;e.address={4,0,0,0,0,2};session.process(e);const auto before=writes;
+            e.kind=RadioEvent::Kind::client_command;e.command=1;session.process(e);
+            check(writes==before && session.status().size()==2,"Unknown peer paired without the adapter button");
+            e.address=target;session.process(e);
+            check(writes>before && session.status().size()==1 && session.status()[0].wcid==2 && !session.pairing_active(),"Known peer recovery removed a sibling or reopened general pairing");
+            check(raw.events.back()==std::pair<uint8_t,uint8_t>{uint8_t(3),uint8_t(1)},"Old USB generation not invalidated");
+            e.kind=RadioEvent::Kind::association;session.process(e);
+            check(session.status().size()==2 && raw.events.back()==std::pair<uint8_t,uint8_t>{uint8_t(1),uint8_t(1)},"Known peer could not establish a fresh generation");session.close();
         });
         test("Headset PC opt-out requires exact model and GUID, never installs encryption",[]{
             for(unsigned scenario=0;scenario<3;++scenario){

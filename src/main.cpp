@@ -362,6 +362,7 @@ int radio_test(const Options &opt,bool controller=false,bool run=false) {
         std::unique_ptr<xone::AudioOutput> audio_output;
         if(run && native_output)audio_output=std::make_unique<xone::NativeAudioOutput>();
         xone::Session session(mt,output.get(),!run || opt.verbose,audio_output.get(),raw_output.get());
+        session.start_reconnect_window();
         std::string previous_status;
         auto status_last=std::chrono::steady_clock::time_point{};
         auto save_status=[&](bool running){

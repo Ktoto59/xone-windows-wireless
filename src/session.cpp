@@ -231,11 +231,23 @@ void Session::pairing(bool enabled) {
     }
 }
 void Session::remove(uint8_t wcid) { if(wcid && wcid<=16 && clients_[wcid-1]) { if(raw_output_ && raw_output_->target(clients_[wcid-1]->address))raw_output_->event(3,wcid);if(audio_output_)audio_output_->disconnect(wcid);if(output_)output_->disconnect(wcid);clients_[wcid-1].reset(); check(xone_mt76_remove_client(&mt_,wcid),"Remove client"); std::cout<<"DISCONNECTED WCID="<<unsigned(wcid)<<"\n"; } }
+void Session::start_reconnect_window() {
+    // dlundqvist/xone 3f07071: the closed RX filter blocks initial association.
+    // Two complete 12-channel scans fit into this startup window.
+    pairing(true);
+    pair_deadline_=std::chrono::steady_clock::now()+std::chrono::seconds(60);
+    std::cout<<"STARTUP RECONNECT WINDOW seconds=60\n";
+}
 void Session::process(const RadioEvent &e) {
     if(e.kind==RadioEvent::Kind::association || e.kind==RadioEvent::Kind::gip || e.kind==RadioEvent::Kind::client_command)
         pair_scan_last_=std::chrono::steady_clock::now();
     switch(e.kind) {
-    case RadioEvent::Kind::button: std::cout<<"ADAPTER BUTTON\n";pairing(true); pair_deadline_=std::chrono::steady_clock::now()+std::chrono::seconds(30); break;
+    case RadioEvent::Kind::button:
+        std::cout<<"ADAPTER BUTTON\n";pairing(true);
+        // A repeated button event must not let the next tick rotate the channel
+        // while the user is starting a peer handshake (upstream 940cf37).
+        pair_scan_last_=std::chrono::steady_clock::now();
+        pair_deadline_=pair_scan_last_+std::chrono::seconds(60);break;
     case RadioEvent::Kind::association: {
         for(const auto &c:clients_) if(c && c->address==e.address) return;
         const auto at=std::find_if(clients_.begin(),clients_.end(),[](const auto &c){return !c;});
@@ -249,7 +261,11 @@ void Session::process(const RadioEvent &e) {
     case RadioEvent::Kind::lost: case RadioEvent::Kind::disassociation: remove(e.wcid); break;
     case RadioEvent::Kind::client_command:
         if(e.command==1)std::cout<<"PAIR REQUEST MAC="<<hex(e.address)<<" enabled="<<pairing_<<"\n";
-        if(e.command==1 && pairing_) {
+        if(e.command==1 && (pairing_ || (raw_output_ && raw_output_->target(e.address)))) {
+            // Upstream answers PAIR_REQ outside the button window as well.
+            // Limit automatic re-enrollment here to explicitly configured peers;
+            // unknown devices still require the adapter pairing button.
+            if(!pairing_)std::cout<<"KNOWN PEER RECONNECT MAC="<<hex(e.address)<<'\n';
             // Explicit re-enrollment starts a new radio/authentication session.
             // Otherwise the duplicate-association guard retains the old WCID/key
             // and an exhausted identification exchange indefinitely.

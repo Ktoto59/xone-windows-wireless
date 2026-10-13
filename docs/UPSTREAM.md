@@ -15,6 +15,17 @@ not bundled in the project release. All project GPL source is included in Setup.
   adjustments using a local upstream checkout at the expected revision.
 - Pairing beacon/channel changes are based on [dlundqvist/xone](https://github.com/dlundqvist/xone/tree/f2aa9fe01103d7600553b505b298ff0bd47ff280),
   commit `f2aa9fe01103d7600553b505b298ff0bd47ff280`.
+  The development reconnect work also carries its cold RF startup patch
+  (`e0ab753`), warm/cold MCU startup delays (`53894a4`, `525a27e`), normal traffic
+  routing after warm reset (`98fcd81`), a 60-second startup pairing window
+  (`3f07071`), button scan-timestamp refresh (`940cf37`), and invalid association /
+  truncated loopback filtering (`ff37408`, `83bd053`).
+  MT76 changes remain reproducible through `scripts/import-upstream.py` against
+  the pinned medusalix base. Linux suspend/URB/workqueue infrastructure is not copied.
+  The fork answers wireless `PAIR_REQ` without requiring an active pairing window.
+  This port limits that automatic behavior to radio MACs explicitly configured for
+  USB/GIP; unknown peers retain the manual pairing-button requirement. Re-enrollment
+  removes only the matching peer's old WCID and virtual USB generation.
 - Protocol, fragmentation, client/session handling and authentication derive from
   xone's bus/driver/auth modules, retaining attribution. Windows CNG implements
   RSA and ECDH; the ECDH secret byte-order conversion has a reference vector.

@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased — radio reconnection
+
+- Respond to configured USB/GIP peers' radio re-enrollment requests outside the
+  manual pairing window. Unknown peers still need manual pairing; matching stale
+  peer/USB generations are removed without disturbing siblings.
+- Open a 60-second association/pairing window at radio startup, with channel scans
+  paused while clients are present. Repeated button events refresh scan timing.
+- Port cold-start RF patch, MCU startup delays and wake-on-wireless routing reset
+  from dlundqvist/xone v0.5.8. No adapter firmware image or driver binding changes.
+- Filter invalid association MACs and incomplete beacon-loopback MPDUs before
+  client allocation/header parsing. Add software regression checks for these paths.
+
+Hardware reconnection and audio validation for this development change is pending.
+The published alpha.2 assets remain the frozen installer version.
+
 ## 0.1.0-alpha.2 — 2026-10-13
 
 - Windows x64 Setup EXE with per-user installation, Start menu/desktop shortcuts

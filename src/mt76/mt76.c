@@ -506,11 +506,17 @@ static int xone_mt76_reset_firmware(struct xone_mt76 *mt)
 int xone_mt76_load_firmware(struct xone_mt76 *mt, const char *name)
 {
 	const struct firmware *fw;
+	u32 val;
 	int err;
 
 	if (xone_mt76_read_register(mt, MT_FCE_DMA_ADDR | MT_VEND_TYPE_CFG)) {
 		dev_dbg(mt->dev, "%s: resetting firmware...\n", __func__);
-		return xone_mt76_reset_firmware(mt);
+		err = xone_mt76_reset_firmware(mt);
+		if (err)
+			return err;
+		/* dlundqvist/xone 53894a4: wait for MCU startup after a warm reset. */
+		msleep(500);
+		return 0;
 	}
 
 	err = request_firmware(&fw, name, mt->dev);
@@ -527,10 +533,17 @@ int xone_mt76_load_firmware(struct xone_mt76 *mt, const char *name)
 
 	xone_mt76_write_register(mt, MT_FCE_DMA_ADDR | MT_VEND_TYPE_CFG, 0);
 
+	/* dlundqvist/xone e0ab753: cold startup needs the same RF patch as reset. */
+	val = xone_mt76_read_register(mt, XONE_MT_RF_PATCH | MT_VEND_TYPE_CFG);
+	xone_mt76_write_register(mt, XONE_MT_RF_PATCH | MT_VEND_TYPE_CFG,
+				 val & ~BIT(19));
+
 	err = xone_mt76_load_ivb(mt);
 	if (err)
 		goto err_free_firmware;
 
+	/* dlundqvist/xone 525a27e: do not poll during the USB startup transition. */
+	msleep(500);
 	if (!xone_mt76_poll(mt, MT_FCE_DMA_ADDR | MT_VEND_TYPE_CFG, 0x01, 0x01))
 		err = -ETIMEDOUT;
 
@@ -938,6 +951,14 @@ int xone_mt76_init_radio(struct xone_mt76 *mt)
 
 	/* mandatory delay after channel change */
 	msleep(1000);
+
+	/* dlundqvist/xone 98fcd81: warm reset may retain wake-on-wireless routing. */
+	err = xone_mt76_set_wow_traffic(mt, XONE_MT_WOW_TO_FIRMWARE);
+	if (err)
+		return err;
+	err = xone_mt76_set_wow_enable(mt, false);
+	if (err)
+		return err;
 
 	return xone_mt76_set_pairing(mt, false);
 }

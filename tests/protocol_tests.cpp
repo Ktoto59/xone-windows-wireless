@@ -44,6 +44,7 @@ struct Mock {
     std::map<uint32_t,uint32_t> registers;
     std::vector<std::vector<uint8_t>> messages;
     std::vector<uint32_t> dma_offsets;
+    std::vector<uint32_t> rf_on_start;
     unsigned controls=0;
     bool fail_read=false,short_read=false,short_bulk=false;
     usb_device usb{};
@@ -63,6 +64,7 @@ struct Mock {
             if (reg==MT_EFUSE_CTRL) result &= ~MT_EFUSE_CTRL_KICK;
             if (length==4) std::memcpy(data,&result,4);
         } else if (req==MT_VEND_DEV_MODE) {
+            m.rf_on_start.push_back(m.registers[0x0130]);
             // Fresh upload writes zero at DMA_ADDR, reset starts with nonzero.
             m.registers[MT_FCE_DMA_ADDR]=m.registers[MT_FCE_DMA_ADDR] ? 0x80000000 : 1;
         } else if (length==4) {
@@ -123,9 +125,20 @@ int main() {
             }
         });
         test("MT76 rejects malformed MPDU",[] {
-            auto raw=radio_gip(); put32(raw,8,(uint32_t(1000)<<16)|2); rejects([&] { xone::parse_radio(raw); });
+            auto raw=radio_gip(); put32(raw,8,(uint32_t(1000)<<16)|2);
+            check(xone::parse_radio(raw).kind==xone::RadioEvent::Kind::ignored,"Truncated loopback reached frame dispatch");
             raw=radio_gip(); put32(raw,8,(uint32_t(10)<<16)|2); rejects([&] { xone::parse_radio(raw); });
             raw.resize(7); rejects([&] { xone::parse_radio(raw); });
+        });
+        test("MT76 rejects invalid association addresses and drops short loopback",[] {
+            auto raw=radio_gip();raw[36]=0;raw[37]=0;put32(raw,8,24u<<16);
+            for(const std::array<uint8_t,6> mac : {std::array<uint8_t,6>{},std::array<uint8_t,6>{255,255,255,255,255,255},std::array<uint8_t,6>{1,2,3,4,5,6}}){
+                std::copy(mac.begin(),mac.end(),raw.begin()+46);
+                check(xone::parse_radio(raw).kind==xone::RadioEvent::Kind::ignored,"Invalid MAC allocated a client");
+            }
+            raw[46]=2;check(xone::parse_radio(raw).kind==xone::RadioEvent::Kind::association,"Valid unicast association rejected");
+            raw=radio_gip();raw.resize(4+32+12+4);
+            check(xone::parse_radio(raw).kind==xone::RadioEvent::Kind::ignored,"Short loopback parsed an absent WLAN header");
         });
         test("MT76 button and client loss events",[] {
             std::vector<uint8_t> raw(8); put32(raw,0,(1u<<27)|(4u<<20));
@@ -146,6 +159,16 @@ int main() {
             check(mock.dma_offsets==expected,"Wrong firmware DMA offsets");
             check(mock.messages.size()==3 && mock.messages[0].size()==0x3808 && mock.messages[1].size()==12,"Wrong firmware chunks");
         });
+        test("cold and warm firmware startup clear RF patch before MCU execution",[] {
+            constexpr uint32_t patch=0x0130;const auto fw=firmware_fixture();
+            for(bool warm : {false,true}){
+                Mock mock(fw);mock.registers[patch]=BIT(19)|0x123;
+                if(warm)mock.registers[MT_FCE_DMA_ADDR]=1;
+                check(xone_mt76_load_firmware(&mock.mt,"mock")==0 && !mock.usb.sticky_error,"Firmware startup failed");
+                check(!mock.rf_on_start.empty() && mock.rf_on_start.back()==0x123,"MCU ran before the RF patch or unrelated bits changed");
+                if(warm)check(mock.messages.empty(),"Warm reset uploaded firmware again");
+            }
+        });
         test("upstream full radio init and beacon framing",[] {
             const auto fw=firmware_fixture(); Mock mock(fw);
             check(xone_mt76_init_radio(&mock.mt)==0 && !mock.usb.sticky_error,"Radio init failed");
@@ -156,6 +179,12 @@ int main() {
             check(beacon.size()==88 && beacon[74]==1 && beacon[78]==165,"Wrong pair beacon wire layout/channel");
             check(mock.registers[MT_RX_FILTR_CFG]==0x014f13,"Pairing RX filter blocks discovery");
             check(xone_mt76_set_pairing(&mock.mt,false)==0 && mock.registers[MT_RX_FILTR_CFG]==0x017f17,"Pairing RX filter not restored");
+            bool normal_routing=false,wow_disabled=false;
+            for(const auto &message:mock.messages)if(message.size()>=9 && message[2]==0x80 && message[3]==0x51){
+                if(message[4]==3 && message[5]==0 && message[6]==0 && message[7]==0 && message[8]==0)normal_routing=true;
+                if(message.size()>=10 && message[4]==1 && message[5]==0 && message[6]==0 && message[7]==0 && message[8]==0 && message[9]==165)wow_disabled=true;
+            }
+            check(normal_routing && wow_disabled,"Radio init retained wake-on-wireless traffic routing");
         });
         test("I/O failure is latched and prevents subsequent transfers",[] {
             const auto fw=firmware_fixture(); Mock mock(fw); mock.short_read=true;

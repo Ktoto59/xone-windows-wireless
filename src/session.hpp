@@ -46,6 +46,7 @@ public:
     explicit Session(xone_mt76 &mt,InputOutput *output=nullptr,bool trace=true,AudioOutput *audio_output=nullptr,RawGipOutput *raw_output=nullptr);
     ~Session();
     void process(const RadioEvent &event);
+    void start_reconnect_window();
     void tick(std::chrono::steady_clock::time_point now=std::chrono::steady_clock::now());
     void close();
     uint64_t inputs() const { return inputs_; }
