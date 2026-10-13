@@ -1,9 +1,26 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #pragma once
+#ifdef XONE_KERNEL
+#include <ntddk.h>
+/* The WDK kernel CRT has no stdint/stdbool headers. Avoid pulling the
+   incompatible user-mode Visual C runtime into the shared radio source. */
+typedef UCHAR uint8_t;
+typedef CHAR int8_t;
+typedef USHORT uint16_t;
+typedef SHORT int16_t;
+typedef ULONG uint32_t;
+typedef ULONGLONG uint64_t;
+typedef _Bool bool;
+#define true 1
+#define false 0
+#define UINT32_C(n) n##U
+#define UINT32_MAX MAXULONG
+#else
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#endif
 #include <string.h>
 #include <errno.h>
 

@@ -73,3 +73,7 @@ Local analysis found an NDIS wireless binding and Xbox-specific OIDs in the Wind
 GIP driver. A compatible transport might remove virtual USB presentation, but that
 contract and the newer headset's authentication require further work. Moving this
 code into a `.sys` file alone does not establish native Accessories compatibility.
+
+The separate [native bootstrap](../driver/native/README.md) builds an x64 NDIS/WDM
+`.sys` with direct USB transfers and the MT76 radio initialization code. Its GIP
+data path is incomplete; it has not been loaded and is excluded from the installer.
