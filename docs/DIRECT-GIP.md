@@ -41,6 +41,11 @@ It never removes the shared USBip installation.
 - Start and dispose audio hosts away from the radio thread; bound both PCM queues.
 - Use MMCSS and high-resolution waits for native audio pipe workers; keep PCM
   analysis and periodic packet logging out of normal playback.
+- Initialize the Windows Runtime before calling the synthetic API; retain its
+  callback storage until process exit and reject unexpected callback contexts.
+- Isolate an audio-host failure to that headset, with `native-output-failed` and
+  its reason in the status snapshot. The radio and other peers remain available;
+  an audio-host crash does not silently activate the USB fallback.
 - Allow the exact observed 2024 headset PC opt-out interface after identification,
   including when an earlier authentication message failed. This carries plaintext
   audio and does not establish wireless authentication v3 or a CCMP key.
@@ -51,6 +56,10 @@ Two-headset endpoint attribution and simultaneous-device operation still need
 hardware validation on this route. The previous clean USB audio results do not
 validate direct GIP audio. The updated C++ session checks use simulated transport;
 they do not exercise the undocumented Windows API or prove sound quality.
+One silent system-API create/connect/remove check passed on the development PC.
+The first streaming candidate crashed and the supervisor restored the USB route;
+a later report of excellent sound therefore does not confirm direct GIP quality.
+Updated streaming and teardown behavior still need hardware validation.
 
 ## Application deployment
 

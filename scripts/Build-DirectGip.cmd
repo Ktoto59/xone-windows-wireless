@@ -17,7 +17,7 @@ link /nologo build\direct-gip\main.obj build\direct-gip\winusb_transport.obj bui
 if errorlevel 1 exit /b 1
 cl /nologo /std:c++20 /EHsc /O2 /W4 /WX /utf-8 src\native_gip_probe.cpp build\direct-gip\native_gip_output.obj build\direct-gip\input_mapping.obj /Fobuild\direct-gip\native_gip_probe.obj /Feoutputs\direct-gip\native-gip-probe.exe /link xinput.lib runtimeobject.lib user32.lib
 if errorlevel 1 exit /b 1
-cl /nologo /std:c++20 /EHsc /O2 /W4 /WX /utf-8 src\native_audio_probe.cpp /Fobuild\direct-gip\native_audio_probe.obj /Feoutputs\direct-gip\native-audio-probe.exe /link ole32.lib uuid.lib propsys.lib avrt.lib
+cl /nologo /std:c++20 /EHsc /O2 /W4 /WX /utf-8 src\native_audio_probe.cpp /Fobuild\direct-gip\native_audio_probe.obj /Feoutputs\direct-gip\native-audio-probe.exe /link ole32.lib uuid.lib propsys.lib avrt.lib runtimeobject.lib
 if errorlevel 1 exit /b 1
 cl /nologo /std:c++20 /EHsc /O2 /W4 /WX /utf-8 /I src /c tests\session_tests.cpp /Fobuild\direct-gip\session_tests.obj
 if errorlevel 1 exit /b 1

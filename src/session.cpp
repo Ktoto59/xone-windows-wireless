@@ -75,6 +75,7 @@ struct Session::Client {
         uint64_t audio_received=0,audio_silence=0;
         uint64_t audio_playback=0,audio_capture=0;
         bool audio_connected=false;
+        std::string audio_error;
         RadioAudioClock audio_clock;
         bool audio_allowed() const{return radio.encrypted || pc_auth_opt_out;}
         Logical(Client &c,uint8_t client_id):radio(c),id(client_id),link(id,[this](const GipPacket &p){radio.transmit(p);},[this](const GipPacket &p){dispatch(p);}),
@@ -90,6 +91,11 @@ struct Session::Client {
             auth_failed=true;auth_stage=stage;
             if(audio_connected){radio.owner.audio_output_->disconnect(radio.wcid);audio_connected=false;}
             std::cout<<"AUTH FAILED WCID="<<unsigned(radio.wcid)<<" client="<<unsigned(id)<<" stage="<<auth_stage<<" peer_version="<<unsigned(auth.peer_version())<<" reason="<<reason<<'\n';
+        }
+        void fail_audio(const char *reason){
+            audio_error=reason;
+            if(audio_connected){radio.owner.audio_output_->disconnect(radio.wcid);audio_connected=false;}
+            std::cout<<"NATIVE AUDIO FAILED WCID="<<unsigned(radio.wcid)<<" client="<<unsigned(id)<<" reason="<<audio_error<<'\n';
         }
         void dispatch(const GipPacket &p) {
             if(radio.owner.trace_)std::cout<<"GIP WCID="<<unsigned(radio.wcid)<<" client="<<unsigned(id)<<" cmd="<<unsigned(p.command)<<" bytes="<<p.payload.size()<<"\n";
@@ -171,7 +177,7 @@ struct Session::Client {
                     if(audio && audio_clock.receive(p.payload)){
                         ++audio_received;
                         if(radio.owner.trace_ && (audio_received==1 || audio_received%125==0))std::cout<<"AUDIO RX WCID="<<unsigned(radio.wcid)<<" client="<<unsigned(id)<<" packets="<<audio_received<<" bytes="<<p.payload.size()-2<<"\n";
-                        if(audio_connected && audio_allowed()){radio.owner.audio_output_->capture(radio.wcid,id,std::span(p.payload).subspan(2));++audio_capture;}
+                        if(audio_connected && audio_allowed())try{radio.owner.audio_output_->capture(radio.wcid,id,std::span(p.payload).subspan(2));++audio_capture;}catch(const std::exception &e){fail_audio(e.what());}
                     }break;
                 default: break;
                 }
@@ -187,14 +193,14 @@ struct Session::Client {
             if(!audio)return;
             const auto before=audio->stage();audio->tick(now);
             if(before!=audio->stage())std::cout<<"AUDIO STAGE WCID="<<unsigned(radio.wcid)<<" client="<<unsigned(id)<<" stage="<<audio->stage_name()<<"\n";
-            if(auth_failed || audio->stage()!=HeadsetAudio::Stage::streaming || !audio_allowed())return;
+            if(auth_failed || !audio_error.empty() || audio->stage()!=HeadsetAudio::Stage::streaming || !audio_allowed())return;
             if(!audio_connected && radio.owner.audio_output_ && audio->input().code==9 && audio->output().code==16){
-                radio.owner.audio_output_->connect(radio.wcid,id);audio_connected=true;
+                try{radio.owner.audio_output_->connect(radio.wcid,id);audio_connected=true;}catch(const std::exception &e){fail_audio(e.what());return;}
             }
             if(!audio_clock.take())return;
             // Send on the physical headset clock, as in the working USB/GIP path.
             // Replace missing playback blocks with silence; microphone data is never saved.
-            Bytes samples;if(audio_connected)samples=radio.owner.audio_output_->playback(radio.wcid,id);
+            Bytes samples;if(audio_connected)try{samples=radio.owner.audio_output_->playback(radio.wcid,id);}catch(const std::exception &e){fail_audio(e.what());return;}
             if(samples.empty()){samples.resize(audio->output().interval_bytes);++audio_silence;}else ++audio_playback;
             GipPacket pcm{0x60,static_cast<uint8_t>(32|id),audio_sequence++,0,std::move(samples)};
             if(!audio_sequence)audio_sequence=1;
@@ -389,13 +395,13 @@ std::vector<ControllerStatus> Session::status() const {
     for(const auto &c:clients_)if(c){
         ControllerStatus s{c->wcid,hex(c->address),c->encrypted,c->input.share,c->capabilities,c->battery,c->kind,{},"not-started",0,0};
         if(c->logical[0]){const auto &l=*c->logical[0];s.authentication=l.auth_stage;s.auth_version=l.auth.version();s.peer_auth_version=l.auth.peer_version();}
-        for(const auto &l:c->logical)if(l && l->audio){s.audio=ControllerStatus::Audio{l->auth_failed?"authentication-failed":l->audio_connected?"streaming-native":l->audio->stage_name(),l->audio->input().rate,l->audio->output().rate,l->audio->input().channels,l->audio->output().channels,l->audio_received,l->audio_silence,l->audio_playback,l->audio_capture,l->audio_connected?audio_output_->endpoints(c->wcid,l->id):AudioEndpoints{},l->audio_connected};break;}
+        for(const auto &l:c->logical)if(l && l->audio){s.audio=ControllerStatus::Audio{!l->audio_error.empty()?"native-output-failed":l->auth_failed?"authentication-failed":l->audio_connected?"streaming-native":l->audio->stage_name(),l->audio->input().rate,l->audio->output().rate,l->audio->input().channels,l->audio->output().channels,l->audio_received,l->audio_silence,l->audio_playback,l->audio_capture,l->audio_connected?audio_output_->endpoints(c->wcid,l->id):AudioEndpoints{},l->audio_connected,l->audio_error};break;}
         out.push_back(std::move(s));
     }
     return out;
 }
 bool Session::audio_active() const {
-    for(const auto &c:clients_)if(c)for(const auto &l:c->logical)if(l && !l->auth_failed && l->audio_allowed() && l->audio && l->audio->stage()==HeadsetAudio::Stage::streaming)return true;
+    for(const auto &c:clients_)if(c)for(const auto &l:c->logical)if(l && !l->auth_failed && l->audio_error.empty() && l->audio_allowed() && l->audio && l->audio->stage()==HeadsetAudio::Stage::streaming)return true;
     return false;
 }
 void Session::close() {

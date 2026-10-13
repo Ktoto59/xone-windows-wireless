@@ -21,7 +21,7 @@ struct ControllerStatus {
     GamepadCapabilities capabilities;
     std::optional<BatteryStatus> battery;
     std::string kind;
-    struct Audio { std::string stage; uint32_t input_rate,output_rate; uint8_t input_channels,output_channels; uint64_t received_packets,silence_packets,playback_packets,capture_packets; AudioEndpoints endpoints; bool synthetic_parent; };
+    struct Audio { std::string stage; uint32_t input_rate,output_rate; uint8_t input_channels,output_channels; uint64_t received_packets,silence_packets,playback_packets,capture_packets; AudioEndpoints endpoints; bool synthetic_parent; std::string error{}; };
     std::optional<Audio> audio;
     std::string authentication;
     uint8_t auth_version,peer_auth_version;

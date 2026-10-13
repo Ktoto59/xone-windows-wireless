@@ -58,20 +58,25 @@ try{
         $arguments='run --output native-gip --instance '+(Quote-XonePath $taskConfig.AdapterInstanceId)+' --firmware '+(Quote-XonePath (Join-Path $taskRoot 'work/firmware/FW_ACC_00U.bin'))+' --stop-file '+(Quote-XonePath $taskStopPath)+' --status-file '+(Quote-XonePath $taskState.StatusFile)
         foreach($peer in $taskConfig.Peers){$arguments+=' --native-peer '+$peer}
         $taskRadio=Start-Process -FilePath (Join-Path $taskRoot 'outputs/direct-gip/xone-native.exe') -ArgumentList $arguments -WorkingDirectory $taskRoot -WindowStyle Hidden -RedirectStandardOutput $taskState.Log -RedirectStandardError $taskState.ErrorLog -PassThru
+        # Retain the process handle before exit so PowerShell 5.1 preserves its exit code.
+        [void]$taskRadio.Handle
         $taskState.Radio=@{Pid=$taskRadio.Id;StartTicks=$taskRadio.StartTime.ToUniversalTime().Ticks};Save-DirectState 'StartingRadio';$started=[datetime]::UtcNow
         while(-not $taskRadio.HasExited){
             $snapshot=Read-XoneJson $taskState.StatusFile;Save-XoneNativePeers $taskRoot $taskConfig $snapshot
-            Save-DirectState $(if($snapshot -and $snapshot.Running){'Running'}else{'StartingRadio'})
+            $audioFailure=@($snapshot.Controllers | Where-Object {$_.Audio.Stage -eq 'native-output-failed'} | Select-Object -First 1)
+            if($audioFailure.Count){Save-DirectState 'AudioFailed' $audioFailure[0].Audio.Error}
+            else{Save-DirectState $(if($snapshot -and $snapshot.Running){'Running'}else{'StartingRadio'})}
             if([IO.File]::Exists($taskStopPath)){
                 if(-not $taskRadio.WaitForExit(15000)){throw 'Native radio did not stop cleanly. Recovery state was kept.'};break
             }
             Start-Sleep -Milliseconds 2000;$taskRadio.Refresh()
         }
         if([IO.File]::Exists($taskStopPath)){break}
+        $taskRadio.WaitForExit();$taskExitCode=$taskRadio.ExitCode
         if(([datetime]::UtcNow-$started).TotalSeconds -ge 60){$taskState.RetryCount=0}
         $taskState.RetryCount++
-        if($taskState.RetryCount -ge 3){throw ('Native GIP exited repeatedly (last code '+$taskRadio.ExitCode+'). Inspect its private error log.')}
-        Save-DirectState 'Retrying' ('Radio exited with code '+$taskRadio.ExitCode)
+        if($taskState.RetryCount -ge 3){throw ('Native GIP exited repeatedly (last code '+$taskExitCode+'). Inspect its private error log.')}
+        Save-DirectState 'Retrying' ('Radio exited with code '+$taskExitCode)
         $retryAt=[datetime]::UtcNow.AddSeconds(2*[math]::Pow(2,$taskState.RetryCount-1))
         while([datetime]::UtcNow -lt $retryAt -and -not [IO.File]::Exists($taskStopPath)){Start-Sleep -Milliseconds 200}
     }

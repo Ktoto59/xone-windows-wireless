@@ -385,12 +385,12 @@ int main() {
             e.kind=RadioEvent::Kind::association;session.process(e,now+std::chrono::seconds(7));check(session.status().size()==2,"Saved direct peer could not reconnect");session.close();
         });
         test("Headset PC opt-out requires exact model and GUID, never installs encryption",[]{
-            for(unsigned scenario=0;scenario<5;++scenario){
+            for(unsigned scenario=0;scenario<6;++scenario){
                 struct Output final:AudioOutput{
-                    unsigned connections=0,captures=0,playbacks=0;
+                    unsigned connections=0,captures=0,playbacks=0,disconnects=0;bool fail_capture=false;
                     void connect(uint8_t,uint8_t)override{++connections;}
-                    void disconnect(uint8_t)override{}
-                    void capture(uint8_t,uint8_t,std::span<const uint8_t> b)override{check(b.size()==384,"Wrong opt-out microphone size");++captures;}
+                    void disconnect(uint8_t)override{++disconnects;}
+                    void capture(uint8_t,uint8_t,std::span<const uint8_t> b)override{check(b.size()==384,"Wrong opt-out microphone size");if(fail_capture)throw std::runtime_error("simulated audio host crash");++captures;}
                     Bytes playback(uint8_t,uint8_t)override{++playbacks;return Bytes(1536);}
                     AudioEndpoints endpoints(uint8_t,uint8_t)override{return {};}
                 } output;
@@ -412,7 +412,13 @@ int main() {
                 const auto status=session.status();check(status.size()==1 && !status[0].encrypted && session.authenticated()==0,"Opt-out fabricated authentication/key");
                 if(!scenario || scenario>=3){
                     check(status[0].authentication=="pc-opt-out" && output.connections==1 && !output.playbacks && session.audio_active(),"Exact model/GUID did not negotiate 24k audio or sent without a radio clock");
-                    Bytes pcm(386);pcm[1]=6;deliver(0x60,pcm);session.tick(now+std::chrono::seconds(3));check(output.captures==1 && output.playbacks==1,"Physical audio credit or microphone not forwarded");
+                    output.fail_capture=scenario==5;
+                    Bytes pcm(386);pcm[1]=6;deliver(0x60,pcm);session.tick(now+std::chrono::seconds(3));
+                    if(scenario==5){
+                        const auto failed=session.status();check(failed.size()==1 && failed[0].audio->stage=="native-output-failed" && failed[0].audio->error=="simulated audio host crash" && output.disconnects==1 && !session.audio_active(),"Audio host failure escaped or was hidden");
+                        e.kind=RadioEvent::Kind::association;e.address={6,5,4,3,2,1};session.process(e);check(session.status().size()==2,"Audio failure stopped another peer from associating");session.close();continue;
+                    }
+                    check(output.captures==1 && output.playbacks==1,"Physical audio credit or microphone not forwarded");
                     session.tick(now+std::chrono::seconds(30));check(output.playbacks==1,"Host timer continued sending without radio credits");
                     e.kind=RadioEvent::Kind::client_command;e.command=16;session.process(e);check(!session.status()[0].encrypted && session.authenticated()==0,"Opt-out accepted CCMP without a key");
                 }else check(status[0].authentication=="negotiating" && !output.connections && !session.audio_active(),"Different model/GUID bypassed authentication");

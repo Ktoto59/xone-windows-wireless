@@ -4,6 +4,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <roapi.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
 #include <functiondiscoverykeys_devpkey.h>
@@ -48,10 +49,16 @@ struct Feedback {
     std::array<uint64_t,8> jump_bins{};
     std::array<int,2> previous{};bool have_previous=false;
     bool detailed=false;
+    std::atomic_uint64_t invalid_context=0;
+    std::atomic_bool closing=false;
 };
+// One host owns one device. Callback storage survives asynchronous teardown.
+Feedback &host_feedback(){static auto *feedback=new Feedback;return *feedback;}
 void CALLBACK callback(void *,ULONG type,const void *buffer,ULONG size,void *context)noexcept{
-    if(!context || !buffer)return;
-    auto &f=*static_cast<Feedback *>(context);++f.count;f.bytes+=size;f.last_type=type;f.last_size=size;
+    auto &f=host_feedback();
+    if(context!=&f){++f.invalid_context;return;}
+    if(!buffer || f.closing)return;
+    ++f.count;f.bytes+=size;f.last_type=type;f.last_size=size;
     if(type==1 && size==1538)try{
         std::lock_guard lock(f.mutex);if(f.playback.size()>=8){f.playback.pop_front();++f.dropped;}
         const auto *b=static_cast<const uint8_t *>(buffer);
@@ -107,11 +114,12 @@ void describe(IMMDeviceEnumerator &enumerator,const std::wstring &id,const Endpo
 }
 int main(int argc,char **argv){
     std::cout.setf(std::ios::unitbuf);SetUnhandledExceptionFilter(xone_crash_trace);
-    if(FAILED(CoInitializeEx(nullptr,COINIT_MULTITHREADED)))return 1;
-    struct Runtime{~Runtime(){CoUninitialize();}} runtime;
+    if(FAILED(RoInitialize(RO_INIT_MULTITHREADED)))return 1;
+    struct Runtime{~Runtime(){RoUninitialize();}} runtime;
     const auto dll=LoadLibraryExW(L"xboxgipsynthetic.dll",nullptr,LOAD_LIBRARY_SEARCH_SYSTEM32);
     if(!dll){std::cerr<<"XboxGipSynthetic unavailable\n";return 1;}
-    struct Library{HMODULE dll;~Library(){FreeLibrary(dll);}} library{dll};
+    // Let process exit unload the system DLL after threads stop. Do not unload
+    // it explicitly while the API can still own asynchronous callbacks.
     try{
         ComPtr<IMMDeviceEnumerator> enumerator;
         checked(CoCreateInstance(__uuidof(MMDeviceEnumerator),nullptr,CLSCTX_ALL,IID_PPV_ARGS(&enumerator)),"MMDeviceEnumerator");
@@ -124,13 +132,21 @@ int main(int argc,char **argv){
         const auto remove_audio=resolve<HRESULT(WINAPI *)(void *)>(dll,"SyntheticController_RemoveAudioHeadset");
         const auto send_audio=resolve<HRESULT(WINAPI *)(void *,const void *,ULONG)>(dll,"SyntheticController_SendAudio");
         const auto device_id=resolve<HRESULT(WINAPI *)(void *,ULONGLONG *)>(dll,"SyntheticController_GetDeviceId");
-        Feedback feedback;void *handle=nullptr;checked(create(0,&handle),"CreateAudioParent");
+        auto &feedback=host_feedback();void *handle=nullptr;checked(create(0,&handle),"CreateAudioParent");
         if(!handle)throw std::runtime_error("Null synthetic controller");
         struct Controller{
             void *handle;decltype(disconnect) disconnect;decltype(remove) remove;decltype(remove_audio) remove_audio;bool audio=false;
-            ~Controller(){if(audio)std::cout<<"RemoveAudio HRESULT=0x"<<std::hex<<static_cast<unsigned>(remove_audio(handle))<<std::dec<<'\n';std::cout<<"Disconnect HRESULT=0x"<<std::hex<<static_cast<unsigned>(disconnect(handle))<<std::dec<<'\n';std::cout<<"RemoveParent HRESULT=0x"<<std::hex<<static_cast<unsigned>(remove(handle))<<std::dec<<'\n';}
+            ~Controller(){host_feedback().closing=true;if(audio)std::cout<<"RemoveAudio HRESULT=0x"<<std::hex<<static_cast<unsigned>(remove_audio(handle))<<std::dec<<'\n';std::cout<<"Disconnect HRESULT=0x"<<std::hex<<static_cast<unsigned>(disconnect(handle))<<std::dec<<'\n';std::cout<<"RemoveParent HRESULT=0x"<<std::hex<<static_cast<unsigned>(remove(handle))<<std::dec<<'\n';}
         } controller{handle,disconnect,remove,remove_audio};
         checked(add_audio(handle,callback,&feedback),"AddAudioHeadset");controller.audio=true;
+        if(argc==2 && std::string_view(argv[1])=="--lifecycle-check"){
+            checked(connect(handle),"DiagnosticConnect");
+            // Silent virtual device only: no adapter access or microphone.
+            std::this_thread::sleep_for(std::chrono::seconds(3));
+            feedback.closing=true;
+            checked(remove_audio(handle),"DiagnosticRemoveAudio");controller.audio=false;
+            std::cout<<"PASS audio API lifecycle callbacks="<<feedback.count<<" invalid_context="<<feedback.invalid_context<<'\n';return 0;
+        }
         checked(connect(handle),"ConnectAudioParent");
         ULONGLONG id=0;checked(device_id(handle,&id),"SyntheticDeviceId");std::cout<<"DEVICE ID="<<id<<'\n';
         if(argc==3 && std::string_view(argv[1])=="--host"){

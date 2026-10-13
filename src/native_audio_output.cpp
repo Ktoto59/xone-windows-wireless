@@ -47,7 +47,7 @@ struct NativeAudioOutput::Impl {
             if(pipe!=INVALID_HANDLE_VALUE){if(attached)write(pipe,audio_message(4));CloseHandle(pipe);}
             if(process){if(WaitForSingleObject(process,3000)==WAIT_TIMEOUT){TerminateProcess(process,1);WaitForSingleObject(process,1000);}CloseHandle(process);}
         }
-        void check(){if(process && WaitForSingleObject(process,0)==WAIT_OBJECT_0)throw std::runtime_error("Native audio host exited; inspect bridge log");}
+        void check(){if(process && WaitForSingleObject(process,0)==WAIT_OBJECT_0){DWORD code=0;GetExitCodeProcess(process,&code);throw std::runtime_error("Native audio host exited (code "+std::to_string(code)+"); inspect its private crash trace");}}
         void receive(){
             check();for(unsigned n=0;n<32;++n){AudioMessage m{};if(!read(pipe,m))break;const auto p=audio_payload(m);
                 if(m[0]==2){

@@ -65,6 +65,14 @@ void help() {
         "Raw USB commands need WinUSB binding. list/xinput/firmware-info/decode do not.\n"
         "radio-test does not authenticate controllers or publish input/audio devices.\n";
 }
+std::string json_string(std::string_view value){
+    constexpr char digits[]="0123456789abcdef";std::string out="\"";
+    for(const unsigned char c:value){
+        if(c=='"' || c=='\\'){out+='\\';out+=static_cast<char>(c);}
+        else if(c<32){out+="\\u00";out+=digits[c>>4];out+=digits[c&15];}
+        else out+=static_cast<char>(c);
+    }return out+'"';
+}
 struct Options {
     struct NativeRoute {std::wstring mac,name;uint16_t port,pid;};
     std::wstring firmware, instance, capture, stop_file,status_file,output=L"vigem";
@@ -428,7 +436,7 @@ int radio_test(const Options &opt,bool controller=false,bool run=false) {
                     json<<"{\"Type\":\""<<types[c.battery->type]<<"\",\"Level\":\""<<(c.battery->type?levels[c.battery->level]:"unknown")<<"\",\"RawType\":"<<unsigned(c.battery->type)<<",\"RawLevel\":"<<unsigned(c.battery->level)<<'}';
                 }else json<<"null";
                 json<<",\"Audio\":";
-                if(c.audio){json<<"{\"Stage\":\""<<c.audio->stage<<"\",\"InputRate\":"<<c.audio->input_rate<<",\"OutputRate\":"<<c.audio->output_rate<<",\"InputChannels\":"<<unsigned(c.audio->input_channels)<<",\"OutputChannels\":"<<unsigned(c.audio->output_channels)<<",\"ReceivedPackets\":"<<c.audio->received_packets<<",\"SilencePackets\":"<<c.audio->silence_packets<<",\"PlaybackPackets\":"<<c.audio->playback_packets<<",\"CapturePackets\":"<<c.audio->capture_packets<<",\"WindowsEndpoint\":"<<(!c.audio->endpoints.render.empty() && !c.audio->endpoints.capture.empty())<<",\"SyntheticGamepadParent\":"<<c.audio->synthetic_parent<<",\"RenderId\":\""<<c.audio->endpoints.render<<"\",\"CaptureId\":\""<<c.audio->endpoints.capture<<"\"}";}
+                if(c.audio){json<<"{\"Stage\":\""<<c.audio->stage<<"\",\"InputRate\":"<<c.audio->input_rate<<",\"OutputRate\":"<<c.audio->output_rate<<",\"InputChannels\":"<<unsigned(c.audio->input_channels)<<",\"OutputChannels\":"<<unsigned(c.audio->output_channels)<<",\"ReceivedPackets\":"<<c.audio->received_packets<<",\"SilencePackets\":"<<c.audio->silence_packets<<",\"PlaybackPackets\":"<<c.audio->playback_packets<<",\"CapturePackets\":"<<c.audio->capture_packets<<",\"WindowsEndpoint\":"<<(!c.audio->endpoints.render.empty() && !c.audio->endpoints.capture.empty())<<",\"SyntheticGamepadParent\":"<<c.audio->synthetic_parent<<",\"RenderId\":\""<<c.audio->endpoints.render<<"\",\"CaptureId\":\""<<c.audio->endpoints.capture<<"\",\"Error\":"<<json_string(c.audio->error)<<"}";}
                 else json<<"null";
                 json<<'}';
             }
