@@ -38,6 +38,7 @@ SetupLogging=yes
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"
+Name: "automatic"; Description: "Start the background bridge automatically at sign-in"; GroupDescription: "Background operation:"
 
 [Files]
 Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -49,6 +50,7 @@ Name: "{group}\Uninstall xone-windows-wireless"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\xone-windows-wireless"; Filename: "{app}\outputs\xone-control.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\Set-AutomaticBridge.ps1"" -Mode Enable"; WorkingDir: "{app}"; Tasks: automatic; Flags: runhidden
 Filename: "{app}\outputs\xone-control.exe"; Description: "Open the first-run setup and control panel"; Flags: nowait postinstall skipifsilent
 
 [Code]

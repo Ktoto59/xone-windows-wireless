@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Native USB GIP and optional observed PCM layout over local xone radio IPC."""
 import asyncio
+from array import array
 from collections import deque
 import struct
 import time
@@ -157,6 +158,10 @@ class RadioBackend:
         self.render_credits = 0
         self.capture_deadline = 0
         self.usb_audio_in = 0
+        self.capture_dropped = 0
+        self.capture_high_water = 0
+        self.render_nonzero = 0
+        self.render_peak = 0
         self.pending = {}
         self.token = 0
         self.rx_packets = self.tx_packets = 0
@@ -270,9 +275,21 @@ class RadioBackend:
                                             p[gip_header_size(p):gip_header_size(p)+2] == b'\0\x06' for p in packets)
                     if self.audio_probe:
                         # Bounded volatile queue, no PCM is written to journals.
+                        if self.audio_bridge and len(packets) > 8:
+                            self.capture_dropped += (len(packets)-8)*8
+                            packets = packets[-8:]
                         queued_frames = len(packets)*(8 if self.audio_bridge else 1)
-                        queue_limit = 2048 if self.audio_bridge else 256
-                        if len(self.audio_queue)+queued_frames > queue_limit:
+                        queue_limit = 64 if self.audio_bridge else 256
+                        if self.audio_bridge and len(self.audio_queue)+queued_frames > queue_limit:
+                            # PCM is a real-time stream, not a reliable command
+                            # queue. Keep recent audio after a consumer stall;
+                            # overflow must not tear down GIP or other peers.
+                            drop = min(len(self.audio_queue),
+                                       ((len(self.audio_queue)+queued_frames-queue_limit+7)//8)*8)
+                            for _ in range(drop):
+                                self.audio_queue.popleft()
+                            self.capture_dropped += drop
+                        elif len(self.audio_queue)+queued_frames > queue_limit:
                             raise ValueError('Radio audio queue limit')
                         if self.audio_bridge:
                             if not self.audio_layout:
@@ -282,6 +299,7 @@ class RadioBackend:
                             # when multiple GIP packets share one ISO slot.
                             for p in packets:
                                 self.audio_queue.extend(self.usb_capture_block(p))
+                            self.capture_high_water = max(self.capture_high_water,len(self.audio_queue))
                             # length_out is the device's request for its next
                             # 8-ms render block. Never run ahead of its clock;
                             # retain at most two requests to bound burst latency.
@@ -387,13 +405,15 @@ class RadioBackend:
             return failed_completion(request, -95)
         async with self.capture_delivery:
             count = len(request.iso) if self.audio_bridge else 1
+            if self.audio_bridge and count > 64:
+                return failed_completion(request,-95)
             async with self.changed:
                 await self.changed.wait_for(lambda: len(self.audio_queue) >= count or not self.ready or self.generation != generation)
                 if not self.ready or self.generation != generation:
                     return failed_completion(request, -19)
                 if any(len(self.audio_queue[i]) > request.iso[i].length for i in range(count)):
                     return failed_completion(request, -90)
-            if self.audio_bridge:
+            if self.audio_bridge and count < 8:
                 delay = self.capture_deadline-time.perf_counter()
                 if delay > 0:
                     # Python's Windows sleep uses a high-resolution waitable
@@ -403,6 +423,11 @@ class RadioBackend:
                     return failed_completion(request, -19)
                 duration = .001*count
                 self.capture_deadline = max(self.capture_deadline+duration,time.perf_counter()-duration)
+            elif self.audio_bridge:
+                # Eight USB slots are exactly one radio block. The condition
+                # above already waits for the physical 8-ms device clock.
+                # A second host timer introduces drift and delays output requests.
+                self.capture_deadline = 0
             packets = [self.audio_queue.popleft() for _ in range(count)]
             self.usb_audio_in += count
         result = tuple(IsoPacket(p.offset, p.length, actual=len(packets[i]) if i < count else 0) for i, p in enumerate(request.iso))
@@ -467,6 +492,10 @@ class RadioBackend:
                         await self.reset()
                     return failed_completion(request, status)
                 self.audio_tx += 1
+                samples = array('h',pcm)
+                peak = max(abs(min(samples)),abs(max(samples)))
+                self.render_peak = max(self.render_peak,peak)
+                self.render_nonzero += peak != 0
                 if self.audio_tx <= 8 or self.audio_tx % 500 == 0:
                     self.event(operation='radio_audio_out', packets=self.audio_tx, pcm_bytes=1536)
             except (ConnectionError, TimeoutError, AttributeError):
@@ -492,4 +521,6 @@ class RadioBackend:
                 'RenderBufferedBytes': len(self.render_pcm), 'RenderCredits': self.render_credits,
                 'IsoAudioImplemented': self.audio_bridge,
                 'UsbAudioInCompletions': self.usb_audio_in, 'QueuedAudioFrames': len(self.audio_queue),
+                'CaptureDroppedFrames': self.capture_dropped, 'CaptureQueueHighWater': self.capture_high_water,
+                'RenderNonzeroPackets': self.render_nonzero, 'RenderPeak': self.render_peak,
                 'RadioBattery': self.battery}

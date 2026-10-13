@@ -57,10 +57,15 @@ music, speech quality and every simultaneous-use scenario are not certified.
 
 ## Lifecycle and status
 
+The selected development path is the [automatic background bridge](BACKGROUND-MODE.md)
+on existing signed drivers. It adds per-user sign-in startup and bounded recovery;
+the custom kernel experiment is not required or selected for deployment.
+
 The launcher imports a virtual USB device only after its radio peer associates,
 detaches its own port on generation/loss, and cleans up its own processes on stop.
-It does not detach unrelated USB/IP imports. Sessions are time bounded; unplugging
-the physical adapter can require a manual bridge restart.
+It does not detach unrelated USB/IP imports. The frozen alpha.2 manual launcher
+has no supervisor; its CLI defaults to a bounded session. Development background
+mode uses unlimited sessions and retries after worker exit/adapter return.
 
 Status snapshots use atomic publication and bounded sharing-error retries so a
 temporary file lock does not stop all devices. Physical battery status is observed

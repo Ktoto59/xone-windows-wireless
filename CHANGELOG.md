@@ -1,6 +1,19 @@
 # Changelog
 
-## Unreleased — radio reconnection
+## Unreleased — automatic background bridge and radio reconnection
+
+- Select the existing signed WinUSB/usbip-win2/Windows GIP path for deployment;
+  abandon kernel certification/test-signing as a delivery requirement. The local
+  development certificate trust was removed without changing boot security.
+- Add a limited-privilege, password-free per-user Task Scheduler host with
+  sign-in startup, unlimited sessions, waiting for absent adapters and bounded
+  worker restart. Add a resume-recovery code path, not yet tested after sleep.
+- Add Enable/Disable automatic mode to the panel and installer; coordinate
+  discovery, configuration, driver changes, upgrade and uninstall with the host.
+- Confirm automatic worker restart and radio restart after physical USB replug.
+  A fresh pairing following headset connection reset completed; the user confirmed
+  clean ordinary playback on the new headset without USB-C. Longer/simultaneous
+  audio, old-device reconnect and warm-start behavior still need validation.
 
 - Respond to configured USB/GIP peers' radio re-enrollment requests outside the
   manual pairing window. Unknown peers still need manual pairing; matching stale
@@ -11,8 +24,17 @@
   from dlundqvist/xone v0.5.8. No adapter firmware image or driver binding changes.
 - Filter invalid association MACs and incomplete beacon-loopback MPDUs before
   client allocation/header parsing. Add software regression checks for these paths.
+- Pace complete eight-slot capture blocks by actual radio arrival rather than a
+  second host timer. Bound the real-time capture FIFO to 64 one-ms frames, discard
+  stale PCM on overrun with diagnostic counters, and keep the command connection
+  alive. Oversized capture requests fail explicitly instead of waiting forever.
+- Add render peak/nonzero-packet counters without logging PCM or recording voice.
 
-Hardware reconnection and audio validation for this development change is pending.
+Longer hardware validation exposed capture FIFO drift and a fatal queue-limit
+disconnect. Software regressions cover stalls beyond the former 2048-frame bound,
+recent-PCM retention, command continuity, device-clock delivery and reset handling.
+The corrected change has since received the limited new-headset confirmation
+above; broader hardware/audio validation remains pending.
 The published alpha.2 assets remain the frozen installer version.
 
 ## 0.1.0-alpha.2 — 2026-10-13

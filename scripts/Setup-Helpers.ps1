@@ -42,6 +42,10 @@ function Assert-XoneRadioIdle {
     $running=@(Get-CimInstance Win32_Process -Filter "Name = 'xone-probe.exe'" | Where-Object {$_.CommandLine -match '(?i)\b(run|controller-test|radio-test)\b'})
     if($running.Count){throw 'Another xone radio session is running. Stop that session before configuring this installation.'}
 }
+function Stop-XoneManagedBridge([string]$Root){
+    $scriptPath=Join-Path $Root 'scripts/Run-MaintainedBridge.ps1'
+    if(Test-Path -LiteralPath $scriptPath){& $scriptPath -Stop}else{Stop-XoneBridge $Root}
+}
 function Test-XoneFirmware([string]$Root){
     $path=Join-Path $Root 'work/firmware/FW_ACC_00U.bin'
     return [bool]((Test-Path -LiteralPath $path) -and (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -eq $script:XoneFirmwareHash)

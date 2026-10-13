@@ -10,6 +10,11 @@ a standalone kernel driver.** The current implementation uses WinUSB,
 a user-mode radio bridge, and virtual USB/GIP devices through usbip-win2.
 Windows Xbox Accessories can discover the tested devices and open their settings.
 
+**Development branch:** [automatic background mode](docs/BACKGROUND-MODE.md) adds
+sign-in startup and bounded recovery using existing signed drivers. A local
+new-headset pairing/audio session and worker/USB recovery were confirmed. These
+changes are not yet in the public alpha.2 installer linked below.
+
 ## Tested hardware and behavior
 
 | Hardware | Tested behavior |
@@ -204,7 +209,7 @@ The build uses a clean Git allowlist, compiles the small .NET launcher, download
 the official Python embeddable package with a pinned SHA-256, and packages its
 license. See [installer details](docs/INSTALLER.md).
 
-The current development build runs 16 protocol and 33 session tests. There are 65 Python tests
+The current development build runs 16 protocol and 33 session tests. There are 68 Python tests
 for USB profiles, radio adaptation, USB/IP transport and URBs. PowerShell checks
 cover configuration validation and snapshot locking/recovery. These are software
 checks, not evidence that every hardware/Windows combination works.

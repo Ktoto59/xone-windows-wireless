@@ -139,7 +139,7 @@ RadioEvent parse_radio(std::span<const uint8_t> bytes) {
     // MT76 can loop its own beacon back with a size larger than the USB payload
     // (dlundqvist/xone 83bd053). Drop it before reading any WLAN header.
     if(body.size()<mpdu+padding)return {};
-    if(body.size()<24)throw std::runtime_error("Truncated 802.11 header");
+    if(body.size()<24)return {};
     const uint16_t fc=le16(body,0), type=fc&0x00fc;
     size_t header=24;
     if ((fc&0x000c)==0x0008) {

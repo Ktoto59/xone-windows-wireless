@@ -1,8 +1,11 @@
 # Production target and native driver feasibility
 
-Status: design requirements, not a shipping driver or installed Windows service.
-The public alpha.2 release remains unchanged. The development bridge currently
-has unresolved connection/audio regressions and is not a production baseline.
+Status: design requirements, not a production reliability certification.
+The selected delivery path is the [automatic user-session bridge](BACKGROUND-MODE.md)
+on existing signed drivers. The custom kernel/signing path is not selected.
+The public alpha.2 release remains unchanged. New-headset clean playback and
+limited automatic recovery were confirmed in development; broader lifetime,
+warm-start and other-device behavior remain unvalidated.
 
 ## User experience
 

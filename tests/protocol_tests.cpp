@@ -139,6 +139,8 @@ int main() {
             raw[46]=2;check(xone::parse_radio(raw).kind==xone::RadioEvent::Kind::association,"Valid unicast association rejected");
             raw=radio_gip();raw.resize(4+32+12+4);
             check(xone::parse_radio(raw).kind==xone::RadioEvent::Kind::ignored,"Short loopback parsed an absent WLAN header");
+            put32(raw,8,0);
+            check(xone::parse_radio(raw).kind==xone::RadioEvent::Kind::ignored,"Empty WLAN loopback reached header parsing");
         });
         test("MT76 button and client loss events",[] {
             std::vector<uint8_t> raw(8); put32(raw,0,(1u<<27)|(4u<<20));

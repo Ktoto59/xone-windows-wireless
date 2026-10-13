@@ -64,14 +64,18 @@ function Update-XoneUiStatus {
     if($taskAdapterBox.SelectedIndex -lt 0 -and $taskAdapterBox.Items.Count -eq 1){$taskAdapterBox.SelectedIndex=0}
     $taskSetupStatus.Text=('Bundled runtime: '+$(if($status.Python){'ready'}else{'missing'})+"`r`nUSBip virtual controller: "+$(if($status.Usbip.Ready){'ready ('+$status.Usbip.Version+')'}else{'not ready'})+"`r`nAdapter firmware: "+$(if($status.Firmware){'verified'}else{'not imported'})+"`r`nAdapter driver: "+$(if($taskAdapterBox.SelectedIndex -ge 0){$taskAdapterBox.SelectedItem.Service}else{'adapter not selected'}))
     $state=Read-XoneJson (Join-Path $taskRoot 'work/usb-gip-running.json')
-    $taskBridgeStatus.Text=if($state -and (Test-XoneProcess $state.Worker)){
+    $maintenance=Read-XoneJson (Join-Path $taskRoot 'work/maintenance-status.json')
+    $taskBridgeStatus.Text=if($maintenance -and (Test-XoneProcess $maintenance.Process)){
+        'Background bridge: '+$maintenance.Phase+$(if($maintenance.Error){' | '+$maintenance.Error}else{''})
+    }elseif($state -and (Test-XoneProcess $state.Worker)){
         if($state.Error){'Bridge error: '+$state.Error}else{'Bridge is running. Power on your configured devices.'}
     }elseif($state -and $state.Error){'Bridge stopped: '+$state.Error}else{'Bridge is stopped.'}
     $script:taskLastStatus=Get-Date
 }
 
 $taskForm=[Windows.Forms.Form]::new()
-$taskForm.Text='xone-windows-wireless | 0.1.0-alpha.2'
+$taskManifest=Read-XoneJson (Join-Path $taskRoot 'release-manifest.json')
+$taskForm.Text='xone-windows-wireless | '+$(if($taskManifest){$taskManifest.Version}else{'development'})
 $taskForm.Font=[Drawing.Font]::new('Segoe UI',10)
 $taskForm.ClientSize=[Drawing.Size]::new(790,610);$taskForm.MinimumSize=$taskForm.Size
 $taskForm.StartPosition='CenterScreen';$taskForm.AutoScaleMode='Dpi'
@@ -121,7 +125,7 @@ $script:taskDeviceList=[Windows.Forms.ListBox]::new();$taskDeviceList.SetBounds(
 })
 [void](Add-XoneButton $devices 'Save devices' 242 317 466 {
     if($taskAdapterBox.SelectedIndex -lt 0){throw 'Select the adapter first.'}
-    Stop-XoneBridge $taskRoot
+    Stop-XoneManagedBridge $taskRoot
     Set-XoneSetupConfig $taskRoot $taskAdapterBox.SelectedItem.InstanceId $script:taskEntries
     $taskOperationLabel.Text='Devices saved locally. Open Start / stop to start the bridge.'
 })
@@ -131,7 +135,9 @@ $script:taskBridgeStatus=Add-XoneLabel $bridge 'Bridge is stopped.' 16 22 690 58
 [void](Add-XoneButton $bridge 'Start bridge' 16 97 215 {Start-XoneUiAction 'Start'})
 [void](Add-XoneButton $bridge 'Stop bridge' 248 97 215 {Start-XoneUiAction 'Stop'})
 [void](Add-XoneButton $bridge 'Refresh status' 480 97 230 {Update-XoneUiStatus})
-[void](Add-XoneLabel $bridge "The bridge continues running after this window closes, until you stop it or sign out.`r`nSelect the Xbox audio endpoint in Windows or in the app you use for sound.`r`nXbox Accessories is a separate Microsoft Store app.`r`n`r`nKnown preview limits:`r`n- The 2021 headset may need pairing again after a power cycle.`r`n- Accessories shows Connected instead of a wireless battery percentage.`r`n- Do not update firmware through this bridge." 16 153 690 220)
+[void](Add-XoneButton $bridge 'Enable automatic mode' 16 143 330 {Start-XoneUiAction 'AutomaticEnable'})
+[void](Add-XoneButton $bridge 'Disable automatic mode' 363 143 347 {Start-XoneUiAction 'AutomaticDisable'})
+[void](Add-XoneLabel $bridge "Automatic mode starts at sign-in and recovers the bridge after USB loss or sleep.`r`nStop ends this session; automatic mode starts again at your next sign-in.`r`nDisable automatic mode stops it and removes its sign-in task.`r`nSelect the Xbox audio endpoint in Windows or your app.`r`n`r`nPreview: headset reconnection/audio quality still need hardware validation.`r`nAccessories can show Connected. Firmware updates are unavailable." 16 198 690 165)
 [void](Add-XoneButton $bridge 'Open local logs' 16 371 215 {Start-Process -FilePath explorer.exe -ArgumentList (Quote-XonePath (Join-Path $taskRoot 'work'))})
 [void](Add-XoneButton $bridge 'Open documentation' 248 371 215 {Start-Process 'https://github.com/Ktoto59/xone-windows-wireless#installation-and-first-run'})
 $script:taskOperationLabel=Add-XoneLabel $taskForm 'Ready. Use the three tabs to complete the first-time setup.' 23 566 740 32
