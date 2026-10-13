@@ -21,7 +21,7 @@ try{
     }
     $taskOutput=Join-Path $taskStage 'outputs'
     [void][IO.Directory]::CreateDirectory($taskOutput)
-    foreach($taskBinary in @('xone-probe.exe','xone-bind.exe','native-gip-probe.exe','native-audio-probe.exe','audio-endpoint-test.exe','usb-reference-dump.exe','etw-trace-dump.exe','protocol-tests.exe','session-tests.exe','xone-control.exe')){
+    foreach($taskBinary in @('xone-probe.exe','xone-probe-cpp.exe','xone-background.exe','xone-bind.exe','native-gip-probe.exe','native-audio-probe.exe','audio-endpoint-test.exe','usb-reference-dump.exe','etw-trace-dump.exe','protocol-tests.exe','session-tests.exe','xone-control.exe')){
         $taskSource=Join-Path $taskRoot ('outputs/'+$taskBinary)
         if(-not (Test-Path -LiteralPath $taskSource)){throw ('Missing release binary: '+$taskBinary)}
         Copy-Item -LiteralPath $taskSource -Destination $taskOutput

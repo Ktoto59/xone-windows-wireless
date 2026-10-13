@@ -39,7 +39,7 @@ function Stop-XoneBridge([string]$Root){
     if($state -and (Test-XoneProcess $state.Radio)){throw 'The radio process is still running. Inspect the private work logs before continuing.'}
 }
 function Assert-XoneRadioIdle {
-    $running=@(Get-CimInstance Win32_Process -Filter "Name = 'xone-probe.exe'" | Where-Object {$_.CommandLine -match '(?i)\b(run|controller-test|radio-test)\b'})
+    $running=@(Get-CimInstance Win32_Process -Filter "Name = 'xone-probe.exe' OR Name = 'xone-probe-cpp.exe'" | Where-Object {$_.CommandLine -match '(?i)\b(run|controller-test|radio-test)\b'})
     if($running.Count){throw 'Another xone radio session is running. Stop that session before configuring this installation.'}
 }
 function Stop-XoneManagedBridge([string]$Root){
@@ -117,6 +117,8 @@ function Set-XoneSetupConfig([string]$Root,[string]$AdapterId,$Entries){
     $path=Join-Path $Root 'config/devices.local.json'
     $temporary=Join-Path $Root ('work/config-check-'+[guid]::NewGuid().ToString('N')+'.json')
     $value=[ordered]@{Version=1;AdapterInstanceId=$AdapterId;Devices=@($Entries)}
+    $previous=Read-XoneJson $path
+    if($previous -and $previous.BridgeBackend){$value.BridgeBackend=[string]$previous.BridgeBackend}
     try{Write-XoneJson $temporary $value;[void](Read-XoneDeviceConfig $temporary);Write-XoneJson $path $value}
     finally{if(Test-Path -LiteralPath $temporary){Remove-Item -LiteralPath $temporary}}
 }

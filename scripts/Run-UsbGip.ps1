@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 [CmdletBinding()]
-param([switch]$Stop,[switch]$Worker,[switch]$AudioProbe,[switch]$AudioBridge,[switch]$NewHeadsetOnly,[switch]$NativeController,[string]$ConfigPath='',[ValidateScript({$_ -eq 0 -or ($_ -ge 30 -and $_ -le 86400)})][int]$Seconds=1800,[ValidateSet('none','native-gip','vigem')][string]$FallbackOutput='none')
+param([switch]$Stop,[switch]$Worker,[switch]$AudioProbe,[switch]$AudioBridge,[switch]$NewHeadsetOnly,[switch]$NativeController,[switch]$CppBridge,[string]$ConfigPath='',[ValidateScript({$_ -eq 0 -or ($_ -ge 30 -and $_ -le 86400)})][int]$Seconds=1800,[ValidateSet('none','native-gip','vigem')][string]$FallbackOutput='none')
 $ErrorActionPreference='Stop'
 $taskRoot=Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'Device-Config.ps1')
@@ -8,6 +8,12 @@ $taskRoot=Split-Path -Parent $PSScriptRoot
 if(-not $ConfigPath){$ConfigPath=Join-Path $taskRoot 'config/devices.local.json'}
 $ConfigPath=[IO.Path]::GetFullPath($ConfigPath)
 if($ConfigPath -match '[\r\n"]'){throw 'Invalid configuration path.'}
+if(-not $Stop){
+    $taskSelectedConfig=Read-XoneDeviceConfig $ConfigPath
+    if($taskSelectedConfig.BridgeBackend -eq 'cpp'){$CppBridge=[switch]$true}
+    if($CppBridge -and ($FallbackOutput -ne 'none' -or -not $NativeController -or -not $AudioBridge -or $AudioProbe)){throw 'C++ mode requires -AudioBridge -NativeController -FallbackOutput none.'}
+    if($CppBridge -and -not (Test-Path -LiteralPath (Join-Path $taskRoot 'outputs/xone-probe-cpp.exe'))){throw 'Build the experimental C++ bridge before selecting it.'}
+}
 $taskStatePath=Join-Path $taskRoot 'work\usb-gip-running.json'
 $taskStopPath=Join-Path $taskRoot 'work\usb-gip.stop'
 function Test-TaskProcess($State){
@@ -26,7 +32,7 @@ if(-not $Worker){
         $taskOld=Get-Content -LiteralPath $taskStatePath -Raw | ConvertFrom-Json
         if(Test-TaskProcess $taskOld.Worker){
             if($Stop){Set-Content -LiteralPath $taskStopPath -Value stop;Write-Output 'USB GIP stop requested.';return}
-            if($taskOld.FallbackOutput -ne $FallbackOutput -or [bool]$taskOld.NewHeadsetOnly -ne [bool]$NewHeadsetOnly -or [bool]$taskOld.NativeController -ne [bool]$NativeController){throw 'Stop the existing USB GIP worker before changing output routes.'}
+            if($taskOld.FallbackOutput -ne $FallbackOutput -or [bool]$taskOld.NewHeadsetOnly -ne [bool]$NewHeadsetOnly -or [bool]$taskOld.NativeController -ne [bool]$NativeController -or [bool]($taskOld.BridgeBackend -eq 'cpp') -ne [bool]$CppBridge){throw 'Stop the existing USB GIP worker before changing output routes.'}
             Write-Output 'USB GIP worker already running.';return
         }
     }
@@ -39,6 +45,7 @@ if(-not $Worker){
     if($AudioBridge){$taskArgs+=' -AudioBridge'}
     if($NewHeadsetOnly){$taskArgs+=' -NewHeadsetOnly'}
     if($NativeController){$taskArgs+=' -NativeController'}
+    if($CppBridge){$taskArgs+=' -CppBridge'}
     if($FallbackOutput -eq 'native-gip'){
         $taskDevMode=(Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock' -ErrorAction SilentlyContinue).AllowDevelopmentWithoutDevLicense
         if($taskDevMode -ne 1){throw 'Enable Developer Mode before using native-gip fallback.'}
@@ -68,6 +75,7 @@ $taskDevices=@($taskDefinitions | ForEach-Object {
 })
 $taskState=[ordered]@{Running=$true;FallbackOutput=$FallbackOutput;NewHeadsetOnly=[bool]$NewHeadsetOnly;NativeController=[bool]$NativeController;ControllerStatus=$taskControllerStatus;Worker=@{Pid=$PID;StartTicks=(Get-Process -Id $PID).StartTime.ToUniversalTime().Ticks};Devices=$taskDevices;Server=$null;Radio=$null;Port=0;Error=$null;RadioStatus=$taskDevices[0].Status;ServerLog=$taskDevices[0].ServerLog;ServerError=$taskDevices[0].ServerError;RadioLog=(Join-Path $taskRoot "work\usb-gip-radio-$taskStamp.log");RadioError=(Join-Path $taskRoot "work\usb-gip-radio-$taskStamp.err")}
 function Save-TaskState{
+    $taskState.BridgeBackend=if($CppBridge){'cpp'}else{'python'}
     $taskState.Server=$taskDevices[0].Server;$taskState.Port=$taskDevices[0].Port
     $taskTemporary=$taskStatePath+'.tmp'
     $taskJson=$taskState | ConvertTo-Json -Depth 7
@@ -111,10 +119,14 @@ function Get-TaskExitError($Process,[string]$Label,[string]$ErrorPath){
 }
 try{
     Save-TaskState
-    $taskPython=Join-Path $taskRoot 'runtime/python/python.exe'
-    if(-not (Test-Path -LiteralPath $taskPython)){$taskPython=(Get-Command python.exe).Source}
+    $taskPython=$null
+    if(-not $CppBridge){
+        $taskPython=Join-Path $taskRoot 'runtime/python/python.exe'
+        if(-not (Test-Path -LiteralPath $taskPython)){$taskPython=(Get-Command python.exe).Source}
+    }
     foreach($taskDevice in $taskDevices){
         if(Test-Path -LiteralPath $taskDevice.Status){Remove-Item -LiteralPath $taskDevice.Status}
+        if($CppBridge){continue}
         $taskArgs='"'+(Join-Path $taskRoot 'src\usbip_reference_server.py')+'" --profile "'+$taskDevice.Profile+'" --port '+$taskDevice.UsbPort+' --radio-port '+$taskDevice.RadioPort+' --radio-mac '+$taskDevice.Mac+' --seconds '+$Seconds+' --status-file "'+$taskDevice.Status+'"'
         if($AudioProbe -and $taskDevice.Audio){$taskArgs+=' --audio-probe'}
         if($AudioBridge -and $taskDevice.Audio){$taskArgs+=' --audio-bridge'}
@@ -128,17 +140,30 @@ try{
             Start-Sleep -Milliseconds 100
         }
     }
-    $taskArgs='run --instance "'+$taskAdapterId+'" --output usb-gip --usb-gip-mac '+$taskDevices[0].Mac+' --usb-gip-port '+$taskDevices[0].RadioPort+' --usb-gip-fallback '+$FallbackOutput+' --status-file "'+$taskControllerStatus+'" --firmware "'+(Join-Path $taskRoot 'work\firmware\FW_ACC_00U.bin')+'" --seconds '+$Seconds+' --stop-file "'+$taskStopPath+'"'
-    foreach($taskDevice in $taskDevices | Select-Object -Skip 1){$taskArgs+=' --usb-gip-peer '+$taskDevice.Mac+':'+$taskDevice.RadioPort}
-    $taskRadio=Start-Process -FilePath (Join-Path $taskRoot 'outputs\xone-probe.exe') -ArgumentList $taskArgs -WorkingDirectory $taskRoot -WindowStyle Hidden -RedirectStandardOutput $taskState.RadioLog -RedirectStandardError $taskState.RadioError -PassThru
+    $taskArgs='run --instance "'+$taskAdapterId+'" --output usb-gip --status-file "'+$taskControllerStatus+'" --firmware "'+(Join-Path $taskRoot 'work\firmware\FW_ACC_00U.bin')+'" --seconds '+$Seconds+' --stop-file "'+$taskStopPath+'"'
+    if($CppBridge){
+        foreach($taskDevice in $taskDevices){
+            $taskProfilePid=if($taskDevice.Audio){if($taskDevice.Profile -like '*0b32-usb.json'){'0b32'}else{'0b17'}}else{'0b12'}
+            $taskArgs+=' --cpp-usb-device '+$taskDevice.Mac+':'+$taskDevice.UsbPort+':'+$taskProfilePid+':'+$taskDevice.Name
+        }
+    }else{
+        $taskArgs+=' --usb-gip-mac '+$taskDevices[0].Mac+' --usb-gip-port '+$taskDevices[0].RadioPort+' --usb-gip-fallback '+$FallbackOutput
+        foreach($taskDevice in $taskDevices | Select-Object -Skip 1){$taskArgs+=' --usb-gip-peer '+$taskDevice.Mac+':'+$taskDevice.RadioPort}
+    }
+    $taskRadioBinary=if($CppBridge){'outputs\xone-probe-cpp.exe'}else{'outputs\xone-probe.exe'}
+    $taskRadio=Start-Process -FilePath (Join-Path $taskRoot $taskRadioBinary) -ArgumentList $taskArgs -WorkingDirectory $taskRoot -WindowStyle Hidden -RedirectStandardOutput $taskState.RadioLog -RedirectStandardError $taskState.RadioError -PassThru
     if($AudioBridge){Set-TaskMediaPriority $taskRadio}
     $taskState.Radio=@{Pid=$taskRadio.Id;StartTicks=$taskRadio.StartTime.ToUniversalTime().Ticks};Save-TaskState
+    if($CppBridge){
+        foreach($taskDevice in $taskDevices){$taskDevice.Server=$taskState.Radio;$taskDevice.ServerLog=$taskState.RadioLog;$taskDevice.ServerError=$taskState.RadioError}
+        Save-TaskState
+    }
     $taskDeadline=if($Seconds -eq 0){[datetime]::MaxValue}else{(Get-Date).AddSeconds($Seconds-2)}
     while((Get-Date) -lt $taskDeadline -and -not (Test-Path -LiteralPath $taskStopPath)){
         $taskRadio.Refresh()
         if($taskRadio.HasExited){throw (Get-TaskExitError $taskRadio 'Radio' $taskState.RadioError)}
         for($taskIndex=0;$taskIndex -lt $taskDevices.Count;++$taskIndex){
-            $taskDevice=$taskDevices[$taskIndex];$taskServer=$taskServers[$taskIndex];$taskServer.Refresh()
+            $taskDevice=$taskDevices[$taskIndex];$taskServer=if($CppBridge){$taskRadio}else{$taskServers[$taskIndex]};$taskServer.Refresh()
             if($taskServer.HasExited){throw (Get-TaskExitError $taskServer ('USB server '+$taskDevice.Name) $taskDevice.ServerError)}
             $taskCurrent=Read-TaskRadioState $taskDevice.Status
             if(-not $taskCurrent){continue}

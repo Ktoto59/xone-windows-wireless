@@ -11,9 +11,15 @@ try{
     Copy-Item -LiteralPath (Join-Path $taskRoot 'config/devices.example.json') -Destination $taskPath
     $taskConfig=Read-XoneDeviceConfig $taskPath
     Check ($taskConfig.Devices.Count -eq 3) 'Example configuration rejected'
+    Check ($taskConfig.BridgeBackend -eq 'python') 'Reference backend default changed'
     Check ((($taskConfig.Devices | ForEach-Object {$_.UsbPort}) -join ',') -eq '33240,33242,33244') 'Broker ports are not isolated'
     $taskGood=[IO.File]::ReadAllText($taskPath) | ConvertFrom-Json
-    foreach($taskCase in @('duplicate-mac','duplicate-profile','profile-traversal','invalid-name','invalid-mac')){
+    $taskCpp=$taskGood | ConvertTo-Json -Depth 5 | ConvertFrom-Json
+    $taskCpp | Add-Member -NotePropertyName BridgeBackend -NotePropertyValue cpp
+    $taskCppPath=Join-Path $taskDirectory 'cpp.json'
+    [IO.File]::WriteAllText($taskCppPath,($taskCpp | ConvertTo-Json -Depth 5))
+    Check ((Read-XoneDeviceConfig $taskCppPath).BridgeBackend -eq 'cpp') 'C++ backend selection rejected'
+    foreach($taskCase in @('duplicate-mac','duplicate-profile','profile-traversal','invalid-name','invalid-mac','invalid-backend')){
         $taskBad=[IO.File]::ReadAllText($taskPath) | ConvertFrom-Json
         switch($taskCase){
             'duplicate-mac'{$taskBad.Devices[1].Mac=$taskBad.Devices[0].Mac}
@@ -21,6 +27,7 @@ try{
             'profile-traversal'{$taskBad.Devices[0].Profile='../outside.json'}
             'invalid-name'{$taskBad.Devices[0].Name='../../outside'}
             'invalid-mac'{$taskBad.Devices[0].Mac='not-a-mac'}
+            'invalid-backend'{$taskBad | Add-Member -NotePropertyName BridgeBackend -NotePropertyValue unknown}
         }
         $taskCasePath=Join-Path $taskDirectory ($taskCase+'.json')
         [IO.File]::WriteAllText($taskCasePath,($taskBad | ConvertTo-Json -Depth 5))

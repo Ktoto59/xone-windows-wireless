@@ -22,6 +22,7 @@ $taskMutex=[Threading.Mutex]::new($false,('Local\xone-wireless-maintenance-'+$ta
 $taskOwnsMutex=$false
 try{$taskOwnsMutex=$taskMutex.WaitOne(0)}catch [Threading.AbandonedMutexException]{$taskOwnsMutex=$true}
 if(-not $taskOwnsMutex){$taskMutex.Dispose();exit 0}
+if(-not ('Xone.AdapterHealth' -as [type])){Add-Type -Path (Join-Path $taskRoot 'src/adapter_health.cs')}
 if(Test-Path -LiteralPath $taskStopPath){Remove-Item -LiteralPath $taskStopPath}
 $taskStatus=[ordered]@{Phase='Starting';Error=$null;Process=@{Pid=$PID;StartTicks=(Get-Process -Id $PID).StartTime.ToUniversalTime().Ticks};WorkerActive=$false;RadioActive=$false;DevicesReady=@();RetryCount=0;UpdatedUtc=$null}
 $taskRetryAt=[datetime]::MinValue;$taskLaunchUntil=[datetime]::MinValue
@@ -49,19 +50,15 @@ try{
             $taskStatus.DevicesReady=@()
             $taskConfig=Read-XoneDeviceConfig (Join-Path $taskRoot 'config/devices.local.json')
             $taskAdapter=$null
-            if($taskConfig.AdapterInstanceId){$taskAdapter=Get-PnpDevice -InstanceId $taskConfig.AdapterInstanceId -PresentOnly -ErrorAction SilentlyContinue}
-            else{
-                $taskCandidates=@(Get-PnpDevice -PresentOnly | Where-Object {$_.InstanceId -match '^USB\\VID_045E&PID_02FE\\[^\\]+$'})
-                if($taskCandidates.Count -gt 1){throw 'Select one adapter in the control panel.'}
-                if($taskCandidates.Count -eq 1){$taskAdapter=$taskCandidates[0]}
-            }
+            if($taskConfig.AdapterInstanceId){$taskAdapter=[Xone.AdapterHealth]::Read($taskConfig.AdapterInstanceId)}
+            else{$taskAdapter=[Xone.AdapterHealth]::Find()}
             if(-not $taskAdapter){
                 if($taskStatus.WorkerActive -or $taskStatus.RadioActive){Stop-XoneBridge $taskRoot}
                 $taskStatus.WorkerActive=$false;$taskStatus.RadioActive=$false
                 $taskSawWorker=$false;$taskLaunchUntil=[datetime]::MinValue
                 Save-MaintenanceStatus 'WaitingForAdapter'
             }else{
-                $taskService=(Get-PnpDeviceProperty -InstanceId $taskAdapter.InstanceId -KeyName DEVPKEY_Device_Service).Data
+                $taskService=$taskAdapter.Service
                 if($taskService -ne 'WinUSB' -or $taskAdapter.Status -ne 'OK'){
                     if($taskStatus.WorkerActive -or $taskStatus.RadioActive){Stop-XoneBridge $taskRoot}
                     $taskStatus.WorkerActive=$false;$taskStatus.RadioActive=$false

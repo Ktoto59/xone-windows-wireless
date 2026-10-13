@@ -8,11 +8,15 @@ $taskSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $taskName='xone-windows-wireless-'+$taskSid
 $taskScript=Join-Path $taskRoot 'scripts/Run-MaintainedBridge.ps1'
 $taskPowerShell=Join-Path $env:windir 'System32/WindowsPowerShell/v1.0/powershell.exe'
-$taskArguments='-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File '+(Quote-XonePath $taskScript)
+$taskLegacyArguments='-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File '+(Quote-XonePath $taskScript)
+$taskHostExe=Join-Path $taskRoot 'outputs/xone-background.exe'
+$taskExecutable=if(Test-Path -LiteralPath $taskHostExe){$taskHostExe}else{$taskPowerShell}
+$taskArguments=if($taskExecutable -eq $taskHostExe){''}else{$taskLegacyArguments}
 $taskExisting=Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 if($taskExisting){
     $taskActions=@($taskExisting.Actions)
-    if($taskActions.Count -ne 1 -or $taskActions[0].Execute -ne $taskPowerShell -or $taskActions[0].Arguments -ne $taskArguments){
+    $taskOwned=$taskActions.Count -eq 1 -and (($taskActions[0].Execute -eq $taskPowerShell -and $taskActions[0].Arguments -eq $taskLegacyArguments) -or ($taskActions[0].Execute -eq $taskHostExe -and -not $taskActions[0].Arguments))
+    if(-not $taskOwned){
         if($Mode -in @('Stop','Disable')){& $taskScript -Stop;return}
         throw 'Automatic mode belongs to another installation. Disable it from that installation first.'
     }
@@ -37,12 +41,15 @@ if($Mode -in @('Stop','Disable')){
     if($Mode -eq 'Disable' -and $taskExisting){Unregister-ScheduledTask -TaskName $taskName -Confirm:$false}
     return
 }
-if($Mode -eq 'Enable' -or -not $taskExisting){
-    $taskAction=New-ScheduledTaskAction -Execute $taskPowerShell -Argument $taskArguments -WorkingDirectory $taskRoot
+if($Mode -eq 'Enable' -or -not $taskExisting -or $taskExisting.Actions[0].Execute -ne $taskExecutable){
+    $taskActionParameters=@{Execute=$taskExecutable;WorkingDirectory=$taskRoot}
+    if($taskArguments){$taskActionParameters.Argument=$taskArguments}
+    $taskAction=New-ScheduledTaskAction @taskActionParameters
     $taskPrincipal=New-ScheduledTaskPrincipal -UserId $taskSid -LogonType Interactive -RunLevel Limited
     $taskSettings=New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([timespan]::Zero) -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval ([timespan]::FromMinutes(1))
     $taskParameters=@{TaskName=$taskName;Action=$taskAction;Principal=$taskPrincipal;Settings=$taskSettings;Description='xone user-session radio bridge with bounded recovery; no administrator privileges.'}
     if($Mode -eq 'Enable'){$taskParameters.Trigger=New-ScheduledTaskTrigger -AtLogOn -User $taskSid}
+    elseif($taskExisting -and $taskExisting.Triggers){$taskParameters.Trigger=@($taskExisting.Triggers)}
     Register-ScheduledTask @taskParameters -Force | Out-Null
 }
 if(Test-Path -LiteralPath (Join-Path $taskRoot 'work/maintenance.stop')){Remove-Item -LiteralPath (Join-Path $taskRoot 'work/maintenance.stop')}

@@ -195,6 +195,12 @@ Wireless Adapter driver. Do not delete unrelated USB or Xbox driver packages.
 
 ## Build and test
 
+Development now includes an opt-in [C++ USB/GIP/audio bridge](docs/cpp-bridge.md).
+It removes the Python data servers while retaining the signed USBip bus and native
+Windows GIP/audio drivers. It has passed software checks; physical-device
+performance is not yet validated, and the published alpha.3 backend remains the
+reference/default.
+
 Install Visual Studio C++ Build Tools (MSVC x64 and Windows SDK), then:
 
 ```powershell
@@ -225,6 +231,7 @@ checks, not evidence that every hardware/Windows combination works.
 ## Design, privacy and contributing
 
 - [Architecture and protocol boundaries](docs/ARCHITECTURE.md)
+- [Experimental C++ bridge and timing](docs/cpp-bridge.md)
 - [Installation details and firmware](docs/INSTALL.md)
 - [Troubleshooting and safe diagnostics](docs/TROUBLESHOOTING.md)
 - [Upstream sources and licenses](docs/UPSTREAM.md)

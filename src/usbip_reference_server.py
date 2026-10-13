@@ -7,6 +7,8 @@ import argparse
 import asyncio
 from contextlib import suppress
 import json
+import queue
+import threading
 from pathlib import Path
 import struct
 import sys
@@ -106,13 +108,57 @@ class ReferenceServer:
             self.clients -= 1
 
 
+class DiagnosticLog:
+    """Bounded diagnostics, with console/file IO on an ordinary worker thread."""
+    LIFECYCLE = frozenset(('radio_ready', 'radio_associated', 'radio_removed',
+                           'radio_closed', 'radio_stopped', 'radio_waiting',
+                           'usb_audio_profile', 'close'))
+
+    def __init__(self, verbose=False, write=None):
+        self.verbose = verbose
+        self.write = write or (lambda fields: print(json.dumps(fields), flush=True))
+        self.queue = queue.Queue(maxsize=128)
+        self.stop = threading.Event()
+        self.count = 0
+        self.thread = threading.Thread(target=self.run, name='xone-diagnostics', daemon=True)
+        self.thread.start()
+
+    def emit(self, fields):
+        if fields.get('operation') not in self.LIFECYCLE:
+            if not self.verbose or self.count >= 1000:
+                return
+            self.count += 1
+        try:
+            self.queue.put_nowait(dict(fields))
+        except queue.Full:
+            pass
+
+    def run(self):
+        while not self.stop.is_set() or not self.queue.empty():
+            try:
+                fields = self.queue.get(timeout=.1)
+            except queue.Empty:
+                continue
+            try:
+                self.write(fields)
+            except (OSError, ValueError):
+                pass
+
+    def close(self):
+        self.stop.set()
+        self.thread.join(timeout=1)
+
+
 class StatusPublisher:
     """Publish bounded snapshots off the latency-sensitive event-loop thread."""
-    def __init__(self, path, snapshot, interval=.2):
+    def __init__(self, path, snapshot, interval=.2, stats_interval=2):
         self.path = path
         self.snapshot = snapshot
         self.interval = interval
         self.task = None
+        self.stats_interval = stats_interval
+        self.previous = None
+        self.last_write = 0
 
     def write(self, snapshot):
         temporary = self.path.with_suffix('.tmp')
@@ -125,7 +171,12 @@ class StatusPublisher:
     async def run(self):
         while True:
             # Copy counters on their owning thread before dispatching disk IO.
-            await asyncio.to_thread(self.write, self.snapshot())
+            snapshot = self.snapshot()
+            lifecycle = tuple(snapshot.get(k) for k in ('RadioConnected', 'Wcid', 'Generation', 'Ready'))
+            now = asyncio.get_running_loop().time()
+            if lifecycle != self.previous or now - self.last_write >= self.stats_interval:
+                await asyncio.to_thread(self.write, snapshot)
+                self.previous, self.last_write = lifecycle, now
             await asyncio.sleep(self.interval)
 
     async def __aenter__(self):
@@ -139,19 +190,15 @@ class StatusPublisher:
 
 
 async def main(args):
-    event_count = 0
-    diagnostic_count = 0
+    log = DiagnosticLog(getattr(args, 'verbose', False))
+    try:
+        await serve(args, log.emit)
+    finally:
+        await asyncio.to_thread(log.close)
+
+
+async def serve(args, event):
     backend = None
-    def event(fields):
-        nonlocal event_count, diagnostic_count
-        event_count += 1
-        diagnostic = fields.get('operation', '').startswith(('radio_', 'usb_audio_'))
-        if diagnostic:
-            diagnostic_count += 1
-        if event_count <= 1000 or (diagnostic and diagnostic_count <= 1000) or fields.get('operation') == 'close':
-            print(json.dumps(fields), flush=True)
-        elif event_count == 1001:
-            print(json.dumps({'operation': 'log_limit', 'limit': 1000}), flush=True)
     profile = transport_profile(args.profile,args.audio_bridge)
     if args.radio_mac:
         interrupt,audio = radio_endpoints(profile)
@@ -195,6 +242,7 @@ if __name__ == '__main__':
     parser.add_argument('--audio-probe', action='store_true', help='Experimental radio capture ISO path and render header diagnostics; playback unsupported')
     parser.add_argument('--audio-bridge', action='store_true', help='Experimental observed 24k mono / 48k stereo radio PCM conversion')
     parser.add_argument('--status-file', type=Path)
+    parser.add_argument('--verbose', action='store_true', help='Bounded packet diagnostics; disabled during normal operation')
     arguments = parser.parse_args()
     if (arguments.audio_probe or arguments.audio_bridge) and not arguments.radio_mac:
         parser.error('audio options require radio-mac')

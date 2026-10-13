@@ -29,5 +29,7 @@ function Read-XoneDeviceConfig([string]$Path){
         $taskDevices+=@{Name=$taskName;Mac=$taskMac;ProfileName=$taskProfile;Audio=$taskProfile.StartsWith('headset-');UsbPort=(33240+2*$taskIndex);RadioPort=(33241+2*$taskIndex);StatusName=('usb-gip-'+$taskName+'-radio-status.json')}
         $taskIndex++
     }
-    return [pscustomobject]@{AdapterInstanceId=[string]$taskConfig.AdapterInstanceId;Devices=$taskDevices}
+    $taskBackend=if($taskConfig.BridgeBackend){[string]$taskConfig.BridgeBackend}else{'python'}
+    if($taskBackend -notin @('python','cpp')){throw 'BridgeBackend must be python or cpp.'}
+    return [pscustomobject]@{AdapterInstanceId=[string]$taskConfig.AdapterInstanceId;Devices=$taskDevices;BridgeBackend=$taskBackend}
 }

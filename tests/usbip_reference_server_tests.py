@@ -11,7 +11,36 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 from usb_headset_profile import HeadsetProfile
-from usbip_reference_server import ReferenceServer, StatusPublisher, transport_profile, main
+from usbip_reference_server import DiagnosticLog, ReferenceServer, StatusPublisher, transport_profile, main
+
+
+class LoggingTests(unittest.TestCase):
+    def test_slow_log_sink_is_bounded_and_does_not_block_radio_events(self):
+        started, release = threading.Event(), threading.Event()
+        def sink(fields):
+            started.set()
+            release.wait(2)
+        log = DiagnosticLog(verbose=True, write=sink)
+        try:
+            log.emit({'operation': 'radio_associated'})
+            self.assertTrue(started.wait(1))
+            for _ in range(10000):
+                log.emit({'operation': 'radio_audio_in'})
+            self.assertEqual(log.queue.qsize(), 128)
+            self.assertFalse(release.is_set())
+        finally:
+            release.set()
+            log.close()
+
+    def test_normal_operation_does_not_log_audio_packets(self):
+        written = []
+        log = DiagnosticLog(write=written.append)
+        log.emit({'operation': 'radio_audio_in'})
+        log.emit({'operation': 'radio_gip_out'})
+        log.emit({'operation': 'radio_removed'})
+        log.close()
+        self.assertEqual(written, [{'operation': 'radio_removed'}])
+
 
 
 class LifetimeTests(unittest.IsolatedAsyncioTestCase):

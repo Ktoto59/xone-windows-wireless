@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- Add an opt-in C++ USB/IP/GIP/PCM backend within the radio process, with per-device
+  event-driven threads, headset-clock pacing, bounded queues and MMCSS. Preserve
+  the three captured USB profiles and the signed USBip/Windows GIP route.
+  Descriptor equivalence, synthetic audio/cancellation and real loopback transport
+  checks pass; physical-device performance of this backend is not yet validated.
+- Move radio status writes off the RF thread; disable routine audio packet logs,
+  send diagnostics to a bounded ordinary worker and write statistics every two
+  seconds while retaining prompt connection/generation updates.
+- Replace repeated PnP/CIM supervisor queries with direct Configuration Manager
+  reads, and add a hidden GUI-subsystem host for the background supervisor.
+  The user reported that stutters appeared to stop after reduced logging, but
+  the infrequent system freezes have not yet been conclusively attributed.
+
 ## 0.1.0-alpha.3 — 2026-10-13
 
 - Keep discovery beacons/RX enabled for configured USB/GIP peers after manual

@@ -17,6 +17,8 @@ Expand-Archive -LiteralPath $taskPythonArchive -DestinationPath $taskPythonDir
 $taskCompiler=Join-Path $env:windir 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
 & $taskCompiler /nologo /target:winexe /platform:x64 /optimize+ /reference:System.Windows.Forms.dll ('/out:'+(Join-Path $taskRoot 'outputs/xone-control.exe')) (Join-Path $taskRoot 'src/control_launcher.cs')
 if($LASTEXITCODE -ne 0){throw 'Control launcher compilation failed.'}
+& $taskCompiler /nologo /target:winexe /platform:x64 /optimize+ ('/out:'+(Join-Path $taskRoot 'outputs/xone-background.exe')) (Join-Path $taskRoot 'src/background_launcher.cs')
+if($LASTEXITCODE -ne 0){throw 'Background launcher compilation failed.'}
 & (Join-Path $PSScriptRoot 'Package-Release.ps1') -Version $Version
 $taskStage=Join-Path $taskRoot ('dist/xone-windows-wireless-'+$Version+'-windows-x64')
 & $IsccPath ('/DAppVersion='+$Version) ('/DStageDir='+$taskStage) ('/DPythonDir='+$taskPythonDir) (Join-Path $taskRoot 'installer/xone-windows-wireless.iss')
