@@ -14,6 +14,9 @@ The radio/protocol implementation is user mode. Existing signed drivers provide
 WinUSB, the virtual USB bus and the Windows Xbox/audio stack. This is not yet a
 native wireless NDIS miniport or a replacement kernel implementation of Xbox GIP.
 
+The installation/reliability target and the feasibility checks for a direct
+adapter driver are specified in [PRODUCTION.md](PRODUCTION.md).
+
 ## Device paths
 
 Each configured MAC has an independent broker, USB instance, generation and PCM
