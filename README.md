@@ -20,6 +20,14 @@ a prerelease tested on one PC, not a claim of reliable operation across all PCs.
 
 ## Tested hardware and behavior
 
+Unreleased development work also includes an optional in-process C++ USB/GIP
+backend and a [direct Windows GIP candidate](docs/DIRECT-GIP.md) without virtual
+USB devices. Direct GIP is the planned application route. It currently requires
+Developer Mode and an explicit elevated development launch; the installer and
+automatic startup integration are unfinished. Clean audio on the USB route does
+not establish direct GIP sound quality or compatibility. Alpha.3 remains the
+published baseline.
+
 | Hardware | Tested behavior |
 | --- | --- |
 | External Xbox Wireless Adapter, `045E:02FE` | Firmware loading, radio, pairing, multiple clients |

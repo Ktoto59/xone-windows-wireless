@@ -1,5 +1,14 @@
 # Installer and first-run control panel
 
+**Development branch, not released:** the application shell now has one
+**Set up adapter** action, automatic address enrollment after a model is selected,
+an **Add device** dialog and a startup checkbox. The advanced panel remains
+available. Installer packaging records the startup preference; background setup
+starts after the first-run preparation succeeds. This shell currently controls
+the USB/GIP fallback. Integration of the [direct GIP candidate](DIRECT-GIP.md) and
+its protected elevated background host is not finished. The published alpha.3
+installer below keeps its original panel and workflow.
+
 `xone-windows-wireless-0.1.0-alpha.3-Setup-x64.exe` is the recommended download.
 It targets Windows 11 x64 and installs per user under
 `%LOCALAPPDATA%\Programs\xone-windows-wireless`. Start menu and optional desktop

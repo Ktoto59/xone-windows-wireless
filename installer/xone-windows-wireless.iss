@@ -1,6 +1,6 @@
 ; SPDX-License-Identifier: GPL-2.0-or-later
 #ifndef AppVersion
-  #define AppVersion "0.1.0-alpha.3"
+  #define AppVersion "0.1.0-alpha.4"
 #endif
 #ifndef StageDir
   #error StageDir must point to a verified public release stage
@@ -50,8 +50,9 @@ Name: "{group}\Uninstall xone-windows-wireless"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\xone-windows-wireless"; Filename: "{app}\outputs\xone-control.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\Set-AutomaticBridge.ps1"" -Mode Enable"; WorkingDir: "{app}"; Tasks: automatic; Flags: runhidden
-Filename: "{app}\outputs\xone-control.exe"; Description: "Open the first-run setup and control panel"; Flags: nowait postinstall skipifsilent
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\Setup-Action.ps1"" -Action InitializePreferences -Startup on"; WorkingDir: "{app}"; Tasks: automatic; Flags: runhidden
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\Setup-Action.ps1"" -Action InitializePreferences -Startup off"; WorkingDir: "{app}"; Tasks: not automatic; Flags: runhidden
+Filename: "{app}\outputs\xone-control.exe"; Description: "Open Xbox Wireless"; Flags: nowait postinstall skipifsilent
 
 [Code]
 function RunMaintenance(Action: String; Elevated: Boolean; var ResultCode: Integer): Boolean;

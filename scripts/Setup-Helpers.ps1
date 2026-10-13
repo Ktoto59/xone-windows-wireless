@@ -39,7 +39,7 @@ function Stop-XoneBridge([string]$Root){
     if($state -and (Test-XoneProcess $state.Radio)){throw 'The radio process is still running. Inspect the private work logs before continuing.'}
 }
 function Assert-XoneRadioIdle {
-    $running=@(Get-CimInstance Win32_Process -Filter "Name = 'xone-probe.exe' OR Name = 'xone-probe-cpp.exe'" | Where-Object {$_.CommandLine -match '(?i)\b(run|controller-test|radio-test)\b'})
+    $running=@(Get-CimInstance Win32_Process -Filter "Name = 'xone-probe.exe' OR Name = 'xone-probe-cpp.exe' OR Name = 'xone-native.exe'" | Where-Object {$_.CommandLine -match '(?i)\b(run|controller-test|radio-test)\b'})
     if($running.Count){throw 'Another xone radio session is running. Stop that session before configuring this installation.'}
 }
 function Stop-XoneManagedBridge([string]$Root){
@@ -85,7 +85,7 @@ function Get-XoneDownload([string]$Url,[string]$Path,[string]$Hash=''){
     }finally{if(Test-Path -LiteralPath $temporary){Remove-Item -LiteralPath $temporary}}
 }
 function Initialize-XonePrerequisites([string]$Root){
-    if(-not (Test-Path -LiteralPath (Join-Path $Root 'runtime/python/python.exe'))){throw 'Bundled Python is missing. Reinstall the application.'}
+    if(-not (Test-Path -LiteralPath (Join-Path $Root 'outputs/xone-probe-cpp.exe')) -and -not (Test-Path -LiteralPath (Join-Path $Root 'runtime/python/python.exe'))){throw 'The bridge runtime is missing. Reinstall the application.'}
     if(-not (Test-XoneFirmware $Root)){
         try{& (Join-Path $Root 'scripts/Import-Firmware.ps1')}catch{
             $downloads=Join-Path $Root 'work/downloads'
@@ -132,11 +132,83 @@ function Get-XoneDiscoveredMacs([string]$Text){
 function Set-XoneBridgeBackend([string]$Root,[ValidateSet('cpp','python')][string]$Backend){
     if($Backend -eq 'cpp' -and -not [IO.File]::Exists((Join-Path $Root 'outputs/xone-probe-cpp.exe'))){throw 'This installation does not include the C++ bridge.'}
     $path=Join-Path $Root 'config/devices.local.json'
-    [void](Read-XoneDeviceConfig $path)
+    [void](Read-XoneDeviceConfig $path -AllowEmpty)
     $value=Read-XoneJson $path
     if(-not $value){throw 'Save the device configuration before choosing a bridge.'}
     $value | Add-Member -NotePropertyName BridgeBackend -NotePropertyValue $Backend -Force
     Write-XoneJson $path $value
+}
+function Initialize-XoneApplication([string]$Root,[string]$InstanceId){
+    $InstanceId=Resolve-XoneAdapterInstance $InstanceId
+    $path=Join-Path $Root 'config/devices.local.json'
+    $config=Read-XoneJson $path
+    if($config){
+        [void](Read-XoneDeviceConfig $path -AllowEmpty)
+        if($config.AdapterInstanceId -and $config.AdapterInstanceId -ne $InstanceId){throw 'This configuration belongs to a different adapter. Select it or use Advanced settings.'}
+    }
+    $service=(Get-PnpDeviceProperty -InstanceId $InstanceId -KeyName DEVPKEY_Device_Service).Data
+    if($service -notin @('mt7612US','WinUSB')){throw 'The adapter uses an unsupported driver. Open Advanced settings to inspect it.'}
+    Stop-XoneManagedBridge $Root;Assert-XoneRadioIdle
+    Initialize-XonePrerequisites $Root
+    $switched=$false
+    if($service -eq 'mt7612US'){
+        & (Join-Path $Root 'scripts/Switch-WinUSB.ps1') -Mode Bind -InstanceId $InstanceId
+        $switched=$true
+    }elseif($service -ne 'WinUSB'){throw 'The adapter uses an unsupported driver. Open Advanced settings to inspect it.'}
+    $reconnect=$false
+    if($switched){
+        & "$env:windir\System32\pnputil.exe" /restart-device $InstanceId | Out-Null
+        $reconnect=$LASTEXITCODE -notin @(0,3010)
+        if($LASTEXITCODE -eq 3010){throw 'Windows requires a restart to finish adapter setup. Restart and reopen the app.'}
+    }
+    if(-not $config){$config=[pscustomobject]@{Version=1;AdapterInstanceId=$InstanceId;BridgeBackend='cpp';Devices=@()}}
+    $config.AdapterInstanceId=$InstanceId
+    if(-not $config.BridgeBackend){$config | Add-Member -NotePropertyName BridgeBackend -NotePropertyValue cpp -Force}
+    Write-XoneJson $path $config
+    Write-XoneJson (Join-Path $Root 'work/application-setup.json') @{Complete=$true;ReconnectRequired=$reconnect;UpdatedUtc=[datetime]::UtcNow.ToString('o')}
+    return [pscustomobject]@{ReconnectRequired=$reconnect}
+}
+function Add-XoneApplicationDevice([string]$Root,[string]$InstanceId,[ValidateSet('controller-0b12-usb.json','headset-0b17-usb.json','headset-0b32-usb.json')][string]$Profile){
+    $path=Join-Path $Root 'config/devices.local.json'
+    $config=Read-XoneDeviceConfig $path -AllowEmpty
+    $InstanceId=Resolve-XoneAdapterInstance $InstanceId
+    if($config.AdapterInstanceId -and $config.AdapterInstanceId -ne $InstanceId){throw 'Select the adapter saved by this application.'}
+    Stop-XoneManagedBridge $Root;Assert-XoneRadioIdle
+    if(-not (Test-XoneFirmware $Root)){throw 'Complete adapter setup first.'}
+    if((Get-PnpDeviceProperty -InstanceId $InstanceId -KeyName DEVPKEY_Device_Service).Data -ne 'WinUSB'){throw 'Complete adapter setup first.'}
+    $stamp=[guid]::NewGuid().ToString('N');$stop=Join-Path $Root ('work/enroll-'+$stamp+'.stop');$log=Join-Path $Root ('work/enroll-'+$stamp+'.log');$errorLog=Join-Path $Root ('work/enroll-'+$stamp+'.err')
+    $arguments='controller-test --instance '+(Quote-XonePath $InstanceId)+' --firmware '+(Quote-XonePath (Join-Path $Root 'work/firmware/FW_ACC_00U.bin'))+' --seconds 90 --stop-file '+(Quote-XonePath $stop)
+    $process=Start-Process -FilePath (Join-Path $Root 'outputs/xone-probe.exe') -ArgumentList $arguments -WorkingDirectory $Root -WindowStyle Hidden -RedirectStandardOutput $log -RedirectStandardError $errorLog -PassThru
+    $found=$null;$stream=$null;$reader=$null
+    try{
+        $deadline=[datetime]::UtcNow.AddSeconds(90);$observed=@{};$pendingText=''
+        while(-not $process.HasExited -and [datetime]::UtcNow -lt $deadline){
+            if(-not $reader -and [IO.File]::Exists($log)){$stream=[IO.FileStream]::new($log,[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete));$reader=[IO.StreamReader]::new($stream)}
+            if($reader){
+                $pendingText+=$reader.ReadToEnd()
+                $lastNewline=$pendingText.LastIndexOf("`n")
+                $completeText=if($lastNewline -ge 0){$pendingText.Substring(0,$lastNewline+1)}else{''}
+                $pendingText=if($lastNewline -ge 0){$pendingText.Substring($lastNewline+1)}else{$pendingText}
+                if($pendingText.Length -gt 131072){throw 'Malformed enrollment output. Restart the adapter and try again.'}
+                foreach($line in ($completeText -split "`n")){
+                    foreach($mac in @(Get-XoneDiscoveredMacs $line)){if($mac -notin @($config.Devices.Mac)){$observed[$mac]=$true}}
+                }
+            }
+            if($observed.Count -gt 1){throw 'More than one new device was found. Turn off the other Xbox devices and try again.'}
+            if($observed.Count -eq 1){$found=@($observed.Keys)[0];break}
+            Start-Sleep -Milliseconds 250;$process.Refresh()
+        }
+        if(-not $found){throw 'No new device connected. Turn on pairing on the selected device and press the adapter pairing button, then try again.'}
+    }finally{
+        if($reader){$reader.Dispose()}elseif($stream){$stream.Dispose()}
+        [IO.File]::WriteAllText($stop,'stop')
+        if(-not $process.WaitForExit(10000)){$process.Kill();$process.WaitForExit();throw 'The enrollment radio session did not stop cleanly. Reconnect the adapter before retrying.'}
+    }
+    if($process.ExitCode -ne 0){throw 'The radio session failed. Reconnect the adapter and retry; your saved devices were preserved.'}
+    $name=switch($Profile){'controller-0b12-usb.json'{'controller'};'headset-0b17-usb.json'{'older-headset'};'headset-0b32-usb.json'{'newer-headset'}}
+    $original=Read-XoneJson $path
+    $entries=@($original.Devices | Where-Object {$_.Profile -ne $Profile})+@([pscustomobject]@{Name=$name;Mac=$found;Profile=$Profile})
+    Set-XoneSetupConfig $Root $InstanceId $entries
 }
 function Restore-XoneForRemoval([string]$Root){
     Assert-XonePanelClosed $Root

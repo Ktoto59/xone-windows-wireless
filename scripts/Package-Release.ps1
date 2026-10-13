@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 [CmdletBinding()]
-param([ValidatePattern('^\d+\.\d+\.\d+(?:-[a-z0-9.]+)?$')][string]$Version='0.1.0-alpha.3')
+param([ValidatePattern('^\d+\.\d+\.\d+(?:-[a-z0-9.]+)?$')][string]$Version='0.1.0-alpha.4',
+      [string]$LauncherDir='')
 $ErrorActionPreference='Stop'
 $taskRoot=Split-Path -Parent $PSScriptRoot
 $taskDist=Join-Path $taskRoot 'dist'
@@ -23,6 +24,7 @@ try{
     [void][IO.Directory]::CreateDirectory($taskOutput)
     foreach($taskBinary in @('xone-probe.exe','xone-probe-cpp.exe','xone-background.exe','xone-bind.exe','native-gip-probe.exe','native-audio-probe.exe','audio-endpoint-test.exe','usb-reference-dump.exe','etw-trace-dump.exe','protocol-tests.exe','session-tests.exe','xone-control.exe')){
         $taskSource=Join-Path $taskRoot ('outputs/'+$taskBinary)
+        if($LauncherDir -and $taskBinary -in @('xone-control.exe','xone-background.exe')){$taskSource=Join-Path $LauncherDir $taskBinary}
         if(-not (Test-Path -LiteralPath $taskSource)){throw ('Missing release binary: '+$taskBinary)}
         Copy-Item -LiteralPath $taskSource -Destination $taskOutput
     }

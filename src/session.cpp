@@ -2,6 +2,7 @@
 // Port of xone transport/dongle.c, Copyright (C) 2021 Severin von Wnuck-Lipinski.
 #include "session.hpp"
 #include "headset_audio.hpp"
+#include "radio_audio_clock.hpp"
 #include <iostream>
 #include <stdexcept>
 #include <algorithm>
@@ -74,11 +75,8 @@ struct Session::Client {
         uint64_t audio_received=0,audio_silence=0;
         uint64_t audio_playback=0,audio_capture=0;
         bool audio_connected=false;
-        std::chrono::steady_clock::time_point audio_last{};
-        std::chrono::steady_clock::time_point audio_sent_at{};
+        RadioAudioClock audio_clock;
         bool audio_allowed() const{return radio.encrypted || pc_auth_opt_out;}
-        uint64_t audio_tx=0,audio_late=0,audio_resets=0;
-        int64_t audio_interval_min=INT64_MAX,audio_interval_max=0,audio_write_max=0;
         Logical(Client &c,uint8_t client_id):radio(c),id(client_id),link(id,[this](const GipPacket &p){radio.transmit(p);},[this](const GipPacket &p){dispatch(p);}),
             auth([this](std::span<const uint8_t> b,bool ack){link.send(6,b,ack);},[this](std::span<const uint8_t> key){
                 if(id) throw std::runtime_error("Encryption requested by accessory");
@@ -135,8 +133,11 @@ struct Session::Client {
                         constexpr std::array<uint8_t,16> pc_opt_out{0x77,0xce,0x34,0x7a,0xe2,0x7d,0xc6,0x45,0x8c,0xa4,0,0x42,0xc0,0x8b,0xd9,0x4a};
                         const auto interfaces=identification_interfaces(p.payload);
                         pc_auth_opt_out=!id && vendor==0x045e && product==0x0b32 && std::find(interfaces.begin(),interfaces.end(),pc_opt_out)!=interfaces.end();
-                        if(pc_auth_opt_out){auth_stage="pc-opt-out";std::cout<<"HEADSET PC AUTH OPT OUT WCID="<<unsigned(radio.wcid)<<" plaintext_audio=1\n";}
-                        const auto formats=identification_audio_formats(p.payload);
+                        if(pc_auth_opt_out){auth_failed=false;auth_stage="pc-opt-out";std::cout<<"HEADSET PC AUTH OPT OUT WCID="<<unsigned(radio.wcid)<<" plaintext_audio=1\n";}
+                        auto formats=identification_audio_formats(p.payload);
+                        // Synthetic Windows audio consumes mono 24k and stereo 48k.
+                        // Prefer this supported pair over the headset's legacy 16k chat mode.
+                        std::stable_sort(formats.begin(),formats.end(),[](const auto &a,const auto &b){return (a==std::array<uint8_t,2>{9,16})>(b==std::array<uint8_t,2>{9,16});});
                         for(const auto &f:formats)std::cout<<"AUDIO SUPPORTED WCID="<<unsigned(radio.wcid)<<" client="<<unsigned(id)<<" in="<<unsigned(f[0])<<" out="<<unsigned(f[1])<<"\n";
                         // Standalone/headset-jack PCM only; legacy chat-headset formats are separate.
                         for(const auto &f:formats){
@@ -150,7 +151,7 @@ struct Session::Client {
                     break;
                 }
                 case 6:
-                    if(auth_failed)break;
+                    if(auth_failed || pc_auth_opt_out)break;
                     if(p.payload.size()>=10 && !(p.payload[1]&1) && (p.payload[6]==2 || p.payload[6]==0x22))
                         std::cout<<"AUTH HELLO RX WCID="<<unsigned(radio.wcid)<<" outer_command="<<unsigned(p.payload[3])<<" command="<<unsigned(p.payload[6])<<" version="<<unsigned(p.payload[7])<<" declared="<<((unsigned(p.payload[8])<<8)|p.payload[9])<<" packet="<<p.payload.size()<<'\n';
                     try{
@@ -167,9 +168,10 @@ struct Session::Client {
                 case 8:
                     if(audio){audio->receive(p.payload,std::chrono::steady_clock::now());std::cout<<"AUDIO CONTROL RX WCID="<<unsigned(radio.wcid)<<" client="<<unsigned(id)<<" data="<<hex(p.payload)<<" stage="<<audio->stage_name()<<"\n";}break;
                 case 0x60:
-                    if(audio && p.payload.size()>=2){
-                        ++audio_received;if(audio_received==1 || audio_received%125==0)std::cout<<"AUDIO RX WCID="<<unsigned(radio.wcid)<<" client="<<unsigned(id)<<" packets="<<audio_received<<" bytes="<<p.payload.size()-2<<"\n";
-                        if(audio_connected && audio_allowed() && p.payload.size()==386){radio.owner.audio_output_->capture(radio.wcid,id,std::span(p.payload).subspan(2));++audio_capture;}
+                    if(audio && audio_clock.receive(p.payload)){
+                        ++audio_received;
+                        if(radio.owner.trace_ && (audio_received==1 || audio_received%125==0))std::cout<<"AUDIO RX WCID="<<unsigned(radio.wcid)<<" client="<<unsigned(id)<<" packets="<<audio_received<<" bytes="<<p.payload.size()-2<<"\n";
+                        if(audio_connected && audio_allowed()){radio.owner.audio_output_->capture(radio.wcid,id,std::span(p.payload).subspan(2));++audio_capture;}
                     }break;
                 default: break;
                 }
@@ -185,30 +187,18 @@ struct Session::Client {
             if(!audio)return;
             const auto before=audio->stage();audio->tick(now);
             if(before!=audio->stage())std::cout<<"AUDIO STAGE WCID="<<unsigned(radio.wcid)<<" client="<<unsigned(id)<<" stage="<<audio->stage_name()<<"\n";
-            if(auth_failed || audio->stage()!=HeadsetAudio::Stage::streaming || !audio_allowed() || now<audio_last)return;
+            if(auth_failed || audio->stage()!=HeadsetAudio::Stage::streaming || !audio_allowed())return;
             if(!audio_connected && radio.owner.audio_output_ && audio->input().code==9 && audio->output().code==16){
-                radio.owner.audio_output_->connect(radio.wcid,id);audio_connected=true;audio_last=std::chrono::steady_clock::now();
+                radio.owner.audio_output_->connect(radio.wcid,id);audio_connected=true;
             }
-            // One unfragmented PCM packet per 8ms on the dongle audio queue, like upstream.
+            if(!audio_clock.take())return;
+            // Send on the physical headset clock, as in the working USB/GIP path.
             // Replace missing playback blocks with silence; microphone data is never saved.
             Bytes samples;if(audio_connected)samples=radio.owner.audio_output_->playback(radio.wcid,id);
             if(samples.empty()){samples.resize(audio->output().interval_bytes);++audio_silence;}else ++audio_playback;
             GipPacket pcm{0x60,static_cast<uint8_t>(32|id),audio_sequence++,0,std::move(samples)};
             if(!audio_sequence)audio_sequence=1;
-            const auto sent_at=std::chrono::steady_clock::now();
-            if(audio_sent_at!=std::chrono::steady_clock::time_point{}){
-                const auto interval=std::chrono::duration_cast<std::chrono::microseconds>(sent_at-audio_sent_at).count();
-                audio_interval_min=std::min(audio_interval_min,interval);audio_interval_max=std::max(audio_interval_max,interval);
-            }
-            if(sent_at-audio_last>std::chrono::milliseconds(2))++audio_late;
-            audio_sent_at=sent_at;radio.transmit(pcm,true);++audio_tx;
-            audio_write_max=std::max(audio_write_max,std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()-sent_at).count());
-            audio_last+=std::chrono::milliseconds(8);
-            if(now-audio_last>std::chrono::milliseconds(16)){audio_last=now+std::chrono::milliseconds(8);++audio_resets;}
-            if(audio_tx%125==0){
-                std::cout<<"AUDIO TIMING WCID="<<unsigned(radio.wcid)<<" tx="<<audio_tx<<" interval_min_us="<<audio_interval_min<<" interval_max_us="<<audio_interval_max<<" write_max_us="<<audio_write_max<<" late="<<audio_late<<" clock_resets="<<audio_resets<<" silence="<<audio_silence<<'\n';
-                audio_interval_min=INT64_MAX;audio_interval_max=0;audio_write_max=0;
-            }
+            radio.transmit(pcm,true);
         }
     };
     std::array<std::unique_ptr<Logical>,16> logical;
@@ -221,13 +211,24 @@ struct Session::Client {
 };
 Session::Session(xone_mt76 &mt,InputOutput *output,bool trace,AudioOutput *audio_output,RawGipOutput *raw_output):mt_(mt),output_(output),audio_output_(audio_output),raw_output_(raw_output),trace_(trace) {}
 Session::~Session()=default;
+void Session::enable_native_reconnect(){native_reconnect_=true;}
+void Session::remember_peer(std::span<const uint8_t> address){
+    if(address.size()!=6 || std::all_of(address.begin(),address.end(),[](uint8_t b){return !b;}))throw std::runtime_error("Invalid native peer address");
+    if(std::any_of(native_peers_.begin(),native_peers_.end(),[&](const auto &p){return std::equal(p.begin(),p.end(),address.begin(),address.end());}))return;
+    if(native_peers_.size()>=16)throw std::runtime_error("Native peer table full");
+    native_peers_.emplace_back(address.begin(),address.end());
+}
+std::vector<std::string> Session::known_peers()const{std::vector<std::string> out;for(const auto &p:native_peers_)out.push_back(hex(p));return out;}
+bool Session::known_peer(std::span<const uint8_t> address)const{
+    return (raw_output_ && raw_output_->target(address)) || (native_reconnect_ && std::any_of(native_peers_.begin(),native_peers_.end(),[&](const auto &p){return std::equal(p.begin(),p.end(),address.begin(),address.end());}));
+}
 void Session::check(int result,const char *operation) { if(result || mt_.udev->sticky_error) throw std::runtime_error(std::string(operation)+" failed: "+std::to_string(mt_.udev->sticky_error?mt_.udev->sticky_error:result)); }
 void Session::pairing(bool enabled) {
     if(pairing_==enabled) return;
     // Configured USB peers may re-enroll after power-on instead of remembering
     // their radio association. Advertise discovery but keep manual enrollment
     // separate: only configured addresses receive automatic pair responses.
-    check(xone_mt76_set_pairing(&mt_,enabled || raw_output_),"Pairing beacon"); pairing_=enabled;
+    check(xone_mt76_set_pairing(&mt_,enabled || raw_output_ || (native_reconnect_ && !native_peers_.empty())),"Pairing beacon"); pairing_=enabled;
     std::cout<<"PAIRING "<<(enabled?"ON":"OFF")<<"\n";
     const bool connected=std::any_of(clients_.begin(),clients_.end(),[](const auto &p){return bool(p);});
     check(xone_mt76_set_led_mode(&mt_,enabled?XONE_MT_LED_BLINK:connected?XONE_MT_LED_ON:XONE_MT_LED_OFF),"Adapter LED");
@@ -254,8 +255,8 @@ void Session::recover_raw_client(uint8_t wcid,std::chrono::steady_clock::time_po
     client->associated_at=now;client->raw_recovery_attempts=attempt;
     check(xone_mt76_associate_client(&mt_,wcid,client->address.data()),"Recover association");
     clients_[wcid-1]=std::move(client);
-    raw_output_->event(1,wcid,address);
-    std::cout<<"RAW SESSION RECOVERY WCID="<<unsigned(wcid)<<" attempt="<<attempt<<'\n';
+    if(raw_output_ && raw_output_->target(address))raw_output_->event(1,wcid,address);
+    std::cout<<"SESSION RECOVERY WCID="<<unsigned(wcid)<<" attempt="<<attempt<<'\n';
 }
 void Session::process(const RadioEvent &e,std::chrono::steady_clock::time_point now) {
     if(e.kind==RadioEvent::Kind::association || e.kind==RadioEvent::Kind::gip || e.kind==RadioEvent::Kind::client_command)
@@ -269,10 +270,11 @@ void Session::process(const RadioEvent &e,std::chrono::steady_clock::time_point 
         pair_deadline_=pair_scan_last_+std::chrono::seconds(60);break;
     case RadioEvent::Kind::association: {
         if(raw_output_ && !pairing_ && !output_ && !audio_output_ && !raw_output_->target(e.address))return;
+        if(native_reconnect_ && !pairing_ && !known_peer(e.address))return;
         for(const auto &c:clients_) if(c && c->address==e.address) {
             // Debounce immediate WLAN retries. A later association from a known
             // USB peer must not inherit the previous Windows/GIP generation.
-            if(raw_output_ && raw_output_->target(e.address) &&
+            if(known_peer(e.address) &&
                now-c->associated_at>=std::chrono::seconds(1) &&
                (c->raw_gip_seen || c->raw_recovery_attempts<3))recover_raw_client(c->wcid,now);
             return;
@@ -290,7 +292,7 @@ void Session::process(const RadioEvent &e,std::chrono::steady_clock::time_point 
     case RadioEvent::Kind::lost: case RadioEvent::Kind::disassociation: remove(e.wcid); break;
     case RadioEvent::Kind::client_command:
         if(e.command==1)std::cout<<"PAIR REQUEST MAC="<<hex(e.address)<<" enabled="<<pairing_<<"\n";
-        if(e.command==1 && (pairing_ || (raw_output_ && raw_output_->target(e.address)))) {
+        if(e.command==1 && (pairing_ || known_peer(e.address))) {
             // Upstream answers PAIR_REQ outside the button window as well.
             // Limit automatic re-enrollment here to explicitly configured peers;
             // unknown devices still require the adapter pairing button.
@@ -301,7 +303,7 @@ void Session::process(const RadioEvent &e,std::chrono::steady_clock::time_point 
             for(uint8_t w=1;w<=16;++w)if(clients_[w-1] && clients_[w-1]->address==e.address){
                 std::cout<<"REPAIR RESET WCID="<<unsigned(w)<<" MAC="<<hex(e.address)<<'\n';remove(w);break;
             }
-            auto mac=e.address;check(xone_mt76_pair_client(&mt_,mac.data()),"Pair response");pairing(false);
+            auto mac=e.address;check(xone_mt76_pair_client(&mt_,mac.data()),"Pair response");if(native_reconnect_)remember_peer(mac);pairing(false);
             // Discovery must not leave this channel before the peer completes
             // re-enrollment. The old headset can take longer than one scan dwell.
             association_pending_until_=now+std::chrono::seconds(10);
@@ -324,7 +326,7 @@ void Session::process(const RadioEvent &e,std::chrono::steady_clock::time_point 
                 if(!packets.empty())clients_[e.wcid-1]->raw_gip_seen=true;
                 // Audio has a separate IPC type and never enters interrupt IN.
                 for(const auto &p:packets)raw_output_->event(p.command==0x60?4:2,e.wcid,encode_gip(p));
-            }else for(const auto &p:parse_gip(e.payload)) clients_[e.wcid-1]->receive(p);
+            }else {const auto packets=parse_gip(e.payload);if(!packets.empty())clients_[e.wcid-1]->raw_gip_seen=true;for(const auto &p:packets)clients_[e.wcid-1]->receive(p);}
         }break;
     default: break;
     }
@@ -350,13 +352,13 @@ void Session::tick(std::chrono::steady_clock::time_point now) {
     // No global firmware reset/channel change: other controllers/audio keep going.
     for(uint8_t w=1;w<=16;++w){
         const auto &c=clients_[w-1];
-        if(c && raw_output_ && raw_output_->target(c->address) && !c->raw_gip_seen &&
+        if(c && known_peer(c->address) && !c->raw_gip_seen &&
            c->raw_recovery_attempts<3 && now-c->associated_at>=std::chrono::seconds(5))
             recover_raw_client(w,now);
     }
     if(pairing_ && now>=pair_deadline_)pairing(false);
     // Scan only with an empty client table: changing channel during auth/audio breaks it.
-    if((pairing_ || raw_output_) && now>=association_pending_until_ && now-pair_scan_last_>=std::chrono::seconds(2) &&
+    if((pairing_ || raw_output_ || (native_reconnect_ && !native_peers_.empty())) && now>=association_pending_until_ && now-pair_scan_last_>=std::chrono::seconds(2) &&
        std::none_of(clients_.begin(),clients_.end(),[](const auto &c){return bool(c);})){
         const auto next=(pair_scan_index_+1)%XONE_MT_NUM_CHANNELS;
         auto &channel=mt_.channels[next];
@@ -398,7 +400,7 @@ bool Session::audio_active() const {
 }
 void Session::close() {
     pairing(false);
-    if(raw_output_)check(xone_mt76_set_pairing(&mt_,false),"Reconnect beacon cleanup");
+    if(raw_output_ || native_reconnect_)check(xone_mt76_set_pairing(&mt_,false),"Reconnect beacon cleanup");
     for(uint8_t w=1;w<=16;++w) {
         if(clients_[w-1] && clients_[w-1]->encrypted)try{clients_[w-1]->rumble(0,0);}catch(...){}
         remove(w);

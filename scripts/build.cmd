@@ -45,7 +45,7 @@ if errorlevel 1 exit /b 1
 copy /y outputs\xone-probe.exe outputs\xone-probe-cpp.exe >nul
 cl /nologo /std:c++20 /EHsc /W4 /WX /utf-8 src\native_gip_probe.cpp build\native_gip_output.obj build\input_mapping.obj /Fobuild\native_gip_probe.obj /Feoutputs\native-gip-probe.exe /link xinput.lib runtimeobject.lib user32.lib
 if errorlevel 1 exit /b 1
-cl /nologo /std:c++20 /EHsc /W4 /WX /utf-8 src\native_audio_probe.cpp /Fobuild\native_audio_probe.obj /Feoutputs\native-audio-probe.exe /link ole32.lib uuid.lib propsys.lib
+cl /nologo /std:c++20 /EHsc /O2 /W4 /WX /utf-8 src\native_audio_probe.cpp /Fobuild\native_audio_probe.obj /Feoutputs\native-audio-probe.exe /link ole32.lib uuid.lib propsys.lib avrt.lib
 if errorlevel 1 exit /b 1
 cl /nologo /std:c++20 /EHsc /W4 /WX /utf-8 src\audio_endpoint_test.cpp /Fobuild\audio_endpoint_test.obj /Feoutputs\audio-endpoint-test.exe /link ole32.lib uuid.lib
 if errorlevel 1 exit /b 1

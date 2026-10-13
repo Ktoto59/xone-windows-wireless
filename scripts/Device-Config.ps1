@@ -9,12 +9,12 @@ function Resolve-XoneAdapterInstance([string]$InstanceId=''){
     if($taskAdapters.Count -ne 1){throw 'Expected exactly one external 045E:02FE adapter. Provide -InstanceId or AdapterInstanceId when more than one is connected.'}
     return $taskAdapters[0].InstanceId
 }
-function Read-XoneDeviceConfig([string]$Path){
+function Read-XoneDeviceConfig([string]$Path,[switch]$AllowEmpty){
     if(-not [IO.File]::Exists($Path)){throw 'Create config/devices.local.json first; see README.md and config/devices.example.json.'}
     $taskConfig=[IO.File]::ReadAllText($Path) | ConvertFrom-Json
     if($taskConfig.Version -ne 1){throw 'Unsupported device configuration version.'}
     $taskEntries=@($taskConfig.Devices)
-    if($taskEntries.Count -lt 1 -or $taskEntries.Count -gt 3){throw 'Configure between one and three radio devices.'}
+    if(($taskEntries.Count -lt 1 -and -not $AllowEmpty) -or $taskEntries.Count -gt 3){throw 'Configure between one and three radio devices.'}
     $taskNames=@{};$taskMacs=@{};$taskProfiles=@{};$taskIndex=0;$taskDevices=@()
     foreach($taskEntry in $taskEntries){
         $taskName=[string]$taskEntry.Name

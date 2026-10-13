@@ -48,7 +48,10 @@ try{
             $taskStatus.WorkerActive=[bool]($taskState -and (Test-XoneProcess $taskState.Worker))
             $taskStatus.RadioActive=[bool]($taskState -and (Test-XoneProcess $taskState.Radio))
             $taskStatus.DevicesReady=@()
-            $taskConfig=Read-XoneDeviceConfig (Join-Path $taskRoot 'config/devices.local.json')
+            $taskConfigPath=Join-Path $taskRoot 'config/devices.local.json'
+            if(-not [IO.File]::Exists($taskConfigPath)){Save-MaintenanceStatus 'WaitingForSetup';Start-Sleep -Milliseconds 2000;continue}
+            $taskConfig=Read-XoneDeviceConfig $taskConfigPath -AllowEmpty
+            if(-not $taskConfig.Devices.Count){Save-MaintenanceStatus 'WaitingForDevices';Start-Sleep -Milliseconds 2000;continue}
             $taskAdapter=$null
             if($taskConfig.AdapterInstanceId){$taskAdapter=[Xone.AdapterHealth]::Read($taskConfig.AdapterInstanceId)}
             else{$taskAdapter=[Xone.AdapterHealth]::Find()}

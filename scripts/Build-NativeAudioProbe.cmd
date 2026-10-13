@@ -7,7 +7,7 @@ call "%XONE_AUDIO_VS%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
 if errorlevel 1 exit /b 1
 if not exist build mkdir build
 if not exist outputs mkdir outputs
-cl /nologo /std:c++20 /EHsc /W4 /WX /utf-8 src\native_audio_probe.cpp /Fobuild\native_audio_probe.obj /Feoutputs\native-audio-probe.exe /link ole32.lib uuid.lib propsys.lib
+cl /nologo /std:c++20 /EHsc /O2 /W4 /WX /utf-8 src\native_audio_probe.cpp /Fobuild\native_audio_probe.obj /Feoutputs\native-audio-probe.exe /link ole32.lib uuid.lib propsys.lib avrt.lib
 set "XONE_AUDIO_RESULT=%errorlevel%"
 popd
 exit /b %XONE_AUDIO_RESULT%

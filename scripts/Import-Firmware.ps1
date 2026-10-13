@@ -6,7 +6,11 @@ $taskRoot=Split-Path -Parent $PSScriptRoot
 $taskExpected='48084d9fa53b9bb04358f3bb127b7495dc8f7bb0b3ca1437bd24ef2b6eabdf66'
 if($Path){$taskCandidates=@(Get-Item -LiteralPath $Path)}else{
     $taskStore=Join-Path $env:windir 'System32/DriverStore/FileRepository'
-    $taskCandidates=@(Get-ChildItem -LiteralPath $taskStore -Filter FW_ACC_00U.bin -File -Recurse -ErrorAction SilentlyContinue)
+    $taskCandidates=@(Get-Item -LiteralPath (Join-Path $env:windir 'System32/drivers/FW_ACC_00U.bin') -ErrorAction SilentlyContinue)
+    if(-not $taskCandidates.Count){
+        $taskDriverFolders=@(Get-ChildItem -LiteralPath $taskStore -Directory -Filter 'mt7612us.inf_*' -ErrorAction SilentlyContinue)
+        $taskCandidates=@($taskDriverFolders | ForEach-Object {Get-Item -LiteralPath (Join-Path $_.FullName 'FW_ACC_00U.bin') -ErrorAction SilentlyContinue})
+    }
 }
 $taskMatch=$null
 foreach($taskCandidate in $taskCandidates){

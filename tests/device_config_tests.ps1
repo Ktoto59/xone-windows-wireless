@@ -19,6 +19,11 @@ try{
     $taskCppPath=Join-Path $taskDirectory 'cpp.json'
     [IO.File]::WriteAllText($taskCppPath,($taskCpp | ConvertTo-Json -Depth 5))
     Check ((Read-XoneDeviceConfig $taskCppPath).BridgeBackend -eq 'cpp') 'C++ backend selection rejected'
+    $taskEmptyPath=Join-Path $taskDirectory 'empty.json'
+    [IO.File]::WriteAllText($taskEmptyPath,(@{Version=1;AdapterInstanceId='';BridgeBackend='cpp';Devices=@()} | ConvertTo-Json))
+    Check ((Read-XoneDeviceConfig $taskEmptyPath -AllowEmpty).Devices.Count -eq 0) 'Fresh first-run setup requires a device before pairing'
+    $taskRejected=$false;try{[void](Read-XoneDeviceConfig $taskEmptyPath)}catch{$taskRejected=$true}
+    Check $taskRejected 'A radio launcher accepted an empty mapping without AllowEmpty'
     foreach($taskCase in @('duplicate-mac','duplicate-profile','profile-traversal','invalid-name','invalid-mac','invalid-backend')){
         $taskBad=[IO.File]::ReadAllText($taskPath) | ConvertFrom-Json
         switch($taskCase){

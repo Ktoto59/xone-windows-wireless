@@ -33,6 +33,9 @@ class Session {
     AudioOutput *audio_output_;
     RawGipOutput *raw_output_;
     bool trace_;
+    bool native_reconnect_=false;
+    std::vector<Bytes> native_peers_;
+    bool known_peer(std::span<const uint8_t> address) const;
     std::array<std::unique_ptr<Client>,16> clients_;
     bool pairing_=false;
     std::chrono::steady_clock::time_point pair_deadline_;
@@ -49,6 +52,9 @@ public:
     ~Session();
     void process(const RadioEvent &event,std::chrono::steady_clock::time_point now=std::chrono::steady_clock::now());
     void start_reconnect_window();
+    void enable_native_reconnect();
+    void remember_peer(std::span<const uint8_t> address);
+    std::vector<std::string> known_peers() const;
     void tick(std::chrono::steady_clock::time_point now=std::chrono::steady_clock::now());
     void close();
     uint64_t inputs() const { return inputs_; }

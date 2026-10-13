@@ -7,6 +7,7 @@
 #include "headset_audio.hpp"
 #include "audio_ipc.hpp"
 #include "synthetic_audio.hpp"
+#include "radio_audio_clock.hpp"
 #include <iostream>
 #include <stdexcept>
 #include <cstring>
@@ -361,8 +362,30 @@ int main() {
             e.kind=RadioEvent::Kind::gip;session.process(e,now+std::chrono::seconds(2));const auto count=raw.events.size();
             session.tick(now+std::chrono::seconds(100));check(raw.events.size()==count,"Idle peer was treated as failed handshake");session.close();
         });
+        test("Native render follows valid headset credits and never catches up in bursts",[]{
+            RadioAudioClock clock;check(!clock.take(),"Audio started without a physical clock");
+            Bytes pcm(386);check(!clock.receive(pcm) && !clock.take(),"Wrong PCM layout produced a credit");pcm[1]=6;
+            check(clock.receive(pcm) && clock.take() && !clock.take(),"A valid frame did not produce exactly one block");
+            for(unsigned i=0;i<20;++i)check(clock.receive(pcm),"Valid frame rejected");
+            check(clock.take() && !clock.take(),"Delayed audio burst after a radio stall");
+            pcm.pop_back();check(!clock.receive(pcm) && !clock.take(),"Truncated PCM produced a credit");
+        });
+        test("Direct GIP reconnects saved peers without a USB profile and isolates recovery",[]{
+            usb_device usb{};device dev{};xone_mt76 mt{};mt.dev=&dev;mt.udev=&usb;mt.channel=&mt.channels[0];mt.channel->index=165;
+            usb.control=[](void *,u8,u8 type,u16,u16,void *data,u16 n,unsigned)->int{if(type&128)std::memset(data,0,n);return n;};
+            usb.bulk=[](void *,u8,void *,int n,int *actual,unsigned)->int{if(actual)*actual=n;return 0;};
+            Session session(mt);session.enable_native_reconnect();const Bytes a{2,0,0,0,0,1},b{2,0,0,0,0,2};session.remember_peer(a);session.remember_peer(b);session.remember_peer(a);
+            check(session.known_peers().size()==2,"Saved peer duplicated");rejects([&]{session.remember_peer(Bytes(6));});
+            RadioEvent e;e.kind=RadioEvent::Kind::association;e.address={4,0,0,0,0,1};const auto now=std::chrono::steady_clock::now();session.process(e,now);
+            check(session.status().empty(),"Unknown native peer bypassed manual pairing");e.address=a;session.process(e,now);e.address=b;session.process(e,now);
+            e.kind=RadioEvent::Kind::gip;e.wcid=2;e.payload=encode_gip({2,32,1,0,{}});session.process(e,now);
+            session.tick(now+std::chrono::seconds(5));check(session.status().size()==2,"Silent native recovery removed a sibling");
+            e.kind=RadioEvent::Kind::client_command;e.command=1;e.address=a;session.process(e,now+std::chrono::seconds(6));
+            check(session.status().size()==1 && session.status()[0].wcid==2,"Native re-enrollment did not clear only its own session");
+            e.kind=RadioEvent::Kind::association;session.process(e,now+std::chrono::seconds(7));check(session.status().size()==2,"Saved direct peer could not reconnect");session.close();
+        });
         test("Headset PC opt-out requires exact model and GUID, never installs encryption",[]{
-            for(unsigned scenario=0;scenario<3;++scenario){
+            for(unsigned scenario=0;scenario<5;++scenario){
                 struct Output final:AudioOutput{
                     unsigned connections=0,captures=0,playbacks=0;
                     void connect(uint8_t,uint8_t)override{++connections;}
@@ -378,16 +401,19 @@ int main() {
                 e.kind=RadioEvent::Kind::gip;e.wcid=1;Bytes announce(28);announce[8]=0x5e;announce[9]=4;announce[10]=scenario==1?0x31:0x32;announce[11]=0x0b;
                 auto deliver=[&](uint8_t command,Bytes payload){e.kind=RadioEvent::Kind::gip;e.payload=encode_gip({command,32,1,0,std::move(payload)});session.process(e);};
                 deliver(2,announce);
-                Bytes identify(33);identify[20]=16;identify[32]=1;identify.push_back(9);identify.push_back(16);
-                identify[26]=19;identify.push_back(1);const std::string name="Windows.Xbox.Input.Headset";
+                if(scenario==3)deliver(6,auth_response(2,Bytes{}));
+                Bytes identify(33);identify[20]=16;identify[32]=2;identify.push_back(5);identify.push_back(16);identify.push_back(9);identify.push_back(16);
+                identify[26]=21;identify.push_back(1);const std::string name="Windows.Xbox.Input.Headset";
                 identify.push_back(static_cast<uint8_t>(name.size()));identify.push_back(0);identify.insert(identify.end(),name.begin(),name.end());
                 const auto relative=identify.size()-16;identify[28]=static_cast<uint8_t>(relative);identify[29]=static_cast<uint8_t>(relative>>8);identify.push_back(1);
                 auto guid=unhex("77ce347ae27dc6458ca40042c08bd94a");if(scenario==2)guid.back()^=1;identify.insert(identify.end(),guid.begin(),guid.end());deliver(4,identify);
+                if(scenario==4)deliver(6,auth_response(2,Bytes{}));
                 const auto now=std::chrono::steady_clock::now();session.tick(now+std::chrono::seconds(2));deliver(8,{2,9,16});session.tick(now+std::chrono::seconds(2));deliver(8,{3,4,80,50,70,0,0,0});session.tick(now+std::chrono::seconds(3));
                 const auto status=session.status();check(status.size()==1 && !status[0].encrypted && session.authenticated()==0,"Opt-out fabricated authentication/key");
-                if(!scenario){
-                    check(status[0].authentication=="pc-opt-out" && output.connections==1 && output.playbacks==1 && session.audio_active(),"Exact model/GUID could not stream plaintext audio");
-                    deliver(0x60,Bytes(386));check(output.captures==1,"Plaintext microphone not forwarded");
+                if(!scenario || scenario>=3){
+                    check(status[0].authentication=="pc-opt-out" && output.connections==1 && !output.playbacks && session.audio_active(),"Exact model/GUID did not negotiate 24k audio or sent without a radio clock");
+                    Bytes pcm(386);pcm[1]=6;deliver(0x60,pcm);session.tick(now+std::chrono::seconds(3));check(output.captures==1 && output.playbacks==1,"Physical audio credit or microphone not forwarded");
+                    session.tick(now+std::chrono::seconds(30));check(output.playbacks==1,"Host timer continued sending without radio credits");
                     e.kind=RadioEvent::Kind::client_command;e.command=16;session.process(e);check(!session.status()[0].encrypted && session.authenticated()==0,"Opt-out accepted CCMP without a key");
                 }else check(status[0].authentication=="negotiating" && !output.connections && !session.audio_active(),"Different model/GUID bypassed authentication");
                 session.close();
@@ -485,7 +511,7 @@ int main() {
             const auto relative=identify.size()-16;identify[28]=static_cast<uint8_t>(relative);identify[29]=static_cast<uint8_t>(relative>>8);identify.push_back(1);
             const auto guid=unhex("77ce347ae27dc6458ca40042c08bd94a");identify.insert(identify.end(),guid.begin(),guid.end());deliver(4,identify);
             const auto now=std::chrono::steady_clock::now();session.tick(now+std::chrono::seconds(2));deliver(8,{2,9,16});session.tick(now+std::chrono::seconds(2));deliver(8,{3,4,80,50,70,0,0,0});session.tick(now+std::chrono::seconds(3));
-            deliver(0x60,Bytes(386));check(audio.connects==1 && audio.playbacks==1 && audio.captures==1 && raw.events==1,"Fallback audio disappeared with a raw USB sibling");
+            Bytes pcm(386);pcm[1]=6;deliver(0x60,pcm);session.tick(now+std::chrono::seconds(3));check(audio.connects==1 && audio.playbacks==1 && audio.captures==1 && raw.events==1,"Fallback audio disappeared with a raw USB sibling");
             e.wcid=1;deliver(0x60,Bytes(386));check(raw.events==2 && audio.captures==1,"Raw PCM reached the fallback output");
             e.kind=RadioEvent::Kind::lost;session.process(e);check(session.status().size()==1 && session.status()[0].wcid==2 && session.audio_active(),"Raw disconnect removed fallback audio");
             session.close();

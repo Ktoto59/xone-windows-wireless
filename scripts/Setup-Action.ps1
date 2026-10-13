@@ -1,14 +1,18 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 [CmdletBinding()]
-param([Parameter(Mandatory=$true)][ValidateSet('Prepare','Bind','Restore','Remove','Upgrade','Start','Stop','Discover','AutomaticEnable','AutomaticDisable','UseCpp','UsePython')][string]$Action,
-      [string]$InstanceId='',[string]$ResultPath='',[string]$DiscoveryPath='')
+param([Parameter(Mandatory=$true)][ValidateSet('Prepare','Bind','Restore','Remove','Upgrade','Start','Stop','Discover','AutomaticEnable','AutomaticDisable','UseCpp','UsePython','Configure','Enroll','InitializePreferences')][string]$Action,
+      [string]$InstanceId='',[string]$ResultPath='',[string]$DiscoveryPath='',[string]$Profile='',
+      [ValidateSet('on','off')][string]$Startup='on')
 $ErrorActionPreference='Stop'
 $taskRoot=Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'Setup-Helpers.ps1')
 $taskResult=[ordered]@{Success=$false;Action=$Action;Error=$null}
 try{
     switch($Action){
+        InitializePreferences {Write-XoneJson (Join-Path $taskRoot 'config/app.local.json') @{Version=1;AutoStart=($Startup -eq 'on')}}
         Prepare {Initialize-XonePrerequisites $taskRoot}
+        Configure {$taskResult.ReconnectRequired=(Initialize-XoneApplication $taskRoot $InstanceId).ReconnectRequired}
+        Enroll {Add-XoneApplicationDevice $taskRoot $InstanceId $Profile}
         Bind {
             Stop-XoneManagedBridge $taskRoot;Assert-XoneRadioIdle
             if(-not (Test-XoneFirmware $taskRoot)){throw 'Prepare the dependencies and firmware first.'}
@@ -25,6 +29,10 @@ try{
             if(-not $usbip.Ready){throw 'Prepare USBip before starting the bridge.'}
             if(-not (Test-XoneFirmware $taskRoot)){throw 'Prepare the adapter firmware first.'}
             & (Join-Path $PSScriptRoot 'Set-AutomaticBridge.ps1') -Mode Start
+            # A fresh installation has no profiles until the first Add device.
+            # Its supervisor is ready to wait; a radio process is not needed yet.
+            $configuration=Read-XoneDeviceConfig (Join-Path $taskRoot 'config/devices.local.json') -AllowEmpty
+            if(-not $configuration.Devices.Count){break}
             $deadline=(Get-Date).AddSeconds(20)
             do{
                 Start-Sleep -Milliseconds 200

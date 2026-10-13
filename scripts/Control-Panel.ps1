@@ -82,6 +82,7 @@ $taskForm.ClientSize=[Drawing.Size]::new(790,610);$taskForm.MinimumSize=$taskFor
 $taskForm.StartPosition='CenterScreen';$taskForm.AutoScaleMode='Dpi'
 $title=Add-XoneLabel $taskForm 'Xbox Wireless setup & control' 22 16 740 32
 $title.Font=[Drawing.Font]::new('Segoe UI',16,[Drawing.FontStyle]::Bold)
+[void](Add-XoneButton $taskForm 'Back to app' 610 16 150 {$script:taskReturnHome=$true;$taskForm.Close()})
 [void](Add-XoneLabel $taskForm 'A research preview for the external Xbox Wireless Adapter (045E:02FE).' 24 53 740 26)
 $tabs=[Windows.Forms.TabControl]::new();$tabs.SetBounds(20,90,750,465);$taskForm.Controls.Add($tabs)
 $setup=[Windows.Forms.TabPage]::new('1. Adapter');$devices=[Windows.Forms.TabPage]::new('2. Devices');$bridge=[Windows.Forms.TabPage]::new('3. Start / stop')
@@ -191,3 +192,4 @@ try{
         $timer.Start();[void]$taskForm.ShowDialog()
     }
 }finally{$timer.Stop();$timer.Dispose();$taskForm.Dispose();if($script:taskLock){$script:taskLock.Dispose()}}
+if($script:taskReturnHome){Start-Process -FilePath (Join-Path $taskRoot 'outputs/xone-control.exe') -WindowStyle Hidden}

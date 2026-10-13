@@ -24,6 +24,7 @@ extern "C" {
 #include "latest_snapshot.hpp"
 #include "usbip_native_output.hpp"
 #include "stop_file_watch.hpp"
+#include "audio_scheduling.hpp"
 
 namespace {
 std::atomic_bool interrupted=false;
@@ -57,6 +58,7 @@ void help() {
         "                 [--usb-gip-fallback none|native-gip|vigem]\n"
         "                 [--usb-gip-peer HEX12:PORT] (additional USB radio peer)\n"
         "                 [--cpp-usb-device HEX12:USBPORT:PIDHEX:NAME] (direct C++ route)\n"
+        "                 [--native-peer HEX12] (saved direct GIP peer, up to 16)\n"
         "  xone-probe xinput-rumble --slot 0 [--large 16000] [--small 0] [--seconds 1]\n"
         "  xone-probe decode HEX-USB-PACKET\n"
         "  xone-probe decode-gip HEX-GIP-PACKET\n"
@@ -70,6 +72,7 @@ struct Options {
     uint16_t usb_gip_port=33241;
     std::vector<std::pair<std::wstring,uint16_t>> usb_gip_peers;
     std::vector<NativeRoute> native_routes;
+    std::vector<std::wstring> native_peers;
     unsigned seconds=30;
     unsigned slot=0,large=16000,small_motor=0;
     bool verbose=false,pair=false,virtual_xinput=false;
@@ -113,6 +116,11 @@ Options options(int argc,wchar_t **argv) {
                 for(const auto &r:result.native_routes)if(!_wcsicmp(r.mac.c_str(),mac.c_str()) || r.name==name || r.port==port || r.pid==pid)throw std::runtime_error("Native USB routes must be unique");
                 result.native_routes.push_back({std::move(mac),std::move(name),static_cast<uint16_t>(port),static_cast<uint16_t>(pid)});
             }
+            else if(key==L"--native-peer"){
+                if(result.native_peers.size()>=16 || value.size()!=12 || !std::all_of(value.begin(),value.end(),[](wchar_t c){return (c>=L'0'&&c<=L'9') || (c>=L'a'&&c<=L'f') || (c>=L'A'&&c<=L'F');}) || value==L"000000000000")throw std::runtime_error("Native peer must be a nonzero HEX12 address (up to 16)");
+                if(std::any_of(result.native_peers.begin(),result.native_peers.end(),[&](const auto &p){return !_wcsicmp(p.c_str(),value.c_str());}))throw std::runtime_error("Duplicate native peer");
+                result.native_peers.push_back(value);
+            }
             else if (key==L"--instance") result.instance=value;
             else if (key==L"--capture") result.capture=value;
             else if (key==L"--stop-file") result.stop_file=value;
@@ -133,6 +141,7 @@ Options options(int argc,wchar_t **argv) {
         }
     }
     if(result.usb_gip_fallback!=L"none" && result.output!=L"usb-gip")throw std::runtime_error("USB GIP fallback requires --output usb-gip");
+    if(!result.native_peers.empty() && result.output!=L"native-gip")throw std::runtime_error("Native peers require --output native-gip");
     if(!result.native_routes.empty() && (result.output!=L"usb-gip" || !result.usb_gip_mac.empty() || !result.usb_gip_peers.empty() || result.usb_gip_fallback!=L"none" || result.status_file.empty()))throw std::runtime_error("Direct C++ USB needs --output usb-gip, --status-file and no Python/fallback routes");
     if(!result.usb_gip_peers.empty()){
         if(result.output!=L"usb-gip" || result.usb_gip_mac.empty())throw std::runtime_error("Additional USB peers require --output usb-gip and --usb-gip-mac");
@@ -380,9 +389,15 @@ int radio_test(const Options &opt,bool controller=false,bool run=false) {
         << " channel=" << unsigned(mt.channel->index) << "\n";
     if (controller) {
         TickTimer tick_timer;
+        std::unique_ptr<xone::AudioScheduling> radio_scheduling;
+        if(native_output)radio_scheduling=std::make_unique<xone::AudioScheduling>(L"Games");
         std::unique_ptr<xone::AudioOutput> audio_output;
         if(run && native_output)audio_output=std::make_unique<xone::NativeAudioOutput>();
         xone::Session session(mt,output.get(),!run || opt.verbose,audio_output.get(),raw_output.get());
+        if(opt.output==L"native-gip"){
+            session.enable_native_reconnect();
+            for(const auto &peer:opt.native_peers)session.remember_peer(unhex(peer));
+        }
         session.start_reconnect_window();
         std::string previous_status;
         std::unique_ptr<xone::LatestSnapshot> status_writer;
@@ -397,7 +412,7 @@ int radio_test(const Options &opt,bool controller=false,bool run=false) {
         auto save_status=[&](bool running){
             if(opt.status_file.empty())return;
             const auto now=std::chrono::steady_clock::now();
-            if(running && now-status_last<std::chrono::milliseconds(100))return;
+            if(running && now-status_last<std::chrono::seconds(2))return;
             status_last=now;
             std::ostringstream json;
             json<<std::boolalpha<<"{\"Running\":"<<running<<",\"Backend\":\""<<xone::utf8(opt.output)<<"\",\"FallbackOutput\":\""<<xone::utf8(opt.usb_gip_fallback)<<"\",\"Pairing\":"<<session.pairing_active()<<",\"ShareForwardedToWindows\":false,\"BatteryForwardedToWindows\":false,\"Controllers\":[";
@@ -417,7 +432,7 @@ int radio_test(const Options &opt,bool controller=false,bool run=false) {
                 else json<<"null";
                 json<<'}';
             }
-            json<<"]}\n";const auto text=json.str();if(text==previous_status)return;
+            json<<"],\"KnownPeers\":[";first=true;for(const auto &peer:session.known_peers()){if(!first)json<<',';first=false;json<<'\"'<<peer<<'\"';}json<<"]}\n";const auto text=json.str();if(text==previous_status)return;
             status_writer->publish(text);
             previous_status=text;
         };
