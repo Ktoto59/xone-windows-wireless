@@ -23,6 +23,17 @@ if($Mode -eq 'Status'){
 }
 if($Mode -in @('Stop','Disable')){
     & $taskScript -Stop
+    # The process can exit just before Task Scheduler marks its action stopped.
+    # IgnoreNew would otherwise swallow an immediate Start after this Stop.
+    if($taskExisting){
+        $taskExitDeadline=(Get-Date).AddSeconds(5)
+        do{
+            $taskStopping=Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+            if(-not $taskStopping -or $taskStopping.State -ne 'Running'){break}
+            Start-Sleep -Milliseconds 100
+        }while((Get-Date) -lt $taskExitDeadline)
+        if($taskStopping -and $taskStopping.State -eq 'Running'){throw 'The scheduled host is still stopping. Retry after it exits.'}
+    }
     if($Mode -eq 'Disable' -and $taskExisting){Unregister-ScheduledTask -TaskName $taskName -Confirm:$false}
     return
 }

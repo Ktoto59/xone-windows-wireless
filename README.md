@@ -10,10 +10,12 @@ a standalone kernel driver.** The current implementation uses WinUSB,
 a user-mode radio bridge, and virtual USB/GIP devices through usbip-win2.
 Windows Xbox Accessories can discover the tested devices and open their settings.
 
-**Development branch:** [automatic background mode](docs/BACKGROUND-MODE.md) adds
-sign-in startup and bounded recovery using existing signed drivers. A local
-new-headset pairing/audio session and worker/USB recovery were confirmed. These
-changes are not yet in the public alpha.2 installer linked below.
+**Current source / alpha.3 candidate:** [automatic background mode](docs/BACKGROUND-MODE.md)
+adds sign-in startup, audio scheduling and bounded recovery using existing signed
+drivers. One new-headset warm restart recovered without USB replug, and the user
+reported that load-related audio stutters appeared to disappear. These changes
+are not in the public alpha.2 installer linked below; the candidate is not yet a
+published release.
 
 ## Tested hardware and behavior
 
@@ -30,9 +32,10 @@ with other adapters, Windows builds and firmware versions is not established.
 
 ## Known limitations
 
-- **The 2021 headset can enter pairing/search mode after a power cycle.** In the
-  tested setup it requires another adapter pairing-button press. Reliable
-  automatic reconnection of this model is unresolved. The 2024 headset reconnects.
+- **The published alpha.2 can require pairing again after a 2021 headset power
+  cycle.** The alpha.3 candidate automatically discovers/re-enrolls configured
+  peers; one ordinary old-headset power-on and a warm restart were observed,
+  with clean ordinary audio after the latter. Repeated cycles remain unvalidated.
 - Xbox Accessories shows **Connected** rather than a wireless battery indicator,
   because these are presented as USB/GIP devices. Physical battery levels are
   available in bridge diagnostics; XInput/WGI also receive the controller battery.
@@ -45,9 +48,10 @@ with other adapters, Windows builds and firmware versions is not established.
   implemented. Do not start firmware updates through this bridge.
 - One device per captured profile is supported by the public configuration.
   Unconfigured clients have no Windows output with the default `none` fallback.
-- There is no background service or login autostart. The control panel starts a
-  session until stopped or signed out. The command-line launcher defaults to
-  30 minutes; use `-Seconds 0` for an unlimited session.
+- Current source / alpha.3 candidate supports per-user sign-in startup and bounded
+  recovery through **Enable automatic mode**. It runs in the user session and is
+  unavailable before sign-in. The published alpha.2 has manual startup only.
+  The command-line launcher defaults to 30 minutes; use `-Seconds 0` for unlimited.
 
 ## Requirements
 
@@ -80,10 +84,13 @@ from [Releases](https://github.com/Ktoto59/xone-windows-wireless/releases).
    Xbox devices off, power on or pair that device. Select its observed radio address,
    click **Finish search**, wait for the search to end, then **Add selected device**.
    Repeat for each model you own and click **Save devices**. No JSON editing is needed.
-5. On **Start / stop**, click **Start bridge**. Power on your configured devices.
+5. On **Start / stop**, click **Start bridge**. For the alpha.3 candidate, choose
+   **Enable automatic mode** to also start at Windows sign-in. Power on your configured devices.
    Select the Xbox audio endpoint in Windows/app settings and open Xbox Accessories.
    Closing the panel leaves the bridge running; **Stop bridge** stops it. Start it
-   again from the shortcut after signing in or restarting Windows.
+   again from the shortcut after signing in or restarting Windows on alpha.2.
+   In automatic mode, **Stop bridge** stops the current session; **Disable automatic
+   mode** also removes sign-in startup.
 
 Internet access is needed only for missing dependencies/firmware. Python is private
 to this app and does not change your system Python or PATH. Setup and the project's

@@ -3,6 +3,8 @@ xone-windows-wireless research preview
 Setup installs this application for the current Windows user, including its source
 code and an isolated Python runtime. It adds a Start menu entry and an optional
 desktop shortcut. It does not change the adapter driver during file installation.
+The optional background mode starts the bridge in your Windows user session at
+sign-in; it waits for setup to be completed and does not require a panel to stay open.
 
 The first-run control panel prepares dependencies and guides adapter selection,
 driver backup, WinUSB binding and radio device discovery. Preparing USBip requires

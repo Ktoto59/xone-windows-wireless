@@ -5,7 +5,7 @@ using System.IO;
 using System.Windows.Forms;
 using System.Reflection;
 [assembly: AssemblyTitle("xone-windows-wireless")]
-[assembly: AssemblyVersion("0.1.0.2")]
+[assembly: AssemblyVersion("0.1.0.3")]
 internal static class Program {
     [STAThread] private static void Main() {
         try {

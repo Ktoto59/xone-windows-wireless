@@ -47,6 +47,17 @@ timer. A later association from a configured peer refreshes its generation after
 one-second debounce; siblings retain their WCIDs and connections. Repeated warm
 restarts, old-headset power cycles and sleep/resume are still not verified.
 
+Configured-peer discovery now retains radio discovery beacons/RX after the
+manual enrollment window closes. The default USB-only route rejects unconfigured
+association and pairing requests outside that window. With no connected peer,
+channel scanning continues; any active peer stops scanning. After a pair response,
+the current channel is held for ten seconds to finish enrollment. Shutdown
+explicitly disables discovery. The old headset then connected on ordinary power-on
+without an adapter button, but audio initially had small stutters on channel 11.
+One subsequent warm restart restored it on channel 165 with user-confirmed clean
+ordinary playback. This does not establish repeated-cycle reliability or universal
+audio quality on every channel.
+
 **Stop bridge** stops this session; enabled automatic mode returns at next
 sign-in. **Disable automatic mode** stops it and removes this installation's
 sign-in task. Device discovery/configuration, driver changes, upgrades and

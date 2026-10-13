@@ -267,7 +267,8 @@ int main() {
             usb.control=[](void *,u8,u8 type,u16,u16,void *data,u16 n,unsigned)->int{if(type&128)std::memset(data,0,n);return n;};
             usb.bulk=[](void *p,u8,void *,int n,int *actual,unsigned)->int{++*static_cast<unsigned *>(p);if(actual)*actual=n;return 0;};
             Session session(mt,nullptr,false,nullptr,&raw);RadioEvent e;e.kind=RadioEvent::Kind::association;e.address={2,0,0,0,0,1};session.process(e);
-            const auto target=e.address;e.address={4,0,0,0,0,2};session.process(e);const auto before=writes;
+            const auto target=e.address;e.address={2,0,0,0,0,2};session.process(e);const auto before=writes;
+            e.address={4,0,0,0,0,2};session.process(e);check(session.status().size()==2,"Unknown association admitted outside pairing");
             e.kind=RadioEvent::Kind::client_command;e.command=1;session.process(e);
             check(writes==before && session.status().size()==2,"Unknown peer paired without the adapter button");
             e.address=target;session.process(e);
@@ -275,6 +276,48 @@ int main() {
             check(raw.events.back()==std::pair<uint8_t,uint8_t>{uint8_t(3),uint8_t(1)},"Old USB generation not invalidated");
             e.kind=RadioEvent::Kind::association;session.process(e);
             check(session.status().size()==2 && raw.events.back()==std::pair<uint8_t,uint8_t>{uint8_t(1),uint8_t(1)},"Known peer could not establish a fresh generation");session.close();
+        });
+        test("Configured-peer discovery survives manual pairing timeout and rejects unknown USB peers",[]{
+            struct Raw final:RawGipOutput{
+                bool target(std::span<const uint8_t> mac)const override{return mac.size()==6 && mac[0]==2;}
+                void event(uint8_t,uint8_t,std::span<const uint8_t>)override{}
+                std::vector<RawGipTransmit> poll()override{return {};}
+                void complete(uint8_t,uint32_t,int)override{}
+            }raw;
+            usb_device usb{};device dev{};xone_mt76 mt{};mt.dev=&dev;mt.udev=&usb;
+            mt.channel=&mt.channels[0];mt.channel->index=165;std::vector<uint32_t> filters;usb.context=&filters;
+            usb.control=[](void *p,u8,u8 type,u16,u16 index,void *data,u16 n,unsigned)->int{
+                if(type&128)std::memset(data,0,n);
+                else if(index==MT_RX_FILTR_CFG && n==4){uint32_t value=0;std::memcpy(&value,data,4);static_cast<std::vector<uint32_t> *>(p)->push_back(value);}
+                return n;
+            };
+            usb.bulk=[](void *,u8,void *,int n,int *actual,unsigned)->int{if(actual)*actual=n;return 0;};
+            Session session(mt,nullptr,false,nullptr,&raw);session.start_reconnect_window();
+            RadioEvent e;e.kind=RadioEvent::Kind::association;e.address={2,0,0,0,0,1};session.process(e);
+            e.kind=RadioEvent::Kind::gip;e.wcid=1;e.payload=encode_gip({2,32,1,0,{}});session.process(e);
+            session.tick(std::chrono::steady_clock::now()+std::chrono::seconds(61));
+            check(!session.pairing_active() && filters==std::vector<uint32_t>{0x014f13,0x014f13},"Manual timeout also closed configured-peer discovery");
+            e.kind=RadioEvent::Kind::association;e.address={4,0,0,0,0,1};session.process(e);
+            check(session.status().size()==1,"Unknown peer admitted without pairing");e.address={2,0,0,0,0,2};session.process(e);
+            check(session.status().size()==2 && !session.pairing_active(),"Known peer needed general pairing");session.close();
+            check(filters.back()==0x017f17,"Session shutdown left discovery open");
+        });
+        test("Pair response holds the channel until association or bounded timeout",[]{
+            struct Raw final:RawGipOutput{
+                bool target(std::span<const uint8_t> mac)const override{return mac.size()==6 && mac[0]==2;}
+                void event(uint8_t,uint8_t,std::span<const uint8_t>)override{}
+                std::vector<RawGipTransmit> poll()override{return {};}
+                void complete(uint8_t,uint32_t,int)override{}
+            }raw;
+            usb_device usb{};device dev{};xone_mt76 mt{};mt.dev=&dev;mt.udev=&usb;
+            usb.control=[](void *,u8,u8 type,u16,u16,void *data,u16 n,unsigned)->int{if(type&128)std::memset(data,0,n);return n;};
+            usb.bulk=[](void *,u8,void *,int n,int *actual,unsigned)->int{if(actual)*actual=n;return 0;};
+            constexpr uint8_t channels[]={1,6,11,36,40,44,48,149,153,157,161,165};
+            for(size_t n=0;n<XONE_MT_NUM_CHANNELS;++n)mt.channels[n].index=channels[n];mt.channel=&mt.channels[3];
+            Session session(mt,nullptr,false,nullptr,&raw);session.start_reconnect_window();const auto now=std::chrono::steady_clock::now();
+            RadioEvent e;e.kind=RadioEvent::Kind::client_command;e.command=1;e.address={2,0,0,0,0,1};session.process(e,now);
+            session.tick(now+std::chrono::seconds(3));check(mt.channel->index==36 && !session.pairing_active(),"Pair response lost its channel before association");
+            session.tick(now+std::chrono::seconds(11));check(mt.channel->index==40,"Failed enrollment blocked scanning indefinitely");session.close();
         });
         test("Silent raw association recovery is bounded and preserves active siblings",[]{
             struct Raw final:RawGipOutput{

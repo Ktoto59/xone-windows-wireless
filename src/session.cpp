@@ -224,7 +224,10 @@ Session::~Session()=default;
 void Session::check(int result,const char *operation) { if(result || mt_.udev->sticky_error) throw std::runtime_error(std::string(operation)+" failed: "+std::to_string(mt_.udev->sticky_error?mt_.udev->sticky_error:result)); }
 void Session::pairing(bool enabled) {
     if(pairing_==enabled) return;
-    check(xone_mt76_set_pairing(&mt_,enabled),"Pairing beacon"); pairing_=enabled;
+    // Configured USB peers may re-enroll after power-on instead of remembering
+    // their radio association. Advertise discovery but keep manual enrollment
+    // separate: only configured addresses receive automatic pair responses.
+    check(xone_mt76_set_pairing(&mt_,enabled || raw_output_),"Pairing beacon"); pairing_=enabled;
     std::cout<<"PAIRING "<<(enabled?"ON":"OFF")<<"\n";
     const bool connected=std::any_of(clients_.begin(),clients_.end(),[](const auto &p){return bool(p);});
     check(xone_mt76_set_led_mode(&mt_,enabled?XONE_MT_LED_BLINK:connected?XONE_MT_LED_ON:XONE_MT_LED_OFF),"Adapter LED");
@@ -265,6 +268,7 @@ void Session::process(const RadioEvent &e,std::chrono::steady_clock::time_point 
         pair_scan_last_=std::chrono::steady_clock::now();
         pair_deadline_=pair_scan_last_+std::chrono::seconds(60);break;
     case RadioEvent::Kind::association: {
+        if(raw_output_ && !pairing_ && !output_ && !audio_output_ && !raw_output_->target(e.address))return;
         for(const auto &c:clients_) if(c && c->address==e.address) {
             // Debounce immediate WLAN retries. A later association from a known
             // USB peer must not inherit the previous Windows/GIP generation.
@@ -278,6 +282,7 @@ void Session::process(const RadioEvent &e,std::chrono::steady_clock::time_point 
         const auto wcid=static_cast<uint8_t>(at-clients_.begin()+1); auto client=std::make_unique<Client>(*this,wcid,e.address);
         client->associated_at=now;
         check(xone_mt76_associate_client(&mt_,wcid,client->address.data()),"Associate client"); *at=std::move(client);
+        association_pending_until_={};
         if(raw_output_ && raw_output_->target(e.address))raw_output_->event(1,wcid,e.address);
         if(!pairing_) check(xone_mt76_set_led_mode(&mt_,XONE_MT_LED_ON),"Adapter LED");
         std::cout<<"ASSOCIATED WCID="<<unsigned(wcid)<<" MAC="<<hex(e.address)<<"\n"; break;
@@ -297,6 +302,9 @@ void Session::process(const RadioEvent &e,std::chrono::steady_clock::time_point 
                 std::cout<<"REPAIR RESET WCID="<<unsigned(w)<<" MAC="<<hex(e.address)<<'\n';remove(w);break;
             }
             auto mac=e.address;check(xone_mt76_pair_client(&mt_,mac.data()),"Pair response");pairing(false);
+            // Discovery must not leave this channel before the peer completes
+            // re-enrollment. The old headset can take longer than one scan dwell.
+            association_pending_until_=now+std::chrono::seconds(10);
         }
         else if(e.command==16 && e.wcid && e.wcid<=16 && clients_[e.wcid-1]) {
             auto &client=*clients_[e.wcid-1];
@@ -348,7 +356,7 @@ void Session::tick(std::chrono::steady_clock::time_point now) {
     }
     if(pairing_ && now>=pair_deadline_)pairing(false);
     // Scan only with an empty client table: changing channel during auth/audio breaks it.
-    if(pairing_ && now-pair_scan_last_>=std::chrono::seconds(2) &&
+    if((pairing_ || raw_output_) && now>=association_pending_until_ && now-pair_scan_last_>=std::chrono::seconds(2) &&
        std::none_of(clients_.begin(),clients_.end(),[](const auto &c){return bool(c);})){
         const auto next=(pair_scan_index_+1)%XONE_MT_NUM_CHANNELS;
         auto &channel=mt_.channels[next];
@@ -390,6 +398,7 @@ bool Session::audio_active() const {
 }
 void Session::close() {
     pairing(false);
+    if(raw_output_)check(xone_mt76_set_pairing(&mt_,false),"Reconnect beacon cleanup");
     for(uint8_t w=1;w<=16;++w) {
         if(clients_[w-1] && clients_[w-1]->encrypted)try{clients_[w-1]->rumble(0,0);}catch(...){}
         remove(w);

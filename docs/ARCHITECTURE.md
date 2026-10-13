@@ -76,6 +76,12 @@ after one-second debounce. One new-headset warm restart recovered on the first
 attempt with clean user-confirmed audio, without physical USB reset; broader
 reconnection reliability remains pending.
 
+In the default USB-only route, automatic discovery advertises reconnect availability
+after manual pairing closes, but only configured addresses are admitted/responded
+to. Scanning continues with an empty table, pauses for a ten-second enrollment grace
+after a pair response and stays paused with any occupied peer slot. Shutdown closes
+discovery. Manual enrollment and automatic discovery are separate policy states.
+
 Status snapshots use atomic publication and bounded sharing-error retries so a
 temporary file lock does not stop all devices. Physical battery status is observed
 without rewriting GIP. Xbox Accessories still displays a wired/Connected label;

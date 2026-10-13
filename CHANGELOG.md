@@ -2,6 +2,17 @@
 
 ## Unreleased — automatic background bridge and radio reconnection
 
+- Keep discovery beacons/RX enabled for configured USB/GIP peers after manual
+  enrollment closes. The default USB-only route rejects unknown associations
+  and pair requests outside the manual window. Scan only when all peers are absent;
+  hold the channel for ten seconds after a pair response so enrollment can finish.
+- Confirm one ordinary power-on of the old headset without an adapter button,
+  followed by one warm restart with clean ordinary playback on channel 165.
+  An earlier connection on channel 11 had slight stutters. Repeated cycles and
+  sustained multi-device audio remain unvalidated; this is not a general RF fix.
+- Wait for Task Scheduler to finish stopping before returning from Stop/Disable,
+  preventing IgnoreNew from discarding an immediate subsequent start.
+
 - Recover configured USB/GIP peers that associate but send no initial GIP data:
   after five seconds, invalidate only that peer's USB generation, clear its
   firmware slot and resend association, up to three attempts. Established idle
