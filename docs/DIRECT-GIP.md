@@ -36,7 +36,8 @@ It never removes the shared USBip installation.
 
 - Prefer the supported 24 kHz mono microphone / 48 kHz stereo render pair.
 - Send one 8 ms render block on a valid physical headset microphone frame.
-  Collapse delayed credits rather than sending a catch-up burst.
+  Retain at most two credits for batched radio reads, matching the working USB
+  route; a long stall does not accumulate an unbounded catch-up burst.
 - Start and dispose audio hosts away from the radio thread; bound both PCM queues.
 - Use MMCSS and high-resolution waits for native audio pipe workers; keep PCM
   analysis and periodic packet logging out of normal playback.

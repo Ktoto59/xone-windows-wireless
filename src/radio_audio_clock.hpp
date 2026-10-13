@@ -4,14 +4,15 @@
 #include <cstdint>
 namespace xone {
 // One 8 ms render block follows one valid microphone frame from the headset.
-// Collapse delayed frames to one credit: never burst stale audio after a stall.
+// Match the working USB bridge's two-credit reserve for batched radio reads.
+// Bound delayed credits so a long stall never queues an unbounded catch-up burst.
 class RadioAudioClock {
-    bool credit_=false;
+    unsigned credits_=0;
 public:
     bool receive(std::span<const uint8_t> payload) {
         if(payload.size()!=386 || payload[0]!=0 || payload[1]!=6)return false;
-        credit_=true;return true;
+        if(credits_<2)++credits_;return true;
     }
-    bool take() {const bool ready=credit_;credit_=false;return ready;}
+    bool take() {if(!credits_)return false;--credits_;return true;}
 };
 }

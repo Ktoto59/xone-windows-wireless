@@ -362,12 +362,12 @@ int main() {
             e.kind=RadioEvent::Kind::gip;session.process(e,now+std::chrono::seconds(2));const auto count=raw.events.size();
             session.tick(now+std::chrono::seconds(100));check(raw.events.size()==count,"Idle peer was treated as failed handshake");session.close();
         });
-        test("Native render follows valid headset credits and never catches up in bursts",[]{
+        test("Native render preserves a batched radio pair and bounds delayed credits",[]{
             RadioAudioClock clock;check(!clock.take(),"Audio started without a physical clock");
             Bytes pcm(386);check(!clock.receive(pcm) && !clock.take(),"Wrong PCM layout produced a credit");pcm[1]=6;
             check(clock.receive(pcm) && clock.take() && !clock.take(),"A valid frame did not produce exactly one block");
             for(unsigned i=0;i<20;++i)check(clock.receive(pcm),"Valid frame rejected");
-            check(clock.take() && !clock.take(),"Delayed audio burst after a radio stall");
+            check(clock.take() && clock.take() && !clock.take(),"Batched radio pair lost or delayed credits were unbounded");
             pcm.pop_back();check(!clock.receive(pcm) && !clock.take(),"Truncated PCM produced a credit");
         });
         test("Direct GIP reconnects saved peers without a USB profile and isolates recovery",[]{
