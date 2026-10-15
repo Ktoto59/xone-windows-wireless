@@ -292,6 +292,22 @@ int main() {
                 session.close();
             }
         });
+        test("Status lifecycle revision changes independently of PCM counters",[]{
+            usb_device usb{};device dev{};xone_mt76 mt{};mt.dev=&dev;mt.udev=&usb;mt.channel=&mt.channels[0];mt.channel->index=165;
+            usb.control=[](void *,u8,u8 type,u16,u16,void *data,u16 n,unsigned)->int{if(type&128)std::memset(data,0,n);return n;};
+            usb.bulk=[](void *,u8,void *,int n,int *actual,unsigned)->int{if(actual)*actual=n;return 0;};
+            Session session(mt,nullptr,false);const auto initial=session.status_revision();
+            RadioEvent e;e.kind=RadioEvent::Kind::association;e.address={2,0,0,0,0,1};session.process(e);
+            const auto connected=session.status_revision();check(connected>initial,"Connection did not wake status publication");
+            e.kind=RadioEvent::Kind::gip;e.wcid=1;e.payload=encode_gip({0x60,32,1,0,Bytes(386)});
+            for(unsigned i=0;i<1000;++i)session.process(e);
+            check(session.status_revision()==connected,"PCM counters bypassed status cadence");
+            e.payload=encode_gip({7,32,1,0,{0,0x5b}});session.process(e);
+            check(session.status_revision()>connected,"Control state change did not wake publication");
+            const auto control=session.status_revision();e.kind=RadioEvent::Kind::lost;session.process(e);
+            check(session.status_revision()>control,"Disconnect did not wake status publication");
+            session.close();
+        });
         test("Explicit re-pair resets only the requesting radio session",[]{
             usb_device usb{};device dev{};xone_mt76 mt{};mt.dev=&dev;mt.udev=&usb;mt.channel=&mt.channels[0];mt.channel->index=165;
             usb.control=[](void *,u8,u8 type,u16,u16,void *data,u16 n,unsigned)->int{if(type&128)std::memset(data,0,n);return n;};

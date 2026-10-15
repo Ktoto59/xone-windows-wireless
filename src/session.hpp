@@ -41,6 +41,7 @@ class Session {
     std::chrono::steady_clock::time_point pair_scan_last_;
     size_t pair_scan_index_=0;
     uint64_t inputs_=0,authenticated_=0,rumbles_=0;
+    uint64_t status_revision_=0;
     struct Removal {std::string mac,reason;uint8_t wcid;uint64_t tick_ms;};
     std::vector<Removal> removals_;
     void check(int result,const char *operation);
@@ -55,6 +56,7 @@ public:
     uint64_t inputs() const { return inputs_; }
     uint64_t authenticated() const { return authenticated_; }
     uint64_t rumbles() const { return rumbles_; }
+    uint64_t status_revision() const { return status_revision_; }
     const auto &removals() const {return removals_;}
     std::vector<ControllerStatus> status() const;
     bool audio_active() const;

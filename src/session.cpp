@@ -86,11 +86,13 @@ struct Session::Client {
             auth_failed=false;auth_stage="negotiating";auth_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(15);auth.start();
         }
         void fail_auth(const char *stage,const char *reason){
+            ++radio.owner.status_revision_;
             auth_failed=true;auth_stage=stage;
             if(audio_connected){radio.owner.audio_output_->disconnect(radio.wcid);audio_connected=false;}
             std::cout<<"AUTH FAILED WCID="<<unsigned(radio.wcid)<<" client="<<unsigned(id)<<" stage="<<auth_stage<<" peer_version="<<unsigned(auth.peer_version())<<" reason="<<reason<<'\n';
         }
         void dispatch(const GipPacket &p) {
+            if(p.command!=0x20 && p.command!=0x60)++radio.owner.status_revision_;
             if(radio.owner.trace_)std::cout<<"GIP WCID="<<unsigned(radio.wcid)<<" client="<<unsigned(id)<<" cmd="<<unsigned(p.command)<<" bytes="<<p.payload.size()<<"\n";
             if(p.options&32) {
                 switch(p.command) {
@@ -173,6 +175,7 @@ struct Session::Client {
             } else if(p.command==32 && !id && identified && radio.gamepad) {
                 const auto pad=parse_gamepad(p.payload,radio.capabilities); ++radio.owner.inputs_;
                 if(pad.share!=radio.input.share)std::cout<<"SHARE WCID="<<unsigned(radio.wcid)<<" pressed="<<pad.share<<"\n";
+                if(radio.input.share!=pad.share)++radio.owner.status_revision_;
                 radio.input=pad;radio.publish();
                 if(radio.owner.trace_)std::cout<<"INPUT WCID="<<unsigned(radio.wcid)<<" buttons="<<pad.buttons<<" LT="<<pad.left_trigger<<" RT="<<pad.right_trigger<<" LX="<<pad.left_x<<" LY="<<pad.left_y<<" RX="<<pad.right_x<<" RY="<<pad.right_y<<"\n";
             }
@@ -181,10 +184,11 @@ struct Session::Client {
             if(auth_stage=="negotiating" && now>=auth_deadline)fail_auth("timeout","Handshake did not complete within 15 seconds");
             if(!audio)return;
             const auto before=audio->stage();audio->tick(now);
+            if(before!=audio->stage())++radio.owner.status_revision_;
             if(before!=audio->stage())std::cout<<"AUDIO STAGE WCID="<<unsigned(radio.wcid)<<" client="<<unsigned(id)<<" stage="<<audio->stage_name()<<"\n";
             if(auth_failed || audio->stage()!=HeadsetAudio::Stage::streaming || !audio_allowed() || now<audio_last)return;
             if(!audio_connected && radio.owner.audio_output_ && audio->input().code==9 && audio->output().code==16){
-                radio.owner.audio_output_->connect(radio.wcid,id);audio_connected=true;audio_last=std::chrono::steady_clock::now();
+                radio.owner.audio_output_->connect(radio.wcid,id);audio_connected=true;audio_last=std::chrono::steady_clock::now();++radio.owner.status_revision_;
             }
             // One unfragmented PCM packet per 8ms on the dongle audio queue, like upstream.
             // Replace missing playback blocks with silence; microphone data is never saved.
@@ -230,7 +234,7 @@ void Session::enable_idle_channel_scan() {
 void Session::check(int result,const char *operation) { if(result || mt_.udev->sticky_error) throw std::runtime_error(std::string(operation)+" failed: "+std::to_string(mt_.udev->sticky_error?mt_.udev->sticky_error:result)); }
 void Session::pairing(bool enabled) {
     if(pairing_==enabled) return;
-    check(xone_mt76_set_pairing(&mt_,enabled),"Pairing beacon"); pairing_=enabled;
+    check(xone_mt76_set_pairing(&mt_,enabled),"Pairing beacon"); pairing_=enabled;++status_revision_;
     std::cout<<"PAIRING "<<(enabled?"ON":"OFF")<<"\n";
     const bool connected=std::any_of(clients_.begin(),clients_.end(),[](const auto &p){return bool(p);});
     check(xone_mt76_set_led_mode(&mt_,enabled?XONE_MT_LED_BLINK:connected?XONE_MT_LED_ON:XONE_MT_LED_OFF),"Adapter LED");
@@ -239,7 +243,7 @@ void Session::pairing(bool enabled) {
         for(size_t i=0;i<XONE_MT_NUM_CHANNELS;++i)if(mt_.channel==&mt_.channels[i]){pair_scan_index_=i;break;}
     }
 }
-void Session::remove(uint8_t wcid,const char *reason) { if(wcid && wcid<=16 && clients_[wcid-1]) { if(removals_.size()==32)removals_.erase(removals_.begin());removals_.push_back({hex(clients_[wcid-1]->address),reason,wcid,static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count())}); if(raw_output_ && raw_output_->target(clients_[wcid-1]->address))raw_output_->event(3,wcid);if(audio_output_)audio_output_->disconnect(wcid);if(output_)output_->disconnect(wcid);clients_[wcid-1].reset(); check(xone_mt76_remove_client(&mt_,wcid),"Remove client"); std::cout<<"DISCONNECTED WCID="<<unsigned(wcid)<<"\n"; } }
+void Session::remove(uint8_t wcid,const char *reason) { if(wcid && wcid<=16 && clients_[wcid-1]) { if(removals_.size()==32)removals_.erase(removals_.begin());removals_.push_back({hex(clients_[wcid-1]->address),reason,wcid,static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count())}); if(raw_output_ && raw_output_->target(clients_[wcid-1]->address))raw_output_->event(3,wcid);if(audio_output_)audio_output_->disconnect(wcid);if(output_)output_->disconnect(wcid);clients_[wcid-1].reset();++status_revision_; check(xone_mt76_remove_client(&mt_,wcid),"Remove client"); std::cout<<"DISCONNECTED WCID="<<unsigned(wcid)<<"\n"; } }
 void Session::process(const RadioEvent &e) {
     if(e.kind==RadioEvent::Kind::association || e.kind==RadioEvent::Kind::gip || e.kind==RadioEvent::Kind::client_command)
         pair_scan_last_=std::chrono::steady_clock::now();
@@ -251,6 +255,7 @@ void Session::process(const RadioEvent &e) {
         if(at==clients_.end()) throw std::runtime_error("Client table full");
         const auto wcid=static_cast<uint8_t>(at-clients_.begin()+1); auto client=std::make_unique<Client>(*this,wcid,e.address);
         check(xone_mt76_associate_client(&mt_,wcid,client->address.data()),"Associate client"); *at=std::move(client);
+        ++status_revision_;
         if(raw_output_ && raw_output_->target(e.address))raw_output_->event(1,wcid,e.address);
         if(!pairing_) check(xone_mt76_set_led_mode(&mt_,XONE_MT_LED_ON),"Adapter LED");
         std::cout<<"ASSOCIATED WCID="<<unsigned(wcid)<<" MAC="<<hex(e.address)<<"\n"; break;
@@ -274,7 +279,7 @@ void Session::process(const RadioEvent &e) {
                 if(client.logical[0] && !client.logical[0]->auth_failed)client.logical[0]->fail_auth("failed","Encryption before authentication");
                 std::cout<<"ENCRYPTION REJECTED WCID="<<unsigned(e.wcid)<<'\n';break;
             }
-            std::array<uint8_t,2> zeros{}; check(xone_mt76_send_client_command(&mt_,e.wcid,client.address.data(),XONE_MT_CLIENT_ENABLE_ENCRYPTION,zeros.data(),2),"Enable encryption"); client.encrypted=true;
+            std::array<uint8_t,2> zeros{}; check(xone_mt76_send_client_command(&mt_,e.wcid,client.address.data(),XONE_MT_CLIENT_ENABLE_ENCRYPTION,zeros.data(),2),"Enable encryption"); client.encrypted=true;++status_revision_;
             std::cout<<"ENCRYPTED WCID="<<unsigned(e.wcid)<<"\n";
             client.logical[0]->auth_stage="encrypted";
             if(output_ && client.gamepad)output_->connect(e.wcid);client.publish();client.rumble(0,0);
@@ -314,6 +319,7 @@ void Session::tick(std::chrono::steady_clock::time_point now) {
         auto &channel=mt_.channels[next];
         if(channel.index){
             check(xone_mt76_switch_channel(&mt_,&channel),"Pairing channel switch");mt_.channel=&channel;
+            ++status_revision_;
             check(xone_mt76_set_pairing(&mt_,pairing_),"Channel beacon");
             std::cout<<(pairing_?"PAIRING CHANNEL ":"RECONNECT CHANNEL ")<<unsigned(channel.index)<<"\n";
         }

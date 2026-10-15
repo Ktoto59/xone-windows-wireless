@@ -8,6 +8,7 @@
 #include "native_device_route.hpp"
 #endif
 #include "runtime_files.hpp"
+#include "status_schedule.hpp"
 extern "C" {
 #include "mt76/mt76.h"
 }
@@ -397,12 +398,13 @@ int radio_test(const Options &opt,bool controller=false,bool run=false) {
             if(!MoveFileExW(temporary.c_str(),destination.c_str(),MOVEFILE_REPLACE_EXISTING))throw std::runtime_error("Cannot replace controller status file");
         },[&]{return !opt.stop_file.empty() && std::filesystem::exists(opt.stop_file);});
         std::string previous_status;
-        auto status_last=std::chrono::steady_clock::time_point{};
+        xone::StatusSchedule status_schedule(opt.verbose?std::chrono::milliseconds(100):std::chrono::milliseconds(2000));
         auto save_status=[&](bool running){
             if(opt.status_file.empty())return;
             const auto now=std::chrono::steady_clock::now();
-            if(running && now-status_last<std::chrono::milliseconds(100))return;
-            status_last=now;
+            // Publish the first writer fault promptly; repeated failures must
+            // not turn retries against an unavailable file into a tight loop.
+            if(!status_schedule.ready({session.status_revision(),uint64_t(runtime_files.io_errors()!=0)},now,!running))return;
             std::ostringstream json;
             json<<std::boolalpha<<"{\"Running\":"<<running<<",\"Backend\":\""<<xone::utf8(opt.output)<<"\",\"FallbackOutput\":\""<<xone::utf8(opt.usb_gip_fallback)<<"\",\"Pairing\":"<<session.pairing_active()<<",\"RadioChannel\":"<<unsigned(mt.channel->index)<<",\"AutomaticSlots\":"<<opt.usb_auto_slots<<",\"ShareForwardedToWindows\":false,\"BatteryForwardedToWindows\":false,\"Controllers\":[";
             bool first=true;
