@@ -13,6 +13,7 @@ is needed for reference/loopback tests, not for the installed runtime.
 python -m unittest discover -s tests -p '*tests.py'
 powershell -NoProfile -File tests/device_config_tests.ps1
 powershell -NoProfile -File tests/setup_helpers_tests.ps1
+powershell -NoProfile -File tests/release_privacy_tests.ps1
 python scripts/check-public-content.py
 ```
 
