@@ -66,6 +66,10 @@ cl /nologo /std:c++20 /EHsc /O2 /W4 /WX /utf-8 /I src tests\bridge_runtime_tests
 if errorlevel 1 exit /b 1
 outputs\bridge-runtime-tests.exe
 if errorlevel 1 exit /b 1
+cl /nologo /std:c++20 /EHsc /O2 /W4 /WX /utf-8 /I src tests\pipe_timeout_tests.cpp /Fobuild\pipe_timeout_tests.obj /Feoutputs\pipe-timeout-tests.exe
+if errorlevel 1 exit /b 1
+outputs\pipe-timeout-tests.exe
+if errorlevel 1 exit /b 1
 cl /nologo /std:c++20 /EHsc /O2 /W4 /WX /utf-8 /I src tests\auto_gip_router_tests.cpp /Fobuild\auto_gip_router_tests.obj /Feoutputs\auto-gip-router-tests.exe
 if errorlevel 1 exit /b 1
 outputs\auto-gip-router-tests.exe
