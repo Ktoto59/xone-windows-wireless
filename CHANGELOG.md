@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.0-alpha.5.2 - 2026-10-15
+
+- Fix WinUSB binding failure when Setup starts 32-bit PowerShell: relaunch
+  maintenance in native x64 PowerShell before loading modules or dependencies.
+- Resolve PnPUtil and CAB extraction through the native Windows system directory,
+  including the stock-driver export used before binding. Do not depend on PATH.
+- Test real 32-bit/64-bit tool execution with empty PATH, bootstrap argument/exit
+  propagation and installed-script external command paths in Windows CI.
+
+Validation: reproduced missing PnPUtil under WOW64; fixed paths invoke the real
+native PnPUtil help without changing drivers. Hardware setup on the second PC
+still needs confirmation. The C++ radio/audio binaries are unchanged.
+
 ## 0.1.0-alpha.5.1 - 2026-10-15
 
 - Automatically install a missing signed Microsoft adapter driver, prepare

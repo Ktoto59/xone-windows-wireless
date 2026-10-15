@@ -1,4 +1,11 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
+function Get-XoneSystemTool([ValidateSet('pnputil.exe','expand.exe','WindowsPowerShell/v1.0/powershell.exe')][string]$Name){
+    # WOW64 redirects System32 to SysWOW64, which has no pnputil.exe.
+    $directory=if([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess){'Sysnative'}else{'System32'}
+    $path=Join-Path (Join-Path $env:windir $directory) $Name
+    if(-not [IO.File]::Exists($path)){throw ('Required Windows component is missing: '+$Name)}
+    return $path
+}
 function Test-XoneAdapterInstance([string]$InstanceId){
     return $InstanceId -match '^USB\\VID_045E&PID_(02FE|02E6|02F9|091E)\\[A-Z0-9_&-]+\z'
 }

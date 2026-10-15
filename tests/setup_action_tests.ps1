@@ -27,6 +27,18 @@ try{
     & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $action -Action Prepare -ResultPath $custom | Out-Null
     Check ($LASTEXITCODE -eq 1) 'Helper load failure returned success'
     Check ((Get-Content -LiteralPath $custom -Raw | ConvertFrom-Json).Error -eq 'Simulated helper load failure') 'Helper load failure was not preserved'
+    [IO.File]::WriteAllText($helper,'function Initialize-XonePrerequisites($Root){if(-not [Environment]::Is64BitProcess){throw "Maintenance stayed in WOW64"}}')
+    $wow=Join-Path $env:windir 'SysWOW64/WindowsPowerShell/v1.0/powershell.exe'
+    $custom=Join-Path $fixture 'a folder with spaces/native result.json'
+    & $wow -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $action -Action Prepare -ResultPath $custom
+    Check ($LASTEXITCODE -eq 0) 'WOW64 maintenance bootstrap failed'
+    $state=Get-Content -LiteralPath $custom -Raw | ConvertFrom-Json
+    Check ($state.Success -and $state.ProcessBitness -eq 64) 'Maintenance did not switch to x64 before loading helpers'
+    [IO.File]::WriteAllText($helper,'throw "Native bootstrap preserves failure"')
+    & $wow -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $action -Action Prepare -ResultPath $custom | Out-Null
+    Check ($LASTEXITCODE -eq 1) 'WOW64 bootstrap lost the native child failure exit code'
+    Check ((Get-Content -LiteralPath $custom -Raw | ConvertFrom-Json).Error -eq 'Native bootstrap preserves failure') 'WOW64 bootstrap lost diagnostics'
+    Write-Output 'PASS actual WOW64-to-x64 maintenance bootstrap, spaced paths and failure propagation'
     Write-Output 'PASS maintenance diagnostics, helper-load failure, custom path and successful retry'
 }finally{
     $resolved=[IO.Path]::GetFullPath($fixture)

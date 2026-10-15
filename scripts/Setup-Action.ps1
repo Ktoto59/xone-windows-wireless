@@ -3,6 +3,22 @@
 param([Parameter(Mandatory=$true)][ValidateSet('Prepare','Bind','Restore','Remove','Upgrade','Start','Stop','Discover','AutomaticEnable','AutomaticDisable','AutomaticSetup','UseCpp','UsePython','Configure','Enroll','InitializePreferences')][string]$Action,
       [string]$InstanceId='',[string]$ResultPath='',[string]$DiscoveryPath='',[string]$Profile='',
       [ValidateSet('on','off')][string]$Startup='on')
+if([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess){
+    # An x86 installer/shell can launch x86 PowerShell even on x64 Windows.
+    # Relaunch before dependency discovery, module imports or driver operations.
+    $taskNativePowerShell=Join-Path $env:windir 'Sysnative/WindowsPowerShell/v1.0/powershell.exe'
+    $taskNativeArguments=@('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$PSCommandPath)
+    foreach($taskParameter in $PSBoundParameters.GetEnumerator()){
+        if($taskParameter.Value -is [Management.Automation.SwitchParameter]){
+            if($taskParameter.Value.IsPresent){$taskNativeArguments+=('-'+$taskParameter.Key)}
+        }else{
+            $taskNativeArguments+=('-'+$taskParameter.Key)
+            $taskNativeArguments+=[string]$taskParameter.Value
+        }
+    }
+    & $taskNativePowerShell @taskNativeArguments
+    exit $LASTEXITCODE
+}
 $ErrorActionPreference='Stop'
 $taskRoot=Split-Path -Parent $PSScriptRoot
 if(-not $ResultPath){$ResultPath=Join-Path $taskRoot ('work/setup-'+$Action+'.json')}
@@ -10,7 +26,7 @@ $taskErrorPath=$ResultPath+'.error.txt'
 $taskTranscriptPath=$ResultPath+'.log'
 $taskTranscriptStarted=$false
 $script:XoneSetupStage=$Action
-$taskResult=[ordered]@{Success=$false;Action=$Action;Stage=$Action;Error=$null;UpdatedUtc=$null}
+$taskResult=[ordered]@{Success=$false;Action=$Action;Stage=$Action;Error=$null;ProcessBitness=([IntPtr]::Size*8);UpdatedUtc=$null}
 try{
     [void][IO.Directory]::CreateDirectory((Split-Path -Parent ([IO.Path]::GetFullPath($ResultPath))))
     if([IO.File]::Exists($taskErrorPath)){[IO.File]::Delete($taskErrorPath)}

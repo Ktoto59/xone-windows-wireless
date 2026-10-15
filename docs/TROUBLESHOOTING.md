@@ -1,5 +1,8 @@
 # Troubleshooting the C++ candidate
 
+- **Setup says `pnputil.exe` is not recognized:** use alpha.5.2 or newer.
+  It fixes WOW64 redirection and runs maintenance in native x64 PowerShell; no
+  manual PATH edits or extra downloads are needed.
 - **Setup fails:** alpha.5.1 displays the failing stage and reason. Local
   `work/setup-AutomaticSetup.json`, `.json.error.txt` and `.json.log` preserve
   details. Share only the relevant error after removing local paths and instance

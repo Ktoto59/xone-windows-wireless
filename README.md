@@ -4,7 +4,7 @@ An experimental C++ bridge for the Xbox Wireless Adapter on Windows 11.
 Connect supported Xbox Wireless Headsets and Series controllers through the
 adapter while Windows uses its existing Xbox GIP and audio drivers.
 
-**[Download the alpha.5.1 installer](https://github.com/Ktoto59/xone-windows-wireless/releases/tag/v0.1.0-alpha.5.1)**
+**[Download the alpha.5.2 installer](https://github.com/Ktoto59/xone-windows-wireless/releases/tag/v0.1.0-alpha.5.2)**
 | [Installation and removal](docs/INSTALL.md)
 | [Known limitations](docs/LIMITATIONS.md)
 | [Troubleshooting](docs/TROUBLESHOOTING.md)
@@ -29,7 +29,7 @@ simultaneous audio streams.
 
 1. On Windows 11 x64, connect the adapter and stop any bridge running from a
    development checkout or a different installation.
-2. Download and run `xone-windows-wireless-0.1.0-alpha.5.1-Setup-x64.exe` as your
+2. Download and run `xone-windows-wireless-0.1.0-alpha.5.2-Setup-x64.exe` as your
    normal Windows user. Approve the separate administrator prompt for setup.
 3. Let Setup prepare WinUSB, verified adapter RAM firmware and the signed USBip
    dependency. Restart Windows or reconnect the adapter if requested.
