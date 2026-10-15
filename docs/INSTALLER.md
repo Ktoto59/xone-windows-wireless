@@ -42,3 +42,8 @@ Software/loopback tests and live metadata-access fault injection are described i
 isolated registration/removal smoke test can be performed without rebinding the
 working adapter. Such a smoke test does not verify hardware preparation or actual
 stock-driver restoration; those require a separate hardware installation test.
+
+Runtime C++ targets define `NDEBUG` for release builds, so library assertion
+messages cannot embed the local build directory. The packager rejects personal
+profile paths or user SID literals in executable strings before copying them.
+This privacy check does not replace runtime protocol/bounds validation.

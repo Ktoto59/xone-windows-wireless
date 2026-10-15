@@ -18,6 +18,16 @@ function Copy-PackageFile([string]$Relative,[string]$Destination){
     [void][IO.Directory]::CreateDirectory((Split-Path -Parent $target))
     Copy-Item -LiteralPath (Join-Path $taskRoot $Relative) -Destination $target
 }
+function Assert-PublicReleaseBinary([string]$Path){
+    $bytes=[IO.File]::ReadAllBytes($Path)
+    $texts=@([Text.Encoding]::UTF8.GetString($bytes),[Text.Encoding]::Unicode.GetString($bytes))
+    if($bytes.Length -gt 1){$texts+=([Text.Encoding]::Unicode.GetString($bytes,1,$bytes.Length-1))}
+    foreach($text in $texts){
+        if($text -match '(?i)\b[a-z]:[\\/]Users[\\/](?!Public\b|Default\b)[^\s\\/`"<>]+' -or $text -match '\bS-1-5-21-\d+-\d+-\d+-\d+\b'){
+            throw ('Personal path/SID in executable: '+[IO.Path]::GetFileName($Path)+'. Rebuild the release targets with NDEBUG; do not publish this binary.')
+        }
+    }
+}
 $taskRuntimeFiles=@('LICENSE','third_party/json/LICENSE.MIT','third_party/vigem/LICENSE',
     'docs/INSTALL.md','docs/TROUBLESHOOTING.md','docs/cpp-bridge.md',
     'docs/LIMITATIONS.md','docs/PRIVACY.md','docs/UPSTREAM.md',
@@ -50,6 +60,7 @@ try{
         $taskSource=Join-Path $taskRoot ('outputs/'+$taskBinary)
         if($LauncherDir -and $taskBinary -in @('xone-probe-cpp.exe','xone-background.exe')){$taskSource=Join-Path $LauncherDir $taskBinary}
         if(-not (Test-Path -LiteralPath $taskSource)){throw ('Missing release binary: '+$taskBinary)}
+        Assert-PublicReleaseBinary $taskSource
         Copy-Item -LiteralPath $taskSource -Destination $taskOutput
     }
     $taskCommit=(& git rev-parse HEAD).Trim()
