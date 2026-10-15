@@ -1,5 +1,10 @@
 # Troubleshooting the C++ candidate
 
+- **Setup fails:** alpha.5.1 displays the failing stage and reason. Local
+  `work/setup-AutomaticSetup.json`, `.json.error.txt` and `.json.log` preserve
+  details. Share only the relevant error after removing local paths and instance
+  IDs. For alpha.5 first-install download failures, use alpha.5.1 or newer; it
+  corrects the Microsoft firmware HTTPS host without bypassing certificate checks.
 - **A device is missing:** check that the adapter is connected and the background
   host's `work/maintenance-status.json` has no error. Turn on the device normally;
   pair with both pairing buttons only if its saved association does not return.

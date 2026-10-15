@@ -3,6 +3,7 @@
 #define UNICODE
 #define _UNICODE
 #include "winusb_transport.hpp"
+#include "adapter_catalog.hpp"
 #include <setupapi.h>
 #include <newdev.h>
 #include <iostream>
@@ -30,15 +31,14 @@ int wmain(int argc,wchar_t **argv) {
         if (argc!=8 || (std::wstring(argv[1])!=L"plan" && std::wstring(argv[1])!=L"install") ||
             std::wstring(argv[2])!=L"--instance" || std::wstring(argv[4])!=L"--inf" || std::wstring(argv[6])!=L"--section") {
             std::cout << "xone-bind plan|install --instance USB-instance --inf INBOX-OR-OEM-INF --section INSTALL-SECTION\n"
-                "Only the external 045E:02FE adapter is supported by this development helper.\n"
+                "Supported Xbox adapter IDs: 045E:02FE, 02E6, 02F9, 091E.\n"
                 "plan builds a driver list in memory; install requires an administrator.\n";
             return argc==1 ? 0 : 2;
         }
         const bool install=std::wstring(argv[1])==L"install";
         const std::wstring id=argv[3],section=argv[7];
-        if (id.find_first_of(L"\r\n")!=std::wstring::npos ||
-            id.size()<22 || _wcsnicmp(id.c_str(),L"USB\\VID_045E&PID_02FE\\",22))
-            throw std::runtime_error("Refusing an instance other than USB\\VID_045E&PID_02FE\\...");
+        if (!xone::supported_adapter_instance(id))
+            throw std::runtime_error("Refusing an unsupported Xbox adapter instance");
         std::array<wchar_t,MAX_PATH> windows{};
         require(GetWindowsDirectoryW(windows.data(),static_cast<UINT>(windows.size()))!=0,"GetWindowsDirectory");
         const auto inf_root=std::filesystem::canonical(std::filesystem::path(windows.data())/L"INF");

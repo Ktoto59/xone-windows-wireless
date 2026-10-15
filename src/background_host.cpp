@@ -14,6 +14,7 @@
 #include <optional>
 #include "appliance_audio.hpp"
 #include "winusb_transport.hpp"
+#include "adapter_catalog.hpp"
 namespace {
 using xone::Json;namespace fs=std::filesystem;using Clock=std::chrono::steady_clock;
 struct Handle {HANDLE value=nullptr;~Handle(){if(value && value!=INVALID_HANDLE_VALUE)CloseHandle(value);}Handle()=default;explicit Handle(HANDLE h):value(h){};Handle(const Handle &)=delete;Handle &operator=(const Handle &)=delete;};
@@ -124,8 +125,14 @@ public:
                 if(resumed){stop_radio();resumed=false;retry_at_=Clock::now();}
                 if(hardware_changed || (!radio_.alive() && Clock::now()>=adapter_check_)){
                     hardware_changed=false;adapter_check_=Clock::now()+std::chrono::seconds(30);
-                    const auto devices=xone::adapters();const std::wstring prefix=L"USB\\VID_045E&PID_02FE\\";
-                    auto found=std::find_if(devices.begin(),devices.end(),[&](const auto &d){return !_wcsicmp(d.service.c_str(),L"WinUSB") && !_wcsnicmp(d.instance.c_str(),prefix.c_str(),prefix.size());});
+                    const auto devices=xone::adapters();
+                    const auto saved=config_.value("AdapterInstanceId",std::string{});
+                    auto found=devices.end();
+                    for(auto d=devices.begin();d!=devices.end();++d){
+                        if(_wcsicmp(d->service.c_str(),L"WinUSB") || !xone::supported_adapter_instance(d->instance))continue;
+                        if(!saved.empty()){if(_stricmp(xone::utf8(d->instance).c_str(),saved.c_str())==0){found=d;break;}}
+                        else {if(found!=devices.end()){found=devices.end();break;}found=d;}
+                    }
                     if(found!=devices.end() && healthy(found->instance))adapter_=found->instance;else adapter_.clear();
                     if(adapter_.empty() && radio_.alive())stop_radio();
                 }

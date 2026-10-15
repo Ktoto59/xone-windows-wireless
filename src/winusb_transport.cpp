@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "winusb_transport.hpp"
+#include "adapter_catalog.hpp"
 #include <setupapi.h>
 #include <devpkey.h>
 #include <usbiodef.h>
@@ -52,15 +53,6 @@ static std::wstring instance_id(HDEVINFO set, SP_DEVINFO_DATA &device) {
     if (!SetupDiGetDeviceInstanceIdW(set,&device,value.data(),static_cast<DWORD>(value.size()),nullptr)) return {};
     return value.data();
 }
-static bool supported(const std::wstring &instance) {
-    std::wstring upper = instance;
-    std::transform(upper.begin(),upper.end(),upper.begin(),[](wchar_t ch) { return static_cast<wchar_t>(std::towupper(ch)); });
-    for (const auto *pid : {L"02FE",L"02E6",L"02F9",L"091E"}) {
-        const std::wstring prefix = std::wstring(L"USB\\VID_045E&PID_") + pid + L"\\";
-        if (upper.starts_with(prefix)) return true;
-    }
-    return false;
-}
 std::vector<DeviceInfo> adapters() {
     InfoSet all{SetupDiGetClassDevsW(nullptr,nullptr,nullptr,DIGCF_PRESENT|DIGCF_ALLCLASSES)};
     if (all.value == INVALID_HANDLE_VALUE) throw std::runtime_error(win_error(GetLastError()));
@@ -72,7 +64,7 @@ std::vector<DeviceInfo> adapters() {
             break;
         }
         auto id = instance_id(all.value,device);
-        if (!supported(id)) continue;
+        if (!supported_adapter_instance(id)) continue;
         auto name = registry_property(all.value,device,SPDRP_FRIENDLYNAME);
         if (name.empty()) name=registry_property(all.value,device,SPDRP_DEVICEDESC);
         result.push_back({id,name,registry_property(all.value,device,SPDRP_SERVICE),

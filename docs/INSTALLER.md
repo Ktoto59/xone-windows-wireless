@@ -8,6 +8,17 @@ licenses and short documentation. Device profiles are compiled into the radio
 binary. Python, research probes, source trees, firmware, driver backups, physical
 addresses and captured USB traffic are excluded from the installed payload.
 
+On a fresh Windows 11 x64 installation, Setup downloads a pinned Microsoft CAB
+for the selected adapter model, verifies its catalog, installs the missing stock
+driver, saves recovery metadata and selects inbox WinUSB. Verified adapter RAM
+firmware and the pinned signed USBip client/virtual bus are prepared automatically.
+An incomplete installation of the tested USBip version is repaired by Setup.
+The application uses a static C/C++ runtime and Windows inbox GIP/audio drivers;
+Python, Visual C++ Redistributable, Accessories and build tools are not prerequisites.
+Internet access and UAC approval are required for missing downloaded components.
+A Windows-requested reboot is reported by Setup; the registered host starts at
+sign-in after reboot, without requiring manual dependency commands.
+
 Setup runs adapter/dependency preparation with UAC, then registers a limited
 interactive-user sign-in task for the C++ host. Its radio child is owned through
 a Windows job. Runtime USBip ports and process identities belong to that host;

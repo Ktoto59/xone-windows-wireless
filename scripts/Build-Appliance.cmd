@@ -24,4 +24,8 @@ if errorlevel 1 exit /b 1
 cl /nologo /std:c++20 /EHsc /O2 /W4 /WX /utf-8 /I src tests\appliance_config_tests.cpp /Fobuild\appliance\appliance_config_tests.obj /Feoutputs\appliance-candidate\appliance-config-tests.exe
 if errorlevel 1 exit /b 1
 outputs\appliance-candidate\appliance-config-tests.exe
+if errorlevel 1 exit /b 1
+cl /nologo /std:c++20 /EHsc /O2 /W4 /WX /utf-8 /I src tests\adapter_catalog_tests.cpp /Fobuild\appliance\adapter_catalog_tests.obj /Feoutputs\appliance-candidate\adapter-catalog-tests.exe
+if errorlevel 1 exit /b 1
+outputs\appliance-candidate\adapter-catalog-tests.exe
 exit /b %errorlevel%

@@ -1,6 +1,6 @@
-# Install and use the alpha.5 candidate
+# Install and use the alpha.5.1 candidate
 
-Download the [alpha.5 prerelease](https://github.com/Ktoto59/xone-windows-wireless/releases/tag/v0.1.0-alpha.5).
+Download the [alpha.5.1 prerelease](https://github.com/Ktoto59/xone-windows-wireless/releases/tag/v0.1.0-alpha.5.1).
 Use its Setup-x64.exe; extracting the
 runtime ZIP does not register the application or prepare the adapter.
 
@@ -11,7 +11,9 @@ See [limitations and update instructions](LIMITATIONS.md).
 ## Requirements
 
 - Windows 11 x64 and a logged-in user session.
-- External Xbox Wireless Adapter `045E:02FE`, connected during setup.
+- One Xbox Wireless Adapter, connected during setup: `045E:02FE` (tested),
+  `045E:02E6`, `045E:02F9` or `045E:091E` (hardware validation pending).
+  Setup installs the matching Microsoft stock package automatically if it is missing.
 - Xbox Wireless Headset 2021 or 2024, or a supported Series controller.
 - Administrator approval for adapter/dependency setup; internet access if verified
   firmware or the signed upstream USBip dependency is missing.
@@ -24,9 +26,11 @@ to WinUSB; its stock wireless driver does not run alongside it.
 ## Installation and pairing
 
 1. Connect the adapter and stop a development bridge running from another folder.
-2. Run `xone-windows-wireless-0.1.0-alpha.5-Setup-x64.exe` as your normal Windows
+2. Run `xone-windows-wireless-0.1.0-alpha.5.1-Setup-x64.exe` as your normal Windows
    user. Approve the separate administrator prompt for setup.
-3. Allow dependency preparation to finish. First-time USBip installation can
+3. Allow dependency preparation to finish. Setup downloads and installs missing
+   Microsoft adapter drivers, verified RAM firmware and signed USBip automatically.
+   You do not need to install Xbox Accessories, Python or Visual C++ separately. First-time USBip installation can
    briefly restart USB hubs. Restart Windows if requested.
 4. Turn on your devices. For a device not already paired with this adapter,
    activate pairing on the device and briefly press the adapter's pairing button.
