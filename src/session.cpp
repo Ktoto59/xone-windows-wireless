@@ -176,9 +176,9 @@ struct Session::Client {
                 case 7: if(p.payload.size()==2 && p.payload[1]==0x5b) {radio.guide=p.payload[0]!=0;radio.publish();std::cout<<"GUIDE "<<unsigned(p.payload[0])<<"\n";} break;
                 case 8:
                     if(audio){
-                        const auto before=audio->stage();const auto input=audio->input().code,output=audio->output().code;
+                        const auto before=audio->stage();const auto before_input=audio->input().code,before_output=audio->output().code;
                         audio->receive(p.payload,std::chrono::steady_clock::now());
-                        if(before!=audio->stage() || input!=audio->input().code || output!=audio->output().code)++radio.owner.status_revision_;
+                        if(before!=audio->stage() || before_input!=audio->input().code || before_output!=audio->output().code)++radio.owner.status_revision_;
                         std::cout<<"AUDIO CONTROL RX WCID="<<unsigned(radio.wcid)<<" client="<<unsigned(id)<<" data="<<hex(p.payload)<<" stage="<<audio->stage_name()<<"\n";
                     }break;
                 case 0x60:
