@@ -59,6 +59,7 @@ begin
   Result := 'Keep the Xbox Wireless Adapter connected.' + NewLine + NewLine +
     'Setup prepares WinUSB, verified firmware and the signed USBip dependency, then enables an invisible C++ host at sign-in.' + NewLine +
     'Windows asks for administrator approval. USB hubs may briefly restart during the first USBip installation.' + NewLine + NewLine +
+    'Do not update headset/controller firmware through this bridge. Stop it and use a physical USB data cable.' + NewLine + NewLine +
     'No control window, device-selection dialog, overlay or Python runtime is installed.';
 end;
 function RunMaintenance(Action: String; Elevated: Boolean; var ResultCode: Integer): Boolean;

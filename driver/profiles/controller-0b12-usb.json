@@ -10,5 +10,5 @@
   "ConfigurationDescriptor": "09027700030100a0fa0904000002ff47d00007050203400004070582034000040904000102ff47d00007050203400004070582034000020904010000ff47d0000904010102ff47d00007050301e40001070583014000010904020000ff47d0000904020102ff47d0000705040240000007058402400000",
   "ReferenceDriver": "dc1-controller + xboxgip",
   "VirtualTransportVerified": true,
-  "Source": "Local read-only hub descriptor capture, 2026-10-13; work/usb-series-os-reference.jsonl; physical serial omitted"
+  "Source": "Sanitized model USB descriptor reference; individual serial numbers omitted"
 }

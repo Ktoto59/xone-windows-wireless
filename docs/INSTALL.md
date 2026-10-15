@@ -1,7 +1,12 @@
 # Install and use the alpha.5 candidate
 
-This is a local prerelease candidate. Use its `Setup-x64.exe`; extracting the
+Download the [alpha.5 prerelease](https://github.com/Ktoto59/xone-windows-wireless/releases/tag/v0.1.0-alpha.5).
+Use its Setup-x64.exe; extracting the
 runtime ZIP does not register the application or prepare the adapter.
+
+**Do not update firmware through the bridge, including OTA headset updates.**
+Stop the bridge and use a physical USB data cable for the actual device.
+See [limitations and update instructions](LIMITATIONS.md).
 
 ## Requirements
 

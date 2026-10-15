@@ -1,279 +1,80 @@
-# xone Windows: C++ bridge candidate
+# xone Windows Wireless
 
-Текущая локальная версия `0.1.0-alpha.5`: радио, виртуальный USBIP/GIP,
-аудио и фоновый менеджер работают на C++. Python нужен только для разработки
-и сравнительных тестов. Обе ревизии Xbox Wireless Headset и Series-геймпад
-определяются динамически; у каждой сессии собственные очереди, часы и USB-серийный
-номер. Пользователь подтвердил чистый звук в обеих гарнитурах после исправления
-ложного удаления устройства при недоступности файла состояния.
+An experimental C++ bridge for the Xbox Wireless Adapter on Windows 11.
+Connect supported Xbox Wireless Headsets and Series controllers through the
+adapter while Windows uses its existing Xbox GIP and audio drivers.
 
-Установщик — экспериментальный кандидат, ещё не опубликованный релиз.
-[Установка и удаление](docs/INSTALL.md), [сборка установщика](docs/INSTALLER.md),
-[устройство моста и границы проверки](docs/cpp-bridge.md).
-USBIP остаётся частью транспорта. Проверки на одном ПК не подтверждают работу
-любой Xbox-гарнитуры или стабильность на других компьютерах.
+**[Download the alpha.5 installer](https://github.com/Ktoto59/xone-windows-wireless/releases/tag/v0.1.0-alpha.5)**
+| [Installation and removal](docs/INSTALL.md)
+| [Known limitations](docs/LIMITATIONS.md)
+| [Troubleshooting](docs/TROUBLESHOOTING.md)
 
-Ниже сохранены исторические заметки прототипа; старые ручные команды и ограничения
-не описывают установку текущего C++-кандидата.
+## Supported hardware
 
----
-# xone Windows — прототип транспорта и GIP
+| Device | Supported identity | Status |
+| --- | --- | --- |
+| External Xbox Wireless Adapter | USB `045E:02FE` | Required; one adapter per PC |
+| Xbox Wireless Headset 2021, green rim | RF `045E:0B31`, USB `045E:0B17` | Playback and pairing tested |
+| Xbox Wireless Headset 2024 | `045E:0B32` | Playback and pairing tested |
+| Xbox Series controller | RF `045E:0B13`, USB `045E:0B12` | Connection and input tested |
 
-Порт низкоуровневого транспорта Xbox Wireless Adapter из
-[medusalix/xone](https://github.com/medusalix/xone) для Windows x64.
-**Экспериментальный порт: ввод публикуется через системный Xbox GIP
-или ViGEmBus/XInput, обратная вибрация реализована. Для обеих ревизий Xbox
-Wireless Headset виртуальный USB/GIP-тракт подтвердил чистые контрольные тоны.
-Для новой гарнитуры также проверены сигнал микрофона и автоматическое
-повторное подключение.**
+These are model IDs, not individual serial numbers. Supported devices are detected
+dynamically: there is no compiled address allowlist or developer-specific device
+mapping. Other Xbox-compatible products, internal radios and adapter variants are
+not covered. Eight software association slots do not imply support for eight
+simultaneous audio streams.
 
-Текущий приоритет — сохранить штатное качество и Xbox Accessories, исправив
-переподключения новой гарнитуры. В штатной трассе локализован отказ auth v3;
-прямое исправление auth v3 ещё не реализовано. См. [docs/STOCK-REFERENCE.md](docs/STOCK-REFERENCE.md).
-Новая гарнитура по USB-C проверена: чистый звук и настройки Accessories работают.
-Виртуальный USB/GIP выход уже передаёт команды новой гарнитуры поверх радио:
-Windows назначила штатные `dc1-controller / xboxgip / usbaudio` без ошибок,
-пользователь подтвердил гарнитуру и загрузку настроек Xbox Accessories без USB-C.
-Экспериментальный PCM-мост исправляет упаковку восьми ISO-фрагментов и
-синхронизирует отправку с тактом гарнитуры. Пользователь подтвердил чистые
-тоны до и после перезапуска; микрофон выдаёт ненулевой сигнал 24 кГц, моно.
-Для гарнитуры 2021 добавлен отдельный USB-профиль и независимый тракт;
-контрольные тоны также чистые. Совместный запуск сохраняет системный GIP-выход
-геймпада: `scripts\Run-UsbGip.ps1 -AudioBridge` (требуется UAC для геймпада).
-Совместно подключены обе гарнитуры и Series-геймпад: на обеих подтверждены
-чистые тоны, геймпад выдаёт живые кнопки/стики XInput. Длительная музыка,
-качество голоса и переподключения при совместной работе ещё требуют проверки:
-[docs/NATIVE-USB.md](docs/NATIVE-USB.md).
+## Quick start
 
-Series также получил отдельный нативный USB/GIP-выход: пользователь подтвердил
-появление геймпада и открытие настроек Xbox Accessories без кабеля; получено
-466 изменений XInput. Для этого режима после остановки прежнего моста:
-`scripts\Run-UsbGip.ps1 -AudioBridge -NativeController -FallbackOutput none`.
-По умолчанию мост работает бессрочно (`-Seconds 0`), остановка —
-`Run-UsbGip.ps1 -Stop`. Он обслуживает три известных MAC без UAC. Xbox Accessories всё ещё показывает
-«Подсоединён/Подсоединена», хотя XInput/WGI получают батарею геймпада,
-а диагностика — батарейные статусы всех трёх устройств. Подробности и границы:
-[docs/ACCESSORIES-BATTERY.md](docs/ACCESSORIES-BATTERY.md).
+1. On Windows 11 x64, connect the adapter and stop any bridge running from a
+   development checkout or a different installation.
+2. Download and run `xone-windows-wireless-0.1.0-alpha.5-Setup-x64.exe` as your
+   normal Windows user. Approve the separate administrator prompt for setup.
+3. Let Setup prepare WinUSB, verified adapter RAM firmware and the signed USBip
+   dependency. Restart Windows or reconnect the adapter if requested.
+4. Turn on the device. For first pairing, activate pairing on the device and
+   briefly press the adapter's pairing button. Later, use ordinary power-on.
+5. Choose the desired headset playback/microphone endpoint in Windows or your app.
+   A newly connected headset does not change your default audio selection.
 
-На этом компьютере обнаружен внешний адаптер `045E:02FE`, штатный драйвер
-`mt7612US` версии `1.0.46.1`. Один подключённый геймпад проверен через XInput.
+The invisible host starts at the installing user's sign-in. No Python installation,
+resident PowerShell, tray application or test-signing mode is required. Remove it
+through Windows **Installed apps**, keeping the adapter connected. Read the
+[full guide](docs/INSTALL.md) before installing or migrating an existing setup.
 
-## Реализовано
+## Important limitations
 
-- Обнаружение адаптера через SetupAPI, вывод текущего драйвера и интерфейсов.
-- Реальный транспорт WinUSB: vendor control transfers, bulk OUT `04`,
-  параллельное чтение bulk IN `84` и `85` с таймаутами.
-- Перенос `xone/transport/mt76.c`: загрузка/сброс RAM-прошивки, инициализация
-  регистров, калибровка, выбор каналов, LED, beacon и команды клиентов.
-- Ограниченный слой совместимости для этого модуля, с контролем границ буфера
-  и фиксацией первой ошибки USB. После ошибки новые передачи не выполняются.
-- Разбор MT76 RXWI, кадров 802.11, GIP-заголовков и базового ввода геймпада.
-- Менеджер 16 радиоклиентов, ассоциация, ответы на сопряжение по кнопке,
-  отключение, GIP ACK, исходящие фрагменты и проверяемая сборка входящих.
-- Идентификация классов GIP и аутентификация RSA/ECDH через Windows CNG,
-  проверка хеша обмена, установка CCMP-ключа и включение шифрования.
-- Запись USB-пакетов в JSONL для последующего анализа и воспроизведения.
-- Виртуальные Xbox 360 через ViGEmBus: кнопки, Guide, стики и триггеры.
-- Обратные XInput-команды вибрации двух основных моторов через GIP.
-- Экспериментальный системный выход XboxGipSynthetic: XInput, WGI и
-  обратный канал всех четырёх моторов. См. [docs/NATIVE-GIP.md](docs/NATIVE-GIP.md).
-- Разбор Share/DLI по интерфейсам физического геймпада и уровня батареи GIP;
-  состояние доступно через `scripts\Get-ControllerStatus.ps1`. Эти поля
-  пока не передаются синтетическому устройству Windows.
-- Аудиопротокол: выбор PCM-формата, задержки настройки, аутентификация,
-  стереопоток 48 кГц и микрофонный поток 24 кГц через отдельный системный GIP-хост.
-  Устройства звука Windows доступны в native-gip. См.
-  [docs/HEADSET-AUDIO.md](docs/HEADSET-AUDIO.md).
-- Фоновый мост, отмена ожидающих IOCTL и удаление виртуальных устройств.
-- Утилита наблюдения XInput как штатного драйвера, так и нашего моста.
-- Точечное переключение на подписанный системный WinUSB и восстановление
-  штатного драйвера, проверенные на подключённом адаптере.
+- **Do not update headset or controller firmware through the bridge, including
+  over-the-air updates offered by Xbox Accessories.** Stop the bridge and use a
+  physical USB data cable with the manufacturer's supported update procedure.
+  The virtual wired appearance does not make this transport update-compatible.
+- The physical adapter is dedicated to this bridge while bound to WinUSB. Its
+  stock wireless driver cannot serve other devices in parallel on that adapter.
+- USBip remains part of the transport. The project supplies user-mode software,
+  not a replacement certified wireless kernel driver. Project EXEs are unsigned;
+  the Windows and upstream USBip kernel drivers are signed.
+- Xbox Accessories may show **Connected** instead of a wireless battery level.
+  Device detection/settings do not imply support for every Accessories operation.
+- Controller audio-jack streaming and stock-equivalent wireless authentication/
+  encryption are not implemented or established for the raw USB/GIP route.
+- Tested on one development PC. Fresh-PC hardware setup/restoration, long-duration
+  voice/music use and broad sleep/resume behavior still need validation.
 
-## Проверено на адаптере
+See [all limitations](docs/LIMITATIONS.md), including update instructions and the
+difference between adapter RAM firmware and updating a headset.
 
-На внешнем `045E:02FE` прошли загрузка RAM-прошивки, чтение chip ID `7613`,
-инициализация радио, калибровка и выбор канала 165, LED-команды и чтение обоих
-IN endpoints. За 25 секунд приняты 33 USB-пакета, включая три события кнопки.
-Запись: `work/radio-confirmed.jsonl`, журнал: `work/radio-confirmed.log`.
-Первое испытание проверяло только низкоуровневый транспорт.
+## Development and privacy
 
-Следующая аппаратная итерация прошла: один геймпад ассоциирован,
-идентифицирован и аутентифицирован через **ECDH/auth v2**; установлен
-CCMP-ключ. Получены **429 живых отчётов ввода** (A/B, оба триггера и стика)
-и события кнопки Xbox, всего 1727 USB-пакетов. Штатный драйвер автоматически
-восстановлен. Запись: `work/radio-20261012-190109.jsonl`, журнал:
-`work/probe-20261012-190109.log`. В следующей итерации реализован виртуальный
-контроллер Windows/XInput и обратная вибрация. Аутентификация RSA прошла
-программные тесты; аппаратное аудио добавлено в последующей итерации ниже.
+The runtime path and background manager are C++. Python sources remain as a test
+reference and development tools. [Build instructions](docs/INSTALLER.md),
+[architecture](docs/ARCHITECTURE.md), [development checks](docs/DEVELOPMENT.md),
+[changelog](CHANGELOG.md) and [upstream attribution](docs/UPSTREAM.md).
 
-Системный Xbox GIP также проверен с физическим Series-геймпадом: независимый
-XInput получил кнопки, оба триггера и все оси; пользователь подтвердил четыре
-мотора в тесте WGI с активным окном. Финальная реализация вынесена в отдельный
-GIP-процесс: три программных цикла создания, ввода, обратной вибрации и удаления
-прошли.
+The repository and release payloads exclude real device addresses, captured
+serials, user SIDs, local configurations, recordings, packet captures, firmware,
+driver backups and certificates. Pairing data and recovery state are generated
+locally for each installation. Do not upload your complete `work/` or `config/`
+directories; see [privacy notes](docs/PRIVACY.md).
 
-Старая гарнитура с зелёной рамкой сопряжена с текущим адаптером: пройдены
-аутентификация и CCMP, появились оба устройства звука Windows. Пользователь
-подтвердил отдельные тихие тоны в левом и правом наушниках. Проверка микрофона
-получила 479989 кадров за 10 секунд при ожидаемых 480000 и ненулевой уровень
-речи без сохранения записи. Для аудио пока
-создаётся дополнительный пустой GIP-контроллер, занимающий слот XInput.
-Пользователь сообщил о сильных искажениях этого синтетического выхода.
-В последующем отдельном USB/GIP-тракте гарнитуры 2021 подтверждены чистые
-контрольные тоны; его микрофон и длительная работа ещё требуют проверки.
-Текущий статус и ограничения: [docs/STATUS.md](docs/STATUS.md).
-
-## Пока отсутствует
-
-Передача Share/батареи в системный GIP, проверка записи настроек Xbox Accessories,
-обновление прошивок через виртуальный USB и
-восстановление после сна. Новая гарнитура `045e:0b32` ассоциируется и сообщает
-PCM-форматы, но отвечает пустым Client Hello с версией 3. Однократный запрос
-поддерживаемой версии 2 не завершил обмен. Узкая экспериментальная ветка PCOptOut
-создала аудиоустройства и передала звук, но пользователь подтвердил искажения.
-Поддержка аутентификации версии 3, Dolby Atmos и регуляторов пока отсутствует.
-Ошибка аутентификации изолируется для одного устройства, остальные радиоклиенты
-продолжают обслуживаться. Полный совместный тест звука, ввода и вибрации ещё нужен.
-
-`radio-test --pair-beacon` только включает объявление режима сопряжения на
-30 секунд максимум. Прототип не отвечает на запросы сопряжения и не завершает
-подключение контроллера или гарнитуры.
-
-## Сборка
-
-Нужны Visual Studio C++ Build Tools 2022 и Windows SDK. WDK для этого
-пользовательского прототипа не нужен. В PowerShell из корня проекта:
-
-```powershell
-cmd /c scripts\build.cmd
-```
-
-Результаты: `outputs\xone-probe.exe`, `outputs\native-gip-probe.exe`,
-`outputs\native-audio-probe.exe`, `outputs\audio-endpoint-test.exe`, `outputs\xone-bind.exe`,
-`outputs\protocol-tests.exe`, `outputs\session-tests.exe`. Скрипт запускает
-14 тестов транспорта и 28 тестов GIP, менеджера, обоих handshake, криптографии
-и отображения ввода/вибрации.
-Независимые векторы PRF/ECDH воспроизводятся `python tests\crypto_vectors.py`.
-Windows-слой
-собирается с `/W4 /WX`; импортированный C-код — с `/W3`.
-
-## Команды без изменения драйвера
-
-```powershell
-.\outputs\xone-probe.exe list
-.\outputs\xone-probe.exe xinput --seconds 20
-.\outputs\xone-probe.exe firmware-info --firmware work\firmware\FW_ACC_00U.bin
-.\outputs\xone-probe.exe probe
-.\scripts\Switch-WinUSB.ps1 -Mode Plan
-```
-
-При штатной привязке `probe` завершится с кодом 2 и объяснит, что прямой
-USB-доступ закрыт. `xinput` видит все доступные XInput-устройства; источник
-определяется текущей привязкой адаптера и работающим мостом.
-
-Прошивка скопирована из локального установленного драйвера в `work/firmware`,
-не включена в исходники и не распространяется в составе проекта. В
-`radio-test` разрешён только SHA-256 образа, используемого xone:
-
-```text
-48084d9fa53b9bb04358f3bb127b7495dc8f7bb0b3ca1437bd24ef2b6eabdf66
-```
-
-## Аппаратное испытание
-
-См. [docs/WINUSB.md](docs/WINUSB.md). Во время переключения геймпады и
-гарнитуры на этом адаптере временно перестанут работать через штатный драйвер.
-Не нужно отключать Secure Boot, проверку подписей или целостность памяти.
-
-После привязки WinUSB и физического переподключения адаптера:
-
-```powershell
-.\outputs\xone-probe.exe probe
-.\outputs\xone-probe.exe radio-test --firmware work\firmware\FW_ACC_00U.bin --seconds 30 --capture work\radio-001.jsonl --verbose
-.\outputs\xone-probe.exe controller-test --firmware work\firmware\FW_ACC_00U.bin --seconds 120 --capture work\controller-001.jsonl
-```
-
-Без `--virtual-xinput` это испытание транспорта и ввода GIP. С этим флагом
-публикуется виртуальный контроллер. `Ctrl+C` завершает цикл чтения.
-
-`controller-test` обслуживает подключения и пытается аутентифицировать геймпад.
-При успехе выводит `AUTHENTICATED`, `ENCRYPTED` и `INPUT` с кнопками и осями.
-Он возвращает 0 только при успешной аутентификации и полученном вводе; код 3
-означает, что эти условия не выполнены. `--stop-file FILE` позволяет завершить
-проверку созданием файла. В `controller-test` и `run` параметр `--pair-beacon`
-открывает начальное 30-секундное окно сопряжения. Поиск по разным каналам
-выполняется только при отсутствии подключённых клиентов.
-
-Для координируемого испытания из PowerShell администратора можно запустить
-`scripts\Hardware-Test.ps1 -TestMode controller -VirtualXInput -Seconds 300 -WaitForReadySignal`.
-Скрипт записывает путь подтверждения в `work\hardware-result.json`: после
-переподключения нужно создать `ReadySignal`. Только затем начинается радио.
-По умолчанию WinUSB сохраняется. При уже выбранном WinUSB смена драйвера,
-UAC и подтверждение переподключения не нужны. `-RestoreStock` явно запрашивает
-восстановление штатного драйвера после испытания.
-
-## Постоянный мост и XInput
-
-Для запасного выхода `-Backend vigem` требуется подписанная
-[ViGEmBus 1.22.0](https://github.com/nefarius/ViGEmBus/releases/tag/v1.22.0).
-Проект [архивирован](https://docs.nefarius.at/projects/ViGEm/End-of-Life/);
-это временная зависимость прототипа. `scripts\Install-Vigem.ps1` проверяет
-локальный официальный установщик по SHA-256 и Authenticode перед установкой
-с правами администратора. Клиентская DLL не нужна; используется IOCTL протокол.
-
-После однократной привязки WinUSB и переподключения запускается фоновый мост.
-По умолчанию выбран системный GIP: нужны режим разработчика и подтверждение UAC.
-См. [docs/NATIVE-GIP.md](docs/NATIVE-GIP.md). Для старого выхода Xbox 360
-используй `Run-Bridge.ps1 -Backend vigem`; ему достаточно обычного PowerShell.
-
-```powershell
-.\scripts\Run-Bridge.ps1
-.\scripts\Get-ControllerStatus.ps1
-.\outputs\xone-probe.exe xinput --seconds 20
-.\outputs\xone-probe.exe xinput-rumble --slot 0 --large 16000 --small 0 --seconds 1
-.\scripts\Run-Bridge.ps1 -Stop
-```
-
-Мост работает в фоне; повторный запуск использует существующий процесс.
-PID и журналы находятся в `work\bridge-running.json`. `-Stop` завершает мост
-через stop-файл, останавливает вибрацию и удаляет виртуальные устройства.
-Привязка WinUSB сохраняется. Для работы геймпада мост должен быть запущен.
-Автозапуска при входе в Windows пока нет.
-
-Запуск в текущем терминале:
-
-```powershell
-.\outputs\xone-probe.exe run --firmware work\firmware\FW_ACC_00U.bin --output native-gip
-.\outputs\xone-probe.exe virtual-test
-```
-
-Этот запуск требует терминала администратора. `--output vigem` выбирает ViGEm.
-`run` по умолчанию не ограничен по времени, `Ctrl+C` завершает мост.
-`--seconds N` задаёт время, `--verbose` включает отчёты ввода.
-Кнопка адаптера открывает сопряжение на 30 секунд; ранее сопряжённый геймпад
-подключается автоматически. `virtual-test` не обращается к USB: трижды проверяет
-точное состояние XInput, обратный канал вибрации, отмену уведомлений и удаление.
-Для каждого аутентифицированного геймпада создаётся отдельное устройство;
-XInput ограничен четырьмя слотами. При отключении USB мост завершается,
-после подключения его нужно запустить снова.
-
-## Следующие этапы
-
-1. USB-разметка, RAM-прошивка, LED и события кнопки проверены.
-2. Менеджер клиентов, GIP ACK/фрагментация и аутентификация перенесены;
-   программные проверки пройдены.
-3. Живой ввод одного геймпада проверен; выход Windows/XInput реализован.
-4. Все четыре мотора проверены с нативным GIP; проверить обе ревизии,
-   несколько устройств, стабильность нового выхода; передать Share/батарею в Windows.
-5. Аудиопотоки и Windows endpoints реализованы для PCM 9/16;
-   проверить микрофон, переподключение и обе ревизии гарнитур, убрать пустой GIP-родитель.
-6. Проверить сон/пробуждение, отключения USB, задержки и длительную работу;
-   затем собрать подписанный установочный пакет.
-
-## Происхождение и лицензия
-
-Исходники GPL-2.0-or-later. Авторские уведомления xone и mt76 сохранены.
-Заголовки ViGEmClient — MIT, уведомления сохранены в `third_party/vigem`.
-Версия upstream и изменения импорта описаны в [docs/UPSTREAM.md](docs/UPSTREAM.md).
-`work/` с локальной прошивкой, резервной копией штатного драйвера, upstream
-checkout и аппаратными логами исключён из Git.
+GPL-2.0-or-later; third-party notices are preserved. This community research
+project is not affiliated with or endorsed by Microsoft or Xbox.

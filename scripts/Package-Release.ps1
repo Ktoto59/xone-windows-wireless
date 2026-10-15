@@ -20,13 +20,17 @@ function Copy-PackageFile([string]$Relative,[string]$Destination){
 }
 $taskRuntimeFiles=@('LICENSE','third_party/json/LICENSE.MIT','third_party/vigem/LICENSE',
     'docs/INSTALL.md','docs/TROUBLESHOOTING.md','docs/cpp-bridge.md',
+    'docs/LIMITATIONS.md','docs/PRIVACY.md','docs/UPSTREAM.md',
     'scripts/Setup-Action.ps1','scripts/Setup-Helpers.ps1','scripts/Device-Config.ps1',
     'scripts/Switch-WinUSB.ps1','scripts/Import-Firmware.ps1',
     'scripts/Set-AutomaticBridge.ps1','scripts/Run-MaintainedBridge.ps1')
 $taskSourceExtra=@('README.md','.gitignore','.gitattributes','docs/INSTALLER.md',
     'scripts/build.cmd','scripts/Build-Appliance.cmd','scripts/Build-CppBridge.cmd',
     'scripts/Build-Installer.ps1','scripts/Package-Release.ps1','scripts/Test-CppBridge.cmd',
-    'scripts/Test-Installer.ps1','scripts/generate-usb-profiles.py')
+    'scripts/Test-Installer.ps1','scripts/generate-usb-profiles.py','scripts/check-public-content.py',
+    'CHANGELOG.md','docs/DEVELOPMENT.md','docs/ARCHITECTURE.md','docs/BACKGROUND-MODE.md',
+    'docs/AUTO-PAIRING.md','docs/HEADSET-RECONNECT.md','docs/USBIP-LATENCY.md',
+    'docs/RELEASE-alpha.5.md','.github/workflows/public-content.yml')
 Push-Location -LiteralPath $taskRoot
 try{
     # Include new, non-ignored source files as well as tracked files. Never

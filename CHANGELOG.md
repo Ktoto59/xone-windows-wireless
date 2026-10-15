@@ -1,132 +1,30 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-alpha.5 - 2026-10-15
 
-- Add an opt-in C++ USB/IP/GIP/PCM backend within the radio process, with per-device
-  event-driven threads, headset-clock pacing, bounded queues and MMCSS. Preserve
-  the three captured USB profiles and the signed USBip/Windows GIP route.
-  Descriptor equivalence, synthetic audio/cancellation and real loopback transport
-  checks pass. An initial 2024-headset physical audio check was clean, but a later
-  stutter was reported under IDE activity; sustained reliability is unvalidated.
-- Add a control-panel selector for C++/Python with saved selection and background
-  restart. Keep established USB/GIP imports alive when idle; limit only incomplete
-  handshakes to five seconds.
-- Move radio status writes off the RF thread; disable routine audio packet logs,
-  send diagnostics to a bounded ordinary worker and write statistics every two
-  seconds while retaining prompt connection/generation updates.
-- Replace repeated PnP/CIM supervisor queries with direct Configuration Manager
-  reads, and add a hidden GUI-subsystem host for the background supervisor.
-  The user reported that stutters appeared to stop after reduced logging, but
-  the infrequent system freezes have not yet been conclusively attributed.
+- Move automatic USBIP/GIP, PCM processing and background management to C++.
+- Select per-revision connectors from RF announcements before USB export.
+- Give every association independent queues, clocks, tokens and stable locally
+  derived serials. No developer device allowlist or pre-filled MAC mapping.
+- Preserve 2021 headset wireless reconnect with an exact USB mode-6 compatibility
+  filter and an independent audio clock; keep the 2024 connector separate.
+- Bound capture/render age and stale audio; interleave shared radio submissions.
+- Fix host removal of a device when its status file is temporarily unreadable.
+- Respect Windows/user audio selection instead of selecting the newest headset.
+- Produce a minimal installer/runtime package and separate corresponding source.
+- Replace historical front-page instructions with current English installation,
+  pairing, privacy and limitation guides. Explicitly prohibit firmware updates
+  through the bridge and explain physical USB updating.
 
-## 0.1.0-alpha.3 — 2026-10-13
+Validation: 99 Python/reference and loopback checks; C++ session/codec/core and
+snapshot checks; setup/configuration checks; isolated Installed apps registration
+and removal. Both physical headset revisions and a Series controller connected
+on one PC, with clean short playback reported. Broad hardware setup/restoration,
+long-duration voice/music and sleep/resume remain unverified.
 
-- Keep discovery beacons/RX enabled for configured USB/GIP peers after manual
-  enrollment closes. The default USB-only route rejects unknown associations
-  and pair requests outside the manual window. Scan only when all peers are absent;
-  hold the channel for ten seconds after a pair response so enrollment can finish.
-- Confirm one ordinary power-on of the old headset without an adapter button,
-  followed by one warm restart with clean ordinary playback on channel 165.
-  An earlier connection on channel 11 had slight stutters. Repeated cycles and
-  sustained multi-device audio remain unvalidated; this is not a general RF fix.
-- Wait for Task Scheduler to finish stopping before returning from Stop/Disable,
-  preventing IgnoreNew from discarding an immediate subsequent start.
+## Earlier previews
 
-- Recover configured USB/GIP peers that associate but send no initial GIP data:
-  after five seconds, invalidate only that peer's USB generation, clear its
-  firmware slot and resend association, up to three attempts. Established idle
-  peers and active siblings are preserved. Later reassociations refresh the
-  Windows/GIP generation; immediate WLAN retries are debounced for one second.
-- Confirm one warm bridge restart on the new headset without USB replug: the
-  first targeted recovery resumed audio, and the user confirmed clean playback.
-  New session regressions pass with the existing checks (37 session tests total).
-  Repeated restarts, old-headset cycles and sleep/resume remain unvalidated.
-
-- Override inherited BelowNormal scheduling for audio servers and the RF process
-  with AboveNormal, and register audio event-loop threads with Windows MMCSS
-  Pro Audio. Live priority adjustment reduced reported stutters under system load.
-  After applying the complete change and cold-resetting the adapter, the user
-  reported that playback returned and stutters appeared to be gone at the same
-  load. A later targeted session recovery restored one warm restart without USB
-  replug as recorded above; sustained load and repeated recovery remain unvalidated.
-- Remove synchronous status-file writes from radio callbacks. Publish snapshots
-  on a disk worker at most five times per second, including during idle periods.
-  Verify USB requests remain responsive while a status write is blocked.
-
-- Select the existing signed WinUSB/usbip-win2/Windows GIP path for deployment;
-  abandon kernel certification/test-signing as a delivery requirement. The local
-  development certificate trust was removed without changing boot security.
-- Add a limited-privilege, password-free per-user Task Scheduler host with
-  sign-in startup, unlimited sessions, waiting for absent adapters and bounded
-  worker restart. Add a resume-recovery code path, not yet tested after sleep.
-- Add Enable/Disable automatic mode to the panel and installer; coordinate
-  discovery, configuration, driver changes, upgrade and uninstall with the host.
-- Confirm automatic worker restart and radio restart after physical USB replug.
-  A fresh pairing following headset connection reset completed; the user confirmed
-  clean ordinary playback on the new headset without USB-C. Longer/simultaneous
-  audio, old-device reconnect and warm-start behavior still need validation.
-
-- Respond to configured USB/GIP peers' radio re-enrollment requests outside the
-  manual pairing window. Unknown peers still need manual pairing; matching stale
-  peer/USB generations are removed without disturbing siblings.
-- Open a 60-second association/pairing window at radio startup, with channel scans
-  paused while clients are present. Repeated button events refresh scan timing.
-- Port cold-start RF patch, MCU startup delays and wake-on-wireless routing reset
-  from dlundqvist/xone v0.5.8. No adapter firmware image or driver binding changes.
-- Filter invalid association MACs and incomplete beacon-loopback MPDUs before
-  client allocation/header parsing. Add software regression checks for these paths.
-- Pace complete eight-slot capture blocks by actual radio arrival rather than a
-  second host timer. Bound the real-time capture FIFO to 64 one-ms frames, discard
-  stale PCM on overrun with diagnostic counters, and keep the command connection
-  alive. Oversized capture requests fail explicitly instead of waiting forever.
-- Add render peak/nonzero-packet counters without logging PCM or recording voice.
-
-Longer hardware validation exposed capture FIFO drift and a fatal queue-limit
-disconnect. Software regressions cover stalls beyond the former 2048-frame bound,
-recent-PCM retention, command continuity, device-clock delivery and reset handling.
-The corrected change has since received the limited new-headset confirmation
-above; broader hardware/audio validation remains pending.
-The published alpha.2 assets remain the frozen installer version.
-
-## 0.1.0-alpha.2 — 2026-10-13
-
-- Windows x64 Setup EXE with per-user installation, Start menu/desktop shortcuts
-  and an uninstall entry.
-- First-run WinForms control panel for dependency preparation, adapter binding,
-  association discovery and device mapping, bridge start/stop and stock restoration.
-- Isolated official Python 3.13.16 runtime included in Setup with its license.
-  USBip and firmware are obtained separately from their official sources and checked.
-- Uninstall/upgrade checks for a stopped bridge; removal restores only the saved
-  binding owned by that installation and refuses deletion when restoration fails.
-- Unlimited launcher sessions with `-Seconds 0`, used by the control panel.
-- Setup helper tests for checksum rejection, atomic mapping, radio-address parsing,
-  process identities and uninstall guards. No radio/audio protocol changes.
-
-Headset 2021 reconnection and Accessories' Connected battery label remain unresolved.
-The installer does not turn this user-mode/virtual USB prototype into a kernel driver.
-
-## 0.1.0-alpha.1 — 2026-10-13
-
-First public snapshot of the working Windows x64 research prototype.
-
-- xone-derived WinUSB/MT76 radio transport, client handling, supported v1/v2
-  authentication, protocol parsing and fragment/ACK handling.
-- Captured native USB/GIP profiles for Series, Headset 2021 and Headset 2024.
-- Windows Xbox Accessories detection/settings opening for tested hardware.
-- Native XInput input and short clean stereo headset-tone validation.
-- Radio-clock render pacing and eight-slot USB/ISO audio adaptation.
-- Per-device brokers and ownership checks for concurrent devices.
-- Radio-to-USB fragmentation preserving original ACK boundaries.
-- Physical battery observation and read-only WGI battery diagnostics.
-- Snapshot locking/recovery fixes, with a live blocking-file regression check.
-- Public device configuration without embedded owner MACs or adapter serials.
-
-Known issues include Headset 2021 requiring re-pairing/search recovery after a
-power cycle, Accessories' Connected battery label, unimplemented wireless auth v3,
-unverified raw-peer RF encryption, no firmware-update forwarding, and incomplete
-long-term/audio/reconnection validation. See README for the full scope.
-
-Local hardware observations preceded publication cleanup. The public wrapper uses
-private per-user configuration instead of the development machine's fixed IDs.
-Protocol/radio/audio core behavior is retained. Software checks validate the
-configuration changes; broad hardware compatibility is not claimed.
+Alpha.1-alpha.4 explored Python supervision, fixed model slots, C++ transport and
+invisible startup. They remain historical releases with version-specific source
+and known limitations. Use alpha.5 instructions for the current implementation;
+old control-panel, fixed-address and audio auto-selection instructions do not apply.

@@ -59,7 +59,7 @@ try{
     if($Mode -eq 'RestoreTestSettings'){
         if($taskBefore.TestSigningChanged){
             if($taskBefore.TestSigningLine.Count -eq 0){& $taskBcd /deletevalue testsigning}
-            elseif(($taskBefore.TestSigningLine -join ' ') -match '\s+(Yes|Да)\s*$'){& $taskBcd /set testsigning on}
+            elseif(($taskBefore.TestSigningLine -join ' ') -match '\s+(Yes|\u0414\u0430)\s*$'){& $taskBcd /set testsigning on}
             else{& $taskBcd /set testsigning off}
             if($LASTEXITCODE -ne 0){throw 'Cannot restore the original test-signing setting.'}
             $taskBefore.TestSigningChanged=$false;$taskResult.RestartRequired=$true

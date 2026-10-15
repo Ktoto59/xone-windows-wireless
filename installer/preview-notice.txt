@@ -1,18 +1,21 @@
-xone-windows-wireless — automatic C++ background preview
+xone-windows-wireless - C++ bridge alpha.5
 
-Keep the external 045E:02FE adapter connected during Setup. Setup prepares the
-verified Microsoft RAM firmware and signed USBip dependency, backs up the stock
-binding and selects Microsoft's WinUSB driver. Windows administrator approval
-and Internet access can be needed. The first USBip installation briefly restarts
-USB hubs; Windows can request a reboot.
+Keep the external 045E:02FE adapter connected during Setup. Setup prepares
+verified adapter RAM firmware, the signed USBip dependency and system WinUSB.
+UAC, internet access, adapter reconnect or a reboot may be required. The first
+USBip installation can briefly restart USB hubs.
 
-The application has no control window, tray icon or overlay. It starts in the
-user session at sign-in, recognizes the supported controller/headset models,
-connects them and selects the connected headset for audio. Normal operation uses
-C++ executables, with no Python runtime, resident PowerShell or text logs.
+Devices are detected automatically. The invisible C++ host starts at user sign-in;
+no Python runtime or resident PowerShell is installed. Choose headset audio in
+Windows or your application. Connecting another headset does not change defaults.
 
-This remains an experimental user-mode USB/GIP bridge tested on one development
-PC. It is not a new Xbox kernel driver. Firmware updates require a real USB cable.
+Do not update headset/controller firmware through this bridge, including OTA
+updates offered by Xbox Accessories. Stop the bridge and use a physical USB data
+cable and the manufacturer's update procedure for the real device.
+
+This is an experimental user-mode USBIP/GIP bridge tested on one PC. Project
+executables are unsigned. Stock wireless security parity, controller audio-jack
+streaming and full lifecycle reliability are not established. See docs/LIMITATIONS.md.
 
 Uninstall restores only a stock binding owned by this installation. Keep the
-adapter connected. Shared USBip and private recovery data are retained.
+adapter connected and retain recovery data. Shared USBip is not removed.

@@ -9,6 +9,13 @@ $taskDirectory=Join-Path $taskRoot ('work/config-test-'+[guid]::NewGuid().ToStri
 $taskPath=Join-Path $taskDirectory 'devices.json'
 try{
     Copy-Item -LiteralPath (Join-Path $taskRoot 'config/devices.example.json') -Destination $taskPath
+    $taskAutomaticTemplate=Read-XoneDeviceConfig $taskPath -AllowEmpty
+    Check ($taskAutomaticTemplate.Devices.Count -eq 0 -and $taskAutomaticTemplate.BridgeBackend -eq 'cpp') 'Public template requires device-specific mappings'
+    $taskFixture=@{Version=1;AdapterInstanceId='';Devices=@(
+        @{Name='new';Mac='020000000001';Profile='headset-0b32-usb.json'},
+        @{Name='old';Mac='020000000002';Profile='headset-0b17-usb.json'},
+        @{Name='controller';Mac='020000000003';Profile='controller-0b12-usb.json'})}
+    [IO.File]::WriteAllText($taskPath,($taskFixture | ConvertTo-Json -Depth 5))
     $taskConfig=Read-XoneDeviceConfig $taskPath
     Check ($taskConfig.Devices.Count -eq 3) 'Example configuration rejected'
     Check ($taskConfig.BridgeBackend -eq 'python') 'Reference backend default changed'
