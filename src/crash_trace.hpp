@@ -3,19 +3,12 @@
 #include <cstdio>
 #include <cwchar>
 inline LONG WINAPI xone_crash_trace(EXCEPTION_POINTERS *e) {
-    // Launchers supply the checkout/install root as WorkingDirectory. Candidate
-    // EXEs may be nested under outputs/direct-gip.
-    wchar_t path[4096]{};const auto length=GetCurrentDirectoryW(4096,path);
-    if(!length || length>=4000)return EXCEPTION_CONTINUE_SEARCH;
-    wchar_t executable[MAX_PATH]{};GetModuleFileNameW(nullptr,executable,MAX_PATH);
-    const auto *process_base=std::wcsrchr(executable,L'\\');process_base=process_base?process_base+1:executable;
-    wchar_t suffix[MAX_PATH]{};swprintf_s(suffix,L"\\work\\%ls-crash-stack.txt",process_base);
-    if(length+std::wcslen(suffix)>=4096)return EXCEPTION_CONTINUE_SEARCH;
-    wcscat_s(path,suffix);
+    wchar_t path[4096]{};if(!GetModuleFileNameW(nullptr,path,4096))return EXCEPTION_CONTINUE_SEARCH;
+    auto *tail=std::wcsrchr(path,L'\\');if(!tail)return EXCEPTION_CONTINUE_SEARCH;*tail=0;
+    tail=std::wcsrchr(path,L'\\');if(!tail)return EXCEPTION_CONTINUE_SEARCH;
+    wcscpy_s(tail,4096-static_cast<size_t>(tail-path),L"\\work\\native-crash-stack.txt");
     FILE *file=nullptr;_wfopen_s(&file,path,L"w");if(!file)return EXCEPTION_CONTINUE_SEARCH;
     std::fprintf(file,"Exception=%08lx RIP=%llx\n",e->ExceptionRecord->ExceptionCode,e->ContextRecord->Rip);
-    if(e->ExceptionRecord->ExceptionCode==EXCEPTION_ACCESS_VIOLATION && e->ExceptionRecord->NumberParameters>=2)
-        std::fprintf(file,"access_kind=%llu target=%llx\n",static_cast<unsigned long long>(e->ExceptionRecord->ExceptionInformation[0]),static_cast<unsigned long long>(e->ExceptionRecord->ExceptionInformation[1]));
     CONTEXT context=*e->ContextRecord;
     for(unsigned n=0;n<20 && context.Rip;++n){
         DWORD64 image=0;auto entry=RtlLookupFunctionEntry(context.Rip,&image,nullptr);

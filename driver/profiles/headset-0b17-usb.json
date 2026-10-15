@@ -9,5 +9,5 @@
   "ConfigurationDescriptor": "09025700030100a0320904000002ff47d0010705860340000407050a034000040904010000ff47d0000904010102ff47d0000705820d9000010705010d4002010904020002ff47d0000705850240000407050902400004",
   "ReferenceDriver": "dc1-controller + xboxgip; child usbaudio",
   "VirtualTransportVerified": true,
-  "Source": "Local read-only hub descriptor capture, 2026-10-13; work/usb-2021-os-reference.jsonl; physical serial omitted"
+  "Source": "Sanitized model USB descriptor reference; individual serial numbers omitted"
 }

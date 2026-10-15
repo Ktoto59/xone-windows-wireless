@@ -1,21 +1,30 @@
 ; SPDX-License-Identifier: GPL-2.0-or-later
 #ifndef AppVersion
-  #define AppVersion "0.1.0-alpha.4"
+  #define AppVersion "0.1.0-alpha.5"
 #endif
 #ifndef StageDir
   #error StageDir must point to a verified public release stage
 #endif
 [Setup]
+#ifdef InstallerSmokeTest
+AppId={{40E8C37A-1A80-41D6-A4BB-0578AD2B7A19}
+AppName=xone-windows-wireless installer smoke test
+DefaultDirName={localappdata}\Programs\xone-windows-wireless-smoke
+DefaultGroupName=xone-windows-wireless-smoke
+OutputBaseFilename=xone-installer-smoke
+#else
 AppId={{40E8C37A-1A80-41D6-A4BB-0578AD2B7A18}
 AppName=xone-windows-wireless
+DefaultDirName={localappdata}\Programs\xone-windows-wireless
+DefaultGroupName=xone-windows-wireless
+OutputBaseFilename=xone-windows-wireless-{#AppVersion}-Setup-x64
+#endif
 AppVersion={#AppVersion}
 AppVerName=xone-windows-wireless {#AppVersion}
 AppPublisher=Ktoto59
 AppPublisherURL=https://github.com/Ktoto59/xone-windows-wireless
 AppSupportURL=https://github.com/Ktoto59/xone-windows-wireless/issues
 AppUpdatesURL=https://github.com/Ktoto59/xone-windows-wireless/releases
-DefaultDirName={localappdata}\Programs\xone-windows-wireless
-DefaultGroupName=xone-windows-wireless
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64os
 ArchitecturesInstallIn64BitMode=x64os
@@ -25,7 +34,6 @@ DisableWelcomePage=yes
 DisableDirPage=yes
 DisableReadyPage=no
 OutputDir=..\dist
-OutputBaseFilename=xone-windows-wireless-{#AppVersion}-Setup-x64
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -51,12 +59,19 @@ begin
   Result := 'Keep the Xbox Wireless Adapter connected.' + NewLine + NewLine +
     'Setup prepares WinUSB, verified firmware and the signed USBip dependency, then enables an invisible C++ host at sign-in.' + NewLine +
     'Windows asks for administrator approval. USB hubs may briefly restart during the first USBip installation.' + NewLine + NewLine +
+    'Do not update headset/controller firmware through this bridge. Stop it and use a physical USB data cable.' + NewLine + NewLine +
     'No control window, device-selection dialog, overlay or Python runtime is installed.';
 end;
 function RunMaintenance(Action: String; Elevated: Boolean; var ResultCode: Integer): Boolean;
 var
   ProgramPath, Parameters: String;
 begin
+#ifdef InstallerSmokeTest
+  { Separate compiled test product: never executes setup/driver/startup hooks. }
+  ResultCode := 0;
+  Result := True;
+  Exit;
+#endif
   ProgramPath := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
   Parameters := '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\scripts\Setup-Action.ps1') + '" -Action ' + Action;
   if Elevated then

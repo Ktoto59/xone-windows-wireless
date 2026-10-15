@@ -7,7 +7,6 @@
 #include "headset_audio.hpp"
 #include "audio_ipc.hpp"
 #include "synthetic_audio.hpp"
-#include "radio_audio_clock.hpp"
 #include <iostream>
 #include <stdexcept>
 #include <cstring>
@@ -239,158 +238,35 @@ int main() {
             e.kind=RadioEvent::Kind::association;e.address={2,2,3,4,5,6};session.process(e);
             session.tick(start+std::chrono::seconds(5));check(mt.channel->index==1,"Channel changed during client handshake");
             e.kind=RadioEvent::Kind::lost;e.wcid=1;session.process(e);session.tick(start+std::chrono::seconds(7));check(mt.channel->index==6,"Empty channel scan did not resume");
-            session.tick(start+std::chrono::seconds(70));check(!session.pairing_active() && mt.channel->index==6,"Pairing timeout scanned another channel");session.close();
+            session.tick(start+std::chrono::seconds(40));check(!session.pairing_active() && mt.channel->index==6,"Pairing timeout scanned another channel");session.close();
         });
-        test("Startup reconnect window expires and repeated button pauses scanning",[]{
+        test("Idle reconnect scan never enables pairing and freezes on association",[]{
             usb_device usb{};device dev{};xone_mt76 mt{};mt.dev=&dev;mt.udev=&usb;
-            usb.control=[](void *,u8,u8 type,u16,u16,void *data,u16 n,unsigned)->int{if(type&128)std::memset(data,0,n);return n;};
-            usb.bulk=[](void *,u8,void *,int n,int *actual,unsigned)->int{if(actual)*actual=n;return 0;};
-            for(size_t n=0;n<XONE_MT_NUM_CHANNELS;++n)mt.channels[n].index=static_cast<u8>(n+1);mt.channel=&mt.channels[0];
-            Session session(mt);session.start_reconnect_window();const auto start=std::chrono::steady_clock::now();
-            check(session.pairing_active(),"Startup did not open the association filter");
-            session.tick(start+std::chrono::seconds(59));check(session.pairing_active(),"Startup window ended before 60 seconds");
-            session.tick(start+std::chrono::seconds(61));check(!session.pairing_active(),"Startup window did not expire");
-            RadioEvent button;button.kind=RadioEvent::Kind::button;session.process(button);
-            session.tick(std::chrono::steady_clock::now()+std::chrono::milliseconds(2100));const auto channel=mt.channel;
-            session.process(button);session.tick(std::chrono::steady_clock::now()+std::chrono::milliseconds(1900));
-            check(mt.channel==channel,"Repeated button rotated away from a newly pairing peer");session.close();
-        });
-        test("Configured USB peers reconnect without button; unknown peers still require it",[]{
-            struct Raw final:RawGipOutput{
-                std::vector<std::pair<uint8_t,uint8_t>> events;
-                bool target(std::span<const uint8_t> mac)const override{return mac.size()==6 && mac[0]==2;}
-                void event(uint8_t kind,uint8_t wcid,std::span<const uint8_t>)override{events.emplace_back(kind,wcid);}
-                std::vector<RawGipTransmit> poll()override{return {};}
-                void complete(uint8_t,uint32_t,int)override{}
-            }raw;
-            usb_device usb{};device dev{};xone_mt76 mt{};mt.dev=&dev;mt.udev=&usb;mt.channel=&mt.channels[0];mt.channel->index=165;
-            unsigned writes=0;usb.context=&writes;
-            usb.control=[](void *,u8,u8 type,u16,u16,void *data,u16 n,unsigned)->int{if(type&128)std::memset(data,0,n);return n;};
-            usb.bulk=[](void *p,u8,void *,int n,int *actual,unsigned)->int{++*static_cast<unsigned *>(p);if(actual)*actual=n;return 0;};
-            Session session(mt,nullptr,false,nullptr,&raw);RadioEvent e;e.kind=RadioEvent::Kind::association;e.address={2,0,0,0,0,1};session.process(e);
-            const auto target=e.address;e.address={2,0,0,0,0,2};session.process(e);const auto before=writes;
-            e.address={4,0,0,0,0,2};session.process(e);check(session.status().size()==2,"Unknown association admitted outside pairing");
-            e.kind=RadioEvent::Kind::client_command;e.command=1;session.process(e);
-            check(writes==before && session.status().size()==2,"Unknown peer paired without the adapter button");
-            e.address=target;session.process(e);
-            check(writes>before && session.status().size()==1 && session.status()[0].wcid==2 && !session.pairing_active(),"Known peer recovery removed a sibling or reopened general pairing");
-            check(raw.events.back()==std::pair<uint8_t,uint8_t>{uint8_t(3),uint8_t(1)},"Old USB generation not invalidated");
-            e.kind=RadioEvent::Kind::association;session.process(e);
-            check(session.status().size()==2 && raw.events.back()==std::pair<uint8_t,uint8_t>{uint8_t(1),uint8_t(1)},"Known peer could not establish a fresh generation");session.close();
-        });
-        test("Configured-peer discovery survives manual pairing timeout and rejects unknown USB peers",[]{
-            struct Raw final:RawGipOutput{
-                bool target(std::span<const uint8_t> mac)const override{return mac.size()==6 && mac[0]==2;}
-                void event(uint8_t,uint8_t,std::span<const uint8_t>)override{}
-                std::vector<RawGipTransmit> poll()override{return {};}
-                void complete(uint8_t,uint32_t,int)override{}
-            }raw;
-            usb_device usb{};device dev{};xone_mt76 mt{};mt.dev=&dev;mt.udev=&usb;
-            mt.channel=&mt.channels[0];mt.channel->index=165;std::vector<uint32_t> filters;usb.context=&filters;
-            usb.control=[](void *p,u8,u8 type,u16,u16 index,void *data,u16 n,unsigned)->int{
-                if(type&128)std::memset(data,0,n);
-                else if(index==MT_RX_FILTR_CFG && n==4){uint32_t value=0;std::memcpy(&value,data,4);static_cast<std::vector<uint32_t> *>(p)->push_back(value);}
-                return n;
-            };
-            usb.bulk=[](void *,u8,void *,int n,int *actual,unsigned)->int{if(actual)*actual=n;return 0;};
-            Session session(mt,nullptr,false,nullptr,&raw);session.start_reconnect_window();
-            RadioEvent e;e.kind=RadioEvent::Kind::association;e.address={2,0,0,0,0,1};session.process(e);
-            e.kind=RadioEvent::Kind::gip;e.wcid=1;e.payload=encode_gip({2,32,1,0,{}});session.process(e);
-            session.tick(std::chrono::steady_clock::now()+std::chrono::seconds(61));
-            check(!session.pairing_active() && filters==std::vector<uint32_t>{0x014f13,0x014f13},"Manual timeout also closed configured-peer discovery");
-            e.kind=RadioEvent::Kind::association;e.address={4,0,0,0,0,1};session.process(e);
-            check(session.status().size()==1,"Unknown peer admitted without pairing");e.address={2,0,0,0,0,2};session.process(e);
-            check(session.status().size()==2 && !session.pairing_active(),"Known peer needed general pairing");session.close();
-            check(filters.back()==0x017f17,"Session shutdown left discovery open");
-        });
-        test("Pair response holds the channel until association or bounded timeout",[]{
-            struct Raw final:RawGipOutput{
-                bool target(std::span<const uint8_t> mac)const override{return mac.size()==6 && mac[0]==2;}
-                void event(uint8_t,uint8_t,std::span<const uint8_t>)override{}
-                std::vector<RawGipTransmit> poll()override{return {};}
-                void complete(uint8_t,uint32_t,int)override{}
-            }raw;
-            usb_device usb{};device dev{};xone_mt76 mt{};mt.dev=&dev;mt.udev=&usb;
-            usb.control=[](void *,u8,u8 type,u16,u16,void *data,u16 n,unsigned)->int{if(type&128)std::memset(data,0,n);return n;};
-            usb.bulk=[](void *,u8,void *,int n,int *actual,unsigned)->int{if(actual)*actual=n;return 0;};
+            usb.control=[](void *,u8,u8 type,u16,u16,void *data,u16 n,unsigned)->int {if(type&128)std::memset(data,0,n);return n;};
+            usb.bulk=[](void *,u8,void *,int n,int *actual,unsigned)->int {if(actual)*actual=n;return 0;};
             constexpr uint8_t channels[]={1,6,11,36,40,44,48,149,153,157,161,165};
-            for(size_t n=0;n<XONE_MT_NUM_CHANNELS;++n)mt.channels[n].index=channels[n];mt.channel=&mt.channels[3];
-            Session session(mt,nullptr,false,nullptr,&raw);session.start_reconnect_window();const auto now=std::chrono::steady_clock::now();
-            RadioEvent e;e.kind=RadioEvent::Kind::client_command;e.command=1;e.address={2,0,0,0,0,1};session.process(e,now);
-            session.tick(now+std::chrono::seconds(3));check(mt.channel->index==36 && !session.pairing_active(),"Pair response lost its channel before association");
-            session.tick(now+std::chrono::seconds(11));check(mt.channel->index==40,"Failed enrollment blocked scanning indefinitely");session.close();
-        });
-        test("Silent raw association recovery is bounded and preserves active siblings",[]{
-            struct Raw final:RawGipOutput{
-                std::vector<std::pair<uint8_t,uint8_t>> events;
-                bool target(std::span<const uint8_t> mac)const override{return mac.size()==6 && mac[0]==2;}
-                void event(uint8_t kind,uint8_t wcid,std::span<const uint8_t>)override{events.emplace_back(kind,wcid);}
-                std::vector<RawGipTransmit> poll()override{return {};}
-                void complete(uint8_t,uint32_t,int)override{}
-            }raw;
-            usb_device usb{};device dev{};xone_mt76 mt{};mt.dev=&dev;mt.udev=&usb;
-            usb.control=[](void *,u8,u8 type,u16,u16,void *data,u16 n,unsigned)->int{if(type&128)std::memset(data,0,n);return n;};
-            usb.bulk=[](void *,u8,void *,int n,int *actual,unsigned)->int{if(actual)*actual=n;return 0;};
-            Session session(mt,nullptr,false,nullptr,&raw);const auto now=std::chrono::steady_clock::now();
-            RadioEvent e;e.kind=RadioEvent::Kind::association;e.address={2,0,0,0,0,1};session.process(e,now);
-            e.address={2,0,0,0,0,2};session.process(e,now);
-            e.kind=RadioEvent::Kind::gip;e.wcid=2;e.payload=encode_gip({2,32,1,0,{}});session.process(e,now);
-            raw.events.clear();session.tick(now+std::chrono::seconds(4));check(raw.events.empty(),"Recovered before initial handshake grace");
-            for(unsigned n=1;n<=3;++n)session.tick(now+std::chrono::seconds(5*n));
-            check(raw.events==std::vector<std::pair<uint8_t,uint8_t>>{{uint8_t(3),uint8_t(1)},{uint8_t(1),uint8_t(1)},{uint8_t(3),uint8_t(1)},{uint8_t(1),uint8_t(1)},{uint8_t(3),uint8_t(1)},{uint8_t(1),uint8_t(1)}},"Recovery changed sibling or missed USB generation invalidation");
-            session.tick(now+std::chrono::seconds(100));check(raw.events.size()==6 && session.status().size()==2,"Silent peer retry was unbounded or lost a sibling");
-            e.wcid=1;session.process(e,now+std::chrono::seconds(101));const auto count=raw.events.size();
-            session.tick(now+std::chrono::seconds(200));check(raw.events.size()==count,"Established idle peer was reset");session.close();
-        });
-        test("Later known-peer reassociation resets USB generation; immediate retries are debounced",[]{
-            struct Raw final:RawGipOutput{
-                std::vector<std::pair<uint8_t,uint8_t>> events;
-                bool target(std::span<const uint8_t> mac)const override{return mac.size()==6 && mac[0]==2;}
-                void event(uint8_t kind,uint8_t wcid,std::span<const uint8_t>)override{events.emplace_back(kind,wcid);}
-                std::vector<RawGipTransmit> poll()override{return {};}
-                void complete(uint8_t,uint32_t,int)override{}
-            }raw;
-            usb_device usb{};device dev{};xone_mt76 mt{};mt.dev=&dev;mt.udev=&usb;
-            usb.control=[](void *,u8,u8 type,u16,u16,void *data,u16 n,unsigned)->int{if(type&128)std::memset(data,0,n);return n;};
-            usb.bulk=[](void *,u8,void *,int n,int *actual,unsigned)->int{if(actual)*actual=n;return 0;};
-            Session session(mt,nullptr,false,nullptr,&raw);const auto now=std::chrono::steady_clock::now();
-            RadioEvent e;e.kind=RadioEvent::Kind::association;e.address={2,0,0,0,0,1};session.process(e,now);
-            session.process(e,now+std::chrono::milliseconds(200));check(raw.events.size()==1,"Immediate WLAN retry reset USB");
-            e.kind=RadioEvent::Kind::gip;e.wcid=1;e.payload=encode_gip({2,32,1,0,{}});session.process(e,now);
-            e.kind=RadioEvent::Kind::association;session.process(e,now+std::chrono::seconds(2));
-            check(raw.events.size()==4 && raw.events[2]==std::pair<uint8_t,uint8_t>{uint8_t(3),uint8_t(1)} && raw.events[3]==std::pair<uint8_t,uint8_t>{uint8_t(1),uint8_t(1)},"Fresh association retained old USB session");
-            e.kind=RadioEvent::Kind::gip;session.process(e,now+std::chrono::seconds(2));const auto count=raw.events.size();
-            session.tick(now+std::chrono::seconds(100));check(raw.events.size()==count,"Idle peer was treated as failed handshake");session.close();
-        });
-        test("Native render preserves a batched radio pair and bounds delayed credits",[]{
-            RadioAudioClock clock;check(!clock.take(),"Audio started without a physical clock");
-            Bytes pcm(386);check(!clock.receive(pcm) && !clock.take(),"Wrong PCM layout produced a credit");pcm[1]=6;
-            check(clock.receive(pcm) && clock.take() && !clock.take(),"A valid frame did not produce exactly one block");
-            for(unsigned i=0;i<20;++i)check(clock.receive(pcm),"Valid frame rejected");
-            check(clock.take() && clock.take() && !clock.take(),"Batched radio pair lost or delayed credits were unbounded");
-            pcm.pop_back();check(!clock.receive(pcm) && !clock.take(),"Truncated PCM produced a credit");
-        });
-        test("Direct GIP reconnects saved peers without a USB profile and isolates recovery",[]{
-            usb_device usb{};device dev{};xone_mt76 mt{};mt.dev=&dev;mt.udev=&usb;mt.channel=&mt.channels[0];mt.channel->index=165;
-            usb.control=[](void *,u8,u8 type,u16,u16,void *data,u16 n,unsigned)->int{if(type&128)std::memset(data,0,n);return n;};
-            usb.bulk=[](void *,u8,void *,int n,int *actual,unsigned)->int{if(actual)*actual=n;return 0;};
-            Session session(mt);session.enable_native_reconnect();const Bytes a{2,0,0,0,0,1},b{2,0,0,0,0,2};session.remember_peer(a);session.remember_peer(b);session.remember_peer(a);
-            check(session.known_peers().size()==2,"Saved peer duplicated");rejects([&]{session.remember_peer(Bytes(6));});
-            RadioEvent e;e.kind=RadioEvent::Kind::association;e.address={4,0,0,0,0,1};const auto now=std::chrono::steady_clock::now();session.process(e,now);
-            check(session.status().empty(),"Unknown native peer bypassed manual pairing");e.address=a;session.process(e,now);e.address=b;session.process(e,now);
-            e.kind=RadioEvent::Kind::gip;e.wcid=2;e.payload=encode_gip({2,32,1,0,{}});session.process(e,now);
-            session.tick(now+std::chrono::seconds(5));check(session.status().size()==2,"Silent native recovery removed a sibling");
-            e.kind=RadioEvent::Kind::client_command;e.command=1;e.address=a;session.process(e,now+std::chrono::seconds(6));
-            check(session.status().size()==1 && session.status()[0].wcid==2,"Native re-enrollment did not clear only its own session");
-            e.kind=RadioEvent::Kind::association;session.process(e,now+std::chrono::seconds(7));check(session.status().size()==2,"Saved direct peer could not reconnect");session.close();
+            for(size_t n=0;n<XONE_MT_NUM_CHANNELS;++n)mt.channels[n].index=channels[n];mt.channel=&mt.channels[11];
+            Session session(mt);const auto start=std::chrono::steady_clock::now();
+            session.tick(start+std::chrono::seconds(3));check(mt.channel->index==165,"Idle scan enabled by default");
+            session.enable_idle_channel_scan();
+            for(size_t n=0;n<XONE_MT_NUM_CHANNELS;++n){
+                session.tick(start+std::chrono::seconds(5+3*n));
+                check(mt.channel->index==channels[n] && !session.pairing_active(),"Reconnect scan skipped channel or enabled pairing");
+            }
+            RadioEvent e;e.kind=RadioEvent::Kind::association;e.address={2,2,3,4,5,6};session.process(e);
+            session.tick(start+std::chrono::seconds(45));check(mt.channel->index==165,"Reconnect scan interrupted a client");
+            e.kind=RadioEvent::Kind::client_command;e.command=1;session.process(e);
+            check(session.status().size()==1 && !session.pairing_active(),"Reconnect scan accepted a new pair request");
+            e.kind=RadioEvent::Kind::lost;e.wcid=1;session.process(e);session.tick(start+std::chrono::seconds(48));
+            check(mt.channel->index==1 && !session.pairing_active(),"Reconnect scan did not resume after disconnect");session.close();
         });
         test("Headset PC opt-out requires exact model and GUID, never installs encryption",[]{
-            for(unsigned scenario=0;scenario<6;++scenario){
+            for(unsigned scenario=0;scenario<3;++scenario){
                 struct Output final:AudioOutput{
-                    unsigned connections=0,captures=0,playbacks=0,disconnects=0;bool fail_capture=false;
+                    unsigned connections=0,captures=0,playbacks=0;
                     void connect(uint8_t,uint8_t)override{++connections;}
-                    void disconnect(uint8_t)override{++disconnects;}
-                    void capture(uint8_t,uint8_t,std::span<const uint8_t> b)override{check(b.size()==384,"Wrong opt-out microphone size");if(fail_capture)throw std::runtime_error("simulated audio host crash");++captures;}
+                    void disconnect(uint8_t)override{}
+                    void capture(uint8_t,uint8_t,std::span<const uint8_t> b)override{check(b.size()==384,"Wrong opt-out microphone size");++captures;}
                     Bytes playback(uint8_t,uint8_t)override{++playbacks;return Bytes(1536);}
                     AudioEndpoints endpoints(uint8_t,uint8_t)override{return {};}
                 } output;
@@ -401,25 +277,16 @@ int main() {
                 e.kind=RadioEvent::Kind::gip;e.wcid=1;Bytes announce(28);announce[8]=0x5e;announce[9]=4;announce[10]=scenario==1?0x31:0x32;announce[11]=0x0b;
                 auto deliver=[&](uint8_t command,Bytes payload){e.kind=RadioEvent::Kind::gip;e.payload=encode_gip({command,32,1,0,std::move(payload)});session.process(e);};
                 deliver(2,announce);
-                if(scenario==3)deliver(6,auth_response(2,Bytes{}));
-                Bytes identify(33);identify[20]=16;identify[32]=2;identify.push_back(5);identify.push_back(16);identify.push_back(9);identify.push_back(16);
-                identify[26]=21;identify.push_back(1);const std::string name="Windows.Xbox.Input.Headset";
+                Bytes identify(33);identify[20]=16;identify[32]=1;identify.push_back(9);identify.push_back(16);
+                identify[26]=19;identify.push_back(1);const std::string name="Windows.Xbox.Input.Headset";
                 identify.push_back(static_cast<uint8_t>(name.size()));identify.push_back(0);identify.insert(identify.end(),name.begin(),name.end());
                 const auto relative=identify.size()-16;identify[28]=static_cast<uint8_t>(relative);identify[29]=static_cast<uint8_t>(relative>>8);identify.push_back(1);
                 auto guid=unhex("77ce347ae27dc6458ca40042c08bd94a");if(scenario==2)guid.back()^=1;identify.insert(identify.end(),guid.begin(),guid.end());deliver(4,identify);
-                if(scenario==4)deliver(6,auth_response(2,Bytes{}));
                 const auto now=std::chrono::steady_clock::now();session.tick(now+std::chrono::seconds(2));deliver(8,{2,9,16});session.tick(now+std::chrono::seconds(2));deliver(8,{3,4,80,50,70,0,0,0});session.tick(now+std::chrono::seconds(3));
                 const auto status=session.status();check(status.size()==1 && !status[0].encrypted && session.authenticated()==0,"Opt-out fabricated authentication/key");
-                if(!scenario || scenario>=3){
-                    check(status[0].authentication=="pc-opt-out" && output.connections==1 && !output.playbacks && session.audio_active(),"Exact model/GUID did not negotiate 24k audio or sent without a radio clock");
-                    output.fail_capture=scenario==5;
-                    Bytes pcm(386);pcm[1]=6;deliver(0x60,pcm);session.tick(now+std::chrono::seconds(3));
-                    if(scenario==5){
-                        const auto failed=session.status();check(failed.size()==1 && failed[0].audio->stage=="native-output-failed" && failed[0].audio->error=="simulated audio host crash" && output.disconnects==1 && !session.audio_active(),"Audio host failure escaped or was hidden");
-                        e.kind=RadioEvent::Kind::association;e.address={6,5,4,3,2,1};session.process(e);check(session.status().size()==2,"Audio failure stopped another peer from associating");session.close();continue;
-                    }
-                    check(output.captures==1 && output.playbacks==1,"Physical audio credit or microphone not forwarded");
-                    session.tick(now+std::chrono::seconds(30));check(output.playbacks==1,"Host timer continued sending without radio credits");
+                if(!scenario){
+                    check(status[0].authentication=="pc-opt-out" && output.connections==1 && output.playbacks==1 && session.audio_active(),"Exact model/GUID could not stream plaintext audio");
+                    deliver(0x60,Bytes(386));check(output.captures==1,"Plaintext microphone not forwarded");
                     e.kind=RadioEvent::Kind::client_command;e.command=16;session.process(e);check(!session.status()[0].encrypted && session.authenticated()==0,"Opt-out accepted CCMP without a key");
                 }else check(status[0].authentication=="negotiating" && !output.connections && !session.audio_active(),"Different model/GUID bypassed authentication");
                 session.close();
@@ -466,28 +333,6 @@ int main() {
             e.kind=RadioEvent::Kind::lost;session.process(e);check(raw.events.back().kind==3 && session.status().empty(),"Raw removal not forwarded");
             session.close();
         });
-        test("Automatic USB claims only a supported announcement and forwards the handshake",[]{
-            struct Raw final:RawGipOutput{
-                Bytes mac;std::vector<uint8_t> events;Bytes announcement;
-                bool automatic()const override{return true;}
-                bool target(std::span<const uint8_t> address)const override{return !mac.empty() && std::equal(mac.begin(),mac.end(),address.begin(),address.end());}
-                bool claim(std::span<const uint8_t> address,uint16_t vendor,uint16_t product)override{if(!mac.empty() || vendor!=0x045e || product!=0x0b32)return false;mac.assign(address.begin(),address.end());return true;}
-                void event(uint8_t kind,uint8_t,std::span<const uint8_t> data)override{events.push_back(kind);if(kind==2)announcement.assign(data.begin(),data.end());}
-                std::vector<RawGipTransmit> poll()override{return {};}
-                void complete(uint8_t,uint32_t,int)override{}
-            } raw;
-            usb_device usb{};device dev{};xone_mt76 mt{};mt.dev=&dev;mt.udev=&usb;mt.channel=&mt.channels[0];mt.channel->index=165;
-            usb.control=[](void *,u8,u8 type,u16,u16,void *data,u16 n,unsigned)->int{if(type&128)std::memset(data,0,n);return n;};
-            usb.bulk=[](void *,u8,void *,int n,int *actual,unsigned)->int{if(actual)*actual=n;return 0;};
-            Session session(mt,nullptr,false,nullptr,&raw);session.enable_native_reconnect();
-            RadioEvent e;e.kind=RadioEvent::Kind::association;e.address={2,0,0,0,0,1};session.process(e);
-            check(raw.events.empty(),"Automatic profile chosen before identification");
-            Bytes payload(28);payload[8]=0x34;payload[9]=0x12;payload[10]=0x32;payload[11]=0x0b;
-            e.kind=RadioEvent::Kind::gip;e.wcid=1;e.payload=encode_gip({2,32,1,0,payload});session.process(e);check(raw.events.empty(),"Wrong vendor claimed a profile");
-            payload[8]=0x5e;payload[9]=4;e.payload=encode_gip({2,32,1,0,payload});session.process(e);
-            check(raw.events==std::vector<uint8_t>({1,2}) && raw.announcement==e.payload && session.known_peers().size()==1,"Automatic claim lost association or announcement");
-            session.close();check(raw.events.back()==3,"Automatic output not removed");
-        });
         test("USB brokers isolate WCIDs, equal completion tokens and reassociation",[]{
             struct Raw final:RawGipOutput{
                 uint8_t id;unsigned events=0;
@@ -509,6 +354,35 @@ int main() {
             router.event(3,3);router.event(3,1);router.event(1,3,mac_b);a->requests={{3,11,{}}};
             check(router.poll().empty() && a->results.back()==std::pair<uint32_t,int>{11,-19},"Stale broker transmitted to reused WCID");
             rejects([&]{router.event(1,17,mac_a);});rejects([&]{router.event(1,3,mac_a);});
+        });
+        test("USB router interleaves busy peers and rotates the first device",[]{
+            struct Raw final:RawGipOutput{
+                uint8_t id;
+                std::vector<RawGipTransmit> requests;
+                explicit Raw(uint8_t n):id(n){}
+                bool target(std::span<const uint8_t> b)const override{return b.size()==6 && b[0]==id;}
+                void event(uint8_t,uint8_t,std::span<const uint8_t>)override{}
+                std::vector<RawGipTransmit> poll()override{auto out=std::move(requests);requests.clear();return out;}
+                void complete(uint8_t,uint32_t,int)override{throw std::runtime_error("Unexpected rejected request");}
+            };
+            std::vector<std::unique_ptr<RawGipOutput>> peers;
+            std::array<Raw *,3> raw{};
+            for(uint8_t n=1;n<=3;++n){auto p=std::make_unique<Raw>(n);raw[n-1]=p.get();peers.push_back(std::move(p));}
+            RawGipRouter router(std::move(peers));
+            for(uint8_t n=1;n<=3;++n)router.event(1,n,Bytes{n,2,3,4,5,6});
+            for(uint32_t token=1;token<=64;++token)raw[0]->requests.push_back({1,token,{},true});
+            raw[1]->requests={{2,101,{},true},{2,102,{},true}};
+            raw[2]->requests={{3,201,{}}};
+            const auto first=router.poll();
+            check(first.size()==67 && first[0].token==1 && first[1].token==101 && first[2].token==201 &&
+                  first[3].token==2 && first[4].token==102,"Busy peer starved headset/controller");
+            uint32_t last=0;for(const auto &r:first)if(r.wcid==1){check(r.token==last+1,"Peer FIFO order changed");last=r.token;}
+            for(uint8_t start=2;start<=3;++start){
+                for(uint8_t n=1;n<=3;++n)raw[n-1]->requests={{n,n,{}}};
+                const auto round=router.poll();
+                check(round.size()==3 && round[0].wcid==start,"First peer did not rotate");
+            }
+            check(router.poll().empty(),"Empty peers returned requests");
         });
         test("Raw USB sibling preserves the fallback headset audio output",[]{
             struct Raw final:RawGipOutput{
@@ -539,7 +413,7 @@ int main() {
             const auto relative=identify.size()-16;identify[28]=static_cast<uint8_t>(relative);identify[29]=static_cast<uint8_t>(relative>>8);identify.push_back(1);
             const auto guid=unhex("77ce347ae27dc6458ca40042c08bd94a");identify.insert(identify.end(),guid.begin(),guid.end());deliver(4,identify);
             const auto now=std::chrono::steady_clock::now();session.tick(now+std::chrono::seconds(2));deliver(8,{2,9,16});session.tick(now+std::chrono::seconds(2));deliver(8,{3,4,80,50,70,0,0,0});session.tick(now+std::chrono::seconds(3));
-            Bytes pcm(386);pcm[1]=6;deliver(0x60,pcm);session.tick(now+std::chrono::seconds(3));check(audio.connects==1 && audio.playbacks==1 && audio.captures==1 && raw.events==1,"Fallback audio disappeared with a raw USB sibling");
+            deliver(0x60,Bytes(386));check(audio.connects==1 && audio.playbacks==1 && audio.captures==1 && raw.events==1,"Fallback audio disappeared with a raw USB sibling");
             e.wcid=1;deliver(0x60,Bytes(386));check(raw.events==2 && audio.captures==1,"Raw PCM reached the fallback output");
             e.kind=RadioEvent::Kind::lost;session.process(e);check(session.status().size()==1 && session.status()[0].wcid==2 && session.audio_active(),"Raw disconnect removed fallback audio");
             session.close();

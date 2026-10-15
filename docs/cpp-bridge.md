@@ -1,98 +1,65 @@
-# Experimental C++ bridge
+# C++ bridge: alpha.5 candidate
 
-**Alpha.4 uses this C++ data path as the default**, managed by an invisible C++
-background host. End users should follow [INSTALL.md](INSTALL.md); the installer
-does not include the old backend-selection panel or a Python runtime.
+The runtime consists of `xone-background.exe`, its owned `xone-probe-cpp.exe`
+radio process and the signed upstream USBip client/bus. Python and PowerShell
+are used for development or setup only; neither remains in the audio/input path.
+The physical adapter uses Microsoft's WinUSB driver. Windows sees virtual USB
+GIP devices through USBip and loads its existing Xbox/audio drivers.
 
-The manual commands and panel workflow below record the development transition
-from alpha.3. They are not the alpha.4 setup instructions. For the current source
-build/package order, see [INSTALLER.md](INSTALLER.md).
+## Per-device isolation
 
-This development backend moves USB/IP, GIP forwarding and headset PCM conversion
-into the radio executable. It replaces the three Python data servers and their
-intermediate radio TCP connections. Windows still uses the signed USBip bus and
-its existing Xbox GIP/audio drivers, including Xbox Accessories support. This is
-a user-mode bridge, not a new kernel driver.
+Eight automatic slots are available. A radio announcement chooses an immutable
+connector before USB export: 2021 headset (RF 0B31 / USB 0B17), 2024 headset
+(0B32), or Series controller (RF 0B13 / USB 0B12). Unknown identities are rejected.
+Every association owns its USB server/thread, control state, PCM buffers,
+completion tokens and clocks. USB serials include the physical address, allowing
+separate instances of one supported model. Four concurrent synthetic imports,
+including two 2024 instances, are covered by the loopback test; multiple physical
+units of the same model have not been tested.
 
-The published alpha.3 installer still contains the previous backend. The C++
-implementation has passed descriptor equivalence, real loopback USB/IP transport,
-audio clock/fragment, cancellation and generation tests. The 2024 headset was
-tested through the physical adapter: audio started after targeted session
-recovery, and the user confirmed clean playback initially. A later stutter was
-reported while using a heavy IDE project; its cause was not established. A
-60-second measurement used about 11 MB working set and 3.15% of one logical CPU
-(about 0.20% total on that 16-logical-CPU PC). This is not a matched comparison or
-a general performance guarantee. Controller/2021 headset operation on the C++
-backend, repeated power cycles and other PCs remain unverified.
+The 2021 connector uses an independent eight-millisecond render clock and a
+96 ms render age limit. Its exact observed USB-only mode-6 initialization is
+consumed to preserve wireless pairing. The 2024 connector uses fresh radio
+credits and a 64 ms render age limit. Capture is bounded to 32 ms; old-headset
+silence concealment stops after 128 ms without RF. Expired audio is discarded,
+not replayed as an indefinitely growing backlog. Round-robin radio submission
+keeps devices separate at the shared physical transmitter.
 
-## Build
+The host respects the user's Windows audio selection. It does not select the
+last connected headset. Losing access to a status file does not remove a device;
+only an explicit disconnect/generation transition permits detaching that slot.
+Status writes run on bounded asynchronous workers, outside PCM/radio processing.
+No audio samples or packet capture files are recorded by normal operation.
 
-Use an x64 Windows machine with Visual Studio 2022 C++ Build Tools and a Windows
-SDK. Run from the source checkout:
+## Validation and limits
+
+On the development PC, both physical headset revisions and a Series controller
+connected to the C++ bridge. The user confirmed clean sound in both headsets.
+A subsequent regression where connecting one headset removed the other was
+observed. The host incorrectly treated unreadable state files as disconnects;
+this was fixed and automatic global audio selection was removed. The user then
+confirmed that both devices remained present with clean sound. A six-second
+exclusive lock on a live slot status file preserved its USBip port and generation.
+These observations do not prove the cause of every historical RF dropout.
+
+Software checks cover descriptor equivalence with the Python reference, actual
+loopback USBip framing/imports, audio, cancellation, bounded buffers, real TX
+completion, model-specific clocks, slot reuse and isolation. Long-duration use,
+fresh-PC installation, voice quality and broad sleep/resume coverage remain to
+be verified. USBip is still part of the transport; this port does not replace its
+kernel bus or establish a numeric latency improvement over the Python reference.
+
+## Build and test
+
+Use Visual Studio C++ Build Tools and a Windows SDK on Windows x64:
 
 ```powershell
+.\scripts\Build-Appliance.cmd
 .\scripts\Build-CppBridge.cmd
+.\scripts\Test-CppBridge.cmd
 ```
 
-This produces `outputs/xone-probe-cpp.exe` without overwriting the running
-`outputs/xone-probe.exe`. End users do not need Python to run this backend; the
-descriptor catalog is compiled into the executable. Python is needed only for
-the development equivalence checks or to regenerate that catalog.
-
-`scripts\Test-CppBridge.cmd` runs the development checks using synthetic RF and
-loopback TCP only. It does not open the physical adapter or change drivers.
-
-## Select the backend
-
-Complete normal adapter/USBip setup and configure the supported devices. In the
-development control panel, open **Start / stop**, choose **C++ bridge (preview)**,
-then **Apply and restart**. Choose **Python reference bridge** and apply to return
-to the reference implementation. The selection is saved privately and the
-supervisor restarts without another UAC prompt or driver change.
-
-The equivalent manual configuration is a top-level field in the private
-`config/devices.local.json`, changed while the bridge is stopped:
-
-```json
-"BridgeBackend": "cpp"
-```
-
-Start automatic mode again. Selection persists across supervisor recovery and
-sign-in. Alternatively, a manually managed diagnostic run can use:
-
-```powershell
-.\scripts\Run-UsbGip.ps1 -CppBridge -AudioBridge -NativeController -FallbackOutput none -Seconds 0
-```
-
-Stop the bridge before switching back. Remove `BridgeBackend` or set it to
-`python` to restore the reference backend. Neither selection changes adapter
-binding, driver trust, Secure Boot or Windows boot settings.
-
-The C++ backend supports the same three captured profiles: Series controller
-0B12, headset 2021 0B17, headset 2024 0B32, one device per profile. Listeners bind
-only to 127.0.0.1 on the configured USB ports. RF packets are delivered in-process.
-
-## Timing and diagnostics
-
-Each headset has an event-driven USB/audio thread registered with MMCSS. Capture
-keeps at most 64 one-millisecond fragments; playback follows physical headset
-credits, capped at two eight-millisecond blocks. Complete render blocks and
-interrupt writes wait for the radio transport's transmit acknowledgement; partial
-render fragments are accepted into the bounded accumulator. Pending URBs, mailboxes
-and socket buffers are bounded. Reassociation cancels old work, and successful
-USB/IP UNLINK replaces the submit completion.
-
-The current Python reference also has reduced diagnostics: audio packet logging
-is off by default (`--verbose` enables bounded development logs), logging runs on
-an ordinary worker, and statistics are written every two seconds. Link/generation
-changes remain promptly visible. Radio status writes use a separate worker with
-one coalesced pending snapshot. No PCM or voice recordings are written.
-The C++ candidate also checks the stop marker on a separate 100-ms worker instead
-of making a filesystem call on every one-millisecond radio tick.
-An established USB import stays connected while idle; only incomplete handshakes
-have a five-second timeout. Pending interrupt reads are allowed to wait for input.
-
-These changes reduce avoidable work in time-critical threads. They do not prove
-that system freezes caused by memory pressure, DPCs or another application are
-resolved. Existing alpha.3 limitations, including wired battery presentation,
-unsupported firmware updating, and incomplete RF authentication parity, remain.
+The appliance binaries go to `outputs/appliance-candidate`. Development tests
+use Python, synthetic RF and real loopback TCP; they do not switch physical
+adapter drivers. See [INSTALLER.md](INSTALLER.md) for packaging and
+[INSTALL.md](INSTALL.md) for installation/removal.

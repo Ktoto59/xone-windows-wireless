@@ -8,11 +8,11 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
-from usb_gip_radio import RadioBackend, frame, read_frame, gip_packets, usb_interrupt_packets, encode_chunk, gip_header_size
+from usb_gip_radio import RadioBackend, frame, read_frame, gip_packets, usb_interrupt_packets, encode_chunk, gip_header_size, AUDIO_MAX_AGE, CAPTURE_MAX_FRAMES, RENDER_MAX_AGE
 from usb_headset_profile import Endpoint
 from usbip_urb import Submit, IsoPacket
 
-MAC = '020000000001'
+MAC = '020000000101'
 
 
 def request(incoming=True, length=64, data=b''):
@@ -122,6 +122,44 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
             await self.writer.drain()
             result = await pending
             self.assertEqual((result.status, result.actual), (status, len(data) if status == 0 else 0))
+
+    async def test_power_observer_does_not_rewrite_control_or_log_authentication(self):
+        events=[];self.backend.on_event=events.append
+        for data in (bytes((5,32,1,15,6))+bytes(14),bytes((5,32,2,1,0)),bytes((6,32,3,2,1,0))):
+            pending=asyncio.create_task(self.backend.submit(request(False,len(data),data),Endpoint(1,3,64,4)))
+            kind,wcid,token,payload=await read_frame(self.reader)
+            self.assertEqual((kind,payload),(16,data))
+            self.writer.write(frame(17,wcid,struct.pack('<i',0),token));await self.writer.drain()
+            self.assertEqual((await pending).status,0)
+        observed=[event for event in events if event['operation']=='radio_power_out']
+        self.assertEqual(observed,[dict(operation='radio_power_out',mode=6,payload_length=15,tail_zero=True,status=0,parameters=bytes(14).hex()),
+                                   dict(operation='radio_power_out',mode=0,payload_length=1,tail_zero=True,status=0)])
+
+    async def test_wireless_mode_adaptation_consumes_only_exact_unacknowledged_parent_usb_init(self):
+        self.backend.preserve_wireless_mode=True
+        mode=bytes((5,32,4,15,6))+bytes(14)
+        result=await self.backend.submit(request(False,len(mode),mode),Endpoint(1,3,64,4))
+        self.assertEqual((result.status,result.actual),(0,len(mode)))
+        self.assertEqual(self.backend.usb_mode_switch_suppressed,1)
+        observed=bytes((5,32,5,15,6))+bytes.fromhex('0000000000005553000000000000')
+        result=await self.backend.submit(request(False,len(observed),observed),Endpoint(1,3,64,4))
+        self.assertEqual((result.status,result.actual),(0,len(observed)))
+        self.assertEqual(self.backend.usb_mode_switch_suppressed,2)
+        # Coalesced commands retain their order; a real RF error remains an error.
+        auth=bytes((6,32,5,2,1,0));data=mode+auth
+        pending=asyncio.create_task(self.backend.submit(request(False,len(data),data),Endpoint(1,3,64,4)))
+        kind,wcid,token,payload=await read_frame(self.reader)
+        self.assertEqual((kind,payload),(16,auth))
+        self.writer.write(frame(17,wcid,struct.pack('<i',-71),token));await self.writer.drain()
+        self.assertEqual((await pending).status,-71)
+        for data in (bytes((5,48))+mode[2:],bytes((5,33))+mode[2:],mode[:-1]+b'\x01',
+                     bytes((5,32,8,1,6)),bytes((5,32,8,1,0))):
+            pending=asyncio.create_task(self.backend.submit(request(False,len(data),data),Endpoint(1,3,64,4)))
+            _,wcid,token,payload=await read_frame(self.reader)
+            self.assertEqual(payload,data)
+            self.writer.write(frame(17,wcid,struct.pack('<i',0),token));await self.writer.drain()
+            self.assertEqual((await pending).status,0)
+        self.assertEqual(self.backend.usb_mode_switch_suppressed,3)
 
     async def test_large_radio_identification_delivered_in_usb_sized_chunks(self):
         data = encode_chunk(4,240,149,bytes(range(122)),500)
@@ -265,7 +303,6 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
         self.writer.write(frame(17,1,struct.pack('<i',0),token));await self.writer.drain()
         self.assertEqual((await task).actual,198)
         self.assertFalse(self.backend.render_pcm)
-        self.assertEqual((self.backend.render_nonzero,self.backend.render_peak),(1,0x0707))
 
     async def test_render_bridge_rejects_unobserved_format_and_clears_partial_on_loss(self):
         self.backend.audio_probe = self.backend.audio_bridge = True
@@ -314,7 +351,7 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_cancelled_paced_capture_preserves_pcm_for_next_request(self):
         self.backend.audio_probe = self.backend.audio_bridge = True
-        self.backend.audio_queue.append(bytes.fromhex('60200132c000')+bytes(48))
+        self.backend.audio_queue.append((self.backend.clock(), bytes.fromhex('60200132c000')+bytes(48)))
         self.backend.capture_deadline = time.perf_counter()+.03
         capture = replace(request(),ep=2,length=4096,packet_count=1,iso=(IsoPacket(0,4096),))
         task = asyncio.create_task(self.backend.submit(capture,Endpoint(0x82,1,64,1)))
@@ -342,48 +379,11 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(b''.join(p[6:] for p in packets),pcm)
         self.assertFalse(self.backend.audio_queue)
 
-    async def test_eight_slot_capture_uses_radio_clock_not_stale_host_deadline(self):
-        self.backend.audio_probe = self.backend.audio_bridge = True
-        self.backend.capture_deadline = time.perf_counter()+10
-        radio = bytes.fromhex('6020018283000006')+bytes(384)
-        capture = replace(request(),ep=2,length=512,packet_count=8,
-                          iso=tuple(IsoPacket(i*64,64) for i in range(8)))
-        task = asyncio.create_task(self.backend.submit(capture,Endpoint(0x82,1,64,1)))
-        self.writer.write(frame(4,1,radio));await self.writer.drain()
-        result = await asyncio.wait_for(task,1)
-        self.assertEqual((result.status,result.actual),(0,432))
-        self.assertEqual(self.backend.capture_deadline,0)
-
-    async def test_capture_overrun_keeps_recent_pcm_and_interrupt_connection_alive(self):
-        self.backend.audio_probe = self.backend.audio_bridge = True
-        for index in range(300):
-            radio = bytes.fromhex('6020018283000006')+bytes((index%256,))*384
-            self.writer.write(frame(4,1,radio))
-        command = bytes.fromhex('0320020480000000')
-        self.writer.write(frame(2,1,command));await self.writer.drain()
-        interrupt = await asyncio.wait_for(self.backend.submit(request(),Endpoint(0x81,3,64,4)),10)
-        self.assertEqual(interrupt.data,command)
-        self.assertTrue(self.backend.ready)
-        self.assertEqual(self.backend.generation,1)
-        self.assertEqual(len(self.backend.audio_queue),64)
-        self.assertEqual(self.backend.capture_dropped,300*8-64)
-        self.assertEqual(self.backend.capture_high_water,64)
-        capture = replace(request(),ep=2,length=512,packet_count=8,
-                          iso=tuple(IsoPacket(i*64,64) for i in range(8)))
-        result = await self.backend.submit(capture,Endpoint(0x82,1,64,1))
-        self.assertEqual(result.status,0)
-        self.assertEqual(b''.join(p[6:] for p in gip_packets(result.data)),bytes((292%256,))*384)
-
-    async def test_oversized_capture_request_fails_without_waiting_for_unbounded_audio(self):
-        self.backend.audio_probe = self.backend.audio_bridge = True
-        capture = replace(request(),ep=2,length=65*64,packet_count=65,
-                          iso=tuple(IsoPacket(i*64,64) for i in range(65)))
-        result = await asyncio.wait_for(self.backend.submit(capture,Endpoint(0x82,1,64,1)),1)
-        self.assertEqual(result.status,-95)
-        self.assertTrue(self.backend.ready)
-
     async def test_render_waits_for_device_clock_request_before_transmit(self):
         self.backend.audio_probe = self.backend.audio_bridge = self.backend.audio_layout = True
+        # This checks ordering, independently of the Windows test runner's
+        # real-time scheduling (latency/expiry have separate injected tests).
+        self.backend.clock = lambda: 100.0
         packet = bytes.fromhex('602001c08100')+bytes(192)
         data = packet*8
         render = replace(request(False,len(data),data),ep=2,packet_count=8,
@@ -434,6 +434,247 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((kind,wcid,len(payload)),(18,1,1542))
         self.writer.write(frame(17,1,struct.pack('<i',0),token));await self.writer.drain()
         self.assertEqual((await task).status,0)
+
+    async def test_capture_overflow_keeps_latest_pcm_and_control_session(self):
+        self.backend.audio_probe = self.backend.audio_bridge = True
+        self.backend.clock = lambda: 100.0
+        # More than the old two-second queue: formerly closed the RF socket.
+        for i in range(270):
+            packet = bytes.fromhex('6020018283000006')+bytes([i % 256])*384
+            self.writer.write(frame(4,1,packet))
+        command = bytes.fromhex('04200100')
+        self.writer.write(frame(2,1,command))
+        await self.writer.drain()
+        result = await asyncio.wait_for(self.backend.submit(request(),Endpoint(0x81,3,64,4)),10)
+        self.assertEqual(result.data,command)
+        self.assertTrue(self.backend.ready)
+        self.assertLessEqual(len(self.backend.audio_queue),CAPTURE_MAX_FRAMES)
+        self.assertEqual(self.backend.audio_queue[-1][1][6:],bytes([269 % 256])*48)
+        self.assertGreater(self.backend.capture_dropped,2000)
+        self.assertEqual(self.backend.generation,1)
+
+    async def test_stalled_capture_waits_for_fresh_pcm_without_reassociation(self):
+        self.backend.audio_probe = self.backend.audio_bridge = True
+        now = [100.0]
+        self.backend.clock = lambda: now[0]
+        stale = bytes.fromhex('60200132c000')+bytes([11])*48
+        self.backend.audio_queue.append((now[0],stale))
+        now[0] += .5
+        capture = replace(request(),ep=2,length=64,packet_count=1,iso=(IsoPacket(0,64),))
+        task = asyncio.create_task(self.backend.submit(capture,Endpoint(0x82,1,64,1)))
+        await asyncio.sleep(.005)
+        self.assertFalse(task.done())
+        self.writer.write(frame(4,1,bytes.fromhex('6020018283000006')+bytes([22])*384))
+        await self.writer.drain()
+        result = await asyncio.wait_for(task,1)
+        self.assertEqual(result.data[6:],bytes([22])*48)
+        self.assertEqual(self.backend.capture_dropped,1)
+        self.assertTrue(self.backend.ready)
+
+    async def test_render_queued_across_stall_reports_iso_loss_without_sending(self):
+        self.backend.audio_probe = self.backend.audio_bridge = self.backend.audio_layout = True
+        now = [100.0]
+        self.backend.clock = lambda: now[0]
+        packet = bytes.fromhex('602001c08100')+bytes(192)
+        render = replace(request(False,len(packet),packet),ep=2,packet_count=1,iso=(IsoPacket(0,len(packet)),))
+        await self.backend.render_delivery.acquire()
+        task = asyncio.create_task(self.backend.submit(render,Endpoint(2,1,228,1)))
+        await asyncio.sleep(0)
+        now[0] += .25
+        self.backend.render_delivery.release()
+        result = await asyncio.wait_for(task,1)
+        self.assertEqual(result.actual,0)
+        self.assertEqual(result.iso[0].status,-18)
+        self.assertFalse(self.backend.pending)
+        self.assertFalse(self.backend.render_pcm)
+        self.assertEqual(self.backend.render_dropped,1)
+        self.assertTrue(self.backend.ready)
+        # A stale OUT never entered IPC; the next frame is this control request.
+        control = asyncio.create_task(self.backend.submit(request(False,4,bytes.fromhex('04200100')),Endpoint(1,3,64,4)))
+        kind,wcid,token,_ = await read_frame(self.reader)
+        self.assertEqual(kind,16)
+        self.writer.write(frame(17,wcid,struct.pack('<i',0),token));await self.writer.drain()
+        self.assertEqual((await control).actual,4)
+
+    async def test_missing_audio_clock_drops_pcm_without_reset_then_recovers(self):
+        self.backend.audio_probe = self.backend.audio_bridge = self.backend.audio_layout = True
+        packet = bytes.fromhex('602001c08100')+bytes(192)
+        render = replace(request(False,len(packet)*8,packet*8),ep=2,packet_count=8,
+                         iso=tuple(IsoPacket(i*198,198) for i in range(8)))
+        result = await asyncio.wait_for(self.backend.submit(render,Endpoint(2,1,228,1)),1)
+        self.assertTrue(all(p.status == -18 and p.actual == 0 for p in result.iso))
+        self.assertTrue(self.backend.ready)
+        self.assertEqual(self.backend.generation,1)
+        self.assertFalse(self.backend.render_pcm)
+        self.writer.write(frame(4,1,bytes.fromhex('6020018283000006')+bytes(384)));await self.writer.drain()
+        task = asyncio.create_task(self.backend.submit(render,Endpoint(2,1,228,1)))
+        kind,wcid,token,_ = await read_frame(self.reader)
+        self.assertEqual(kind,18)
+        self.writer.write(frame(17,wcid,struct.pack('<i',0),token));await self.writer.drain()
+        self.assertEqual((await task).actual,len(packet)*8)
+
+    async def test_old_partial_render_does_not_mix_with_fresh_audio(self):
+        self.backend.audio_probe = self.backend.audio_bridge = self.backend.audio_layout = True
+        now = [100.0]
+        self.backend.clock = lambda: now[0]
+        def render(value, count):
+            packet = bytes.fromhex('602001c08100')+bytes([value])*192
+            return replace(request(False,len(packet)*count,packet*count),ep=2,packet_count=count,
+                           iso=tuple(IsoPacket(i*198,198) for i in range(count)))
+        await self.backend.submit(render(11,1),Endpoint(2,1,228,1))
+        now[0] += RENDER_MAX_AGE*2
+        self.backend.render_credits = 1
+        task = asyncio.create_task(self.backend.submit(render(22,8),Endpoint(2,1,228,1)))
+        _,wcid,token,payload = await read_frame(self.reader)
+        self.assertEqual(payload[6:],bytes([22])*1536)
+        self.assertEqual(self.backend.render_discarded_bytes,192)
+        self.writer.write(frame(17,wcid,struct.pack('<i',0),token));await self.writer.drain()
+        self.assertEqual((await task).actual,198*8)
+
+    async def test_audio_restart_invalidates_waiting_render_without_resetting_radio(self):
+        self.backend.audio_probe = self.backend.audio_bridge = self.backend.audio_layout = True
+        packet = bytes.fromhex('602001c08100')+bytes(192)
+        render = replace(request(False,198,packet),ep=2,packet_count=1,iso=(IsoPacket(0,198),))
+        await self.backend.render_delivery.acquire()
+        task = asyncio.create_task(self.backend.submit(render,Endpoint(2,1,228,1)))
+        await asyncio.sleep(0)
+        self.backend.clear_audio()
+        self.backend.render_delivery.release()
+        self.assertEqual((await task).status,-19)
+        self.assertTrue(self.backend.ready)
+        self.assertFalse(self.backend.render_pcm)
+
+    async def test_cancelled_render_waiting_for_credit_cannot_leak_pcm_to_next_urb(self):
+        self.backend.audio_probe = self.backend.audio_bridge = self.backend.audio_layout = True
+        self.backend.clock = lambda: 100.0
+        packet = bytes.fromhex('602001c08100')+bytes([11])*192
+        render = replace(request(False,1584,packet*8),ep=2,packet_count=8,
+                         iso=tuple(IsoPacket(i*198,198) for i in range(8)))
+        task = asyncio.create_task(self.backend.submit(render,Endpoint(2,1,228,1)))
+        while not self.backend.render_pcm:
+            await asyncio.sleep(0)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertFalse(self.backend.render_pcm)
+        self.assertEqual(self.backend.render_discarded_bytes,1536)
+        self.assertEqual(self.backend.render_requests_pending,0)
+        self.assertEqual(self.backend.render_requests_high_water,1)
+        self.assertEqual(self.backend.render_fragment_count,8)
+        self.assertTrue(self.backend.ready)
+
+    async def test_native_render_pipeline_can_wait_50_ms_without_false_expiry(self):
+        self.backend.audio_probe = self.backend.audio_bridge = self.backend.audio_layout = True
+        now = [100.0]
+        self.backend.clock = lambda: now[0]
+        self.backend.render_credits = 1
+        packet = bytes.fromhex('602001c08100')+bytes([22])*192
+        render = replace(request(False,1584,packet*8),ep=2,packet_count=8,
+                         iso=tuple(IsoPacket(i*198,198) for i in range(8)))
+        await self.backend.render_delivery.acquire()
+        task = asyncio.create_task(self.backend.submit(render,Endpoint(2,1,228,1)))
+        await asyncio.sleep(0)
+        now[0] += .05
+        self.backend.render_delivery.release()
+        kind,wcid,token,payload = await read_frame(self.reader)
+        self.assertEqual((kind,payload[6:]),(18,bytes([22])*1536))
+        self.writer.write(frame(17,wcid,struct.pack('<i',0),token));await self.writer.drain()
+        result = await task
+        self.assertEqual(result.actual,1584)
+        self.assertTrue(all(p.status == 0 for p in result.iso))
+        self.assertEqual(self.backend.render_dropped,0)
+
+    async def test_independent_clock_playback_does_not_need_a_microphone_credit_per_block(self):
+        self.backend.audio_probe = self.backend.audio_bridge = self.backend.audio_layout = True
+        self.backend.independent_clock = True
+        now = [100.0]
+        self.backend.clock = lambda: now[0]
+        self.backend.radio_audio_last = now[0]
+        packet = bytes.fromhex('602001c08100')+bytes([22])*192
+        render = replace(request(False,1584,packet*8),ep=2,packet_count=8,
+                         iso=tuple(IsoPacket(i*198,198) for i in range(8)))
+        # Deliberately no microphone packets or render credits. An upstream-like
+        # playback clock must keep sending during a bounded RX-only outage.
+        for _ in range(3):
+            now[0] += .008
+            task = asyncio.create_task(self.backend.submit(render,Endpoint(2,1,228,1)))
+            kind,wcid,token,payload = await read_frame(self.reader)
+            self.assertEqual((kind,payload[6:]),(18,bytes([22])*1536))
+            self.assertFalse(task.done())  # Actual USB ACK is still mandatory.
+            self.writer.write(frame(17,wcid,struct.pack('<i',0),token));await self.writer.drain()
+            self.assertEqual((await task).actual,1584)
+        self.assertEqual(self.backend.audio_tx,3)
+        self.assertEqual(self.backend.audio_rx,0)
+        self.assertEqual(self.backend.render_credits,0)
+
+    async def test_independent_playback_stops_after_holdover_and_keeps_control_alive(self):
+        self.backend.audio_probe = self.backend.audio_bridge = self.backend.audio_layout = True
+        self.backend.independent_clock = True
+        self.backend.radio_audio_last = self.backend.clock()-.5
+        packet = bytes.fromhex('602001c08100')+bytes(192)
+        render = replace(request(False,1584,packet*8),ep=2,packet_count=8,
+                         iso=tuple(IsoPacket(i*198,198) for i in range(8)))
+        result = await asyncio.wait_for(self.backend.submit(render,Endpoint(2,1,228,1)),1)
+        self.assertTrue(all(p.status == -18 for p in result.iso))
+        self.assertEqual(self.backend.audio_tx,0)
+        self.assertFalse(self.backend.pending)
+        self.assertTrue(self.backend.ready)
+        control = asyncio.create_task(self.backend.submit(request(False,4,bytes.fromhex('04200100')),Endpoint(1,3,64,4)))
+        kind,wcid,token,_ = await read_frame(self.reader)
+        self.assertEqual(kind,16)
+        self.writer.write(frame(17,wcid,struct.pack('<i',0),token));await self.writer.drain()
+        self.assertEqual((await control).actual,4)
+
+    async def test_independent_capture_conceals_short_loss_then_waits_after_holdover(self):
+        self.backend.audio_probe = self.backend.audio_bridge = self.backend.audio_layout = True
+        self.backend.independent_clock = True
+        now = [100.0]
+        self.backend.clock = lambda: now[0]
+        self.backend.radio_audio_last = now[0]
+        self.backend.capture_deadline = now[0]
+        capture = replace(request(),ep=2,length=512,packet_count=8,
+                          iso=tuple(IsoPacket(i*64,64) for i in range(8)))
+        result = await self.backend.submit(capture,Endpoint(0x82,1,64,1))
+        packets = gip_packets(result.data)
+        self.assertEqual([p[2] for p in packets],list(range(1,9)))
+        self.assertTrue(all(p[6:] == bytes(48) for p in packets))
+        self.assertEqual(self.backend.capture_concealed,8)
+        now[0] += .5
+        task = asyncio.create_task(self.backend.submit(capture,Endpoint(0x82,1,64,1)))
+        await asyncio.sleep(.005)
+        self.assertFalse(task.done())  # No unlimited fabrication after RF loss.
+        radio = bytes.fromhex('6020018283000006')+bytes([99])*384
+        self.writer.write(frame(4,1,radio));await self.writer.drain()
+        result = await asyncio.wait_for(task,1)
+        self.assertEqual(b''.join(p[6:] for p in gip_packets(result.data)),bytes([99])*384)
+        self.assertEqual(self.backend.capture_concealed,8)
+        self.assertTrue(self.backend.ready)
+
+    async def test_old_headset_pipeline_accepts_75_ms_but_discards_120_ms_stall(self):
+        self.backend.audio_probe = self.backend.audio_bridge = self.backend.audio_layout = True
+        self.backend.render_max_age = .096
+        now = [100.0]
+        self.backend.clock = lambda: now[0]
+        packet = bytes.fromhex('602001c08100')+bytes([22])*192
+        render = replace(request(False,1584,packet*8),ep=2,packet_count=8,
+                         iso=tuple(IsoPacket(i*198,198) for i in range(8)))
+        for delay, accepted in ((.075,True),(.120,False)):
+            with self.subTest(delay=delay):
+                self.backend.render_credits = 1
+                await self.backend.render_delivery.acquire()
+                task = asyncio.create_task(self.backend.submit(render,Endpoint(2,1,228,1)))
+                await asyncio.sleep(0)
+                now[0] += delay
+                self.backend.render_delivery.release()
+                if accepted:
+                    kind,wcid,token,payload = await read_frame(self.reader)
+                    self.assertEqual((kind,payload[6:]),(18,bytes([22])*1536))
+                    self.writer.write(frame(17,wcid,struct.pack('<i',0),token));await self.writer.drain()
+                result = await task
+                self.assertEqual(result.actual,1584 if accepted else 0)
+                self.assertTrue(all(p.status == (0 if accepted else -18) for p in result.iso))
+                self.assertTrue(self.backend.ready)
+
 
 
 if __name__ == '__main__':

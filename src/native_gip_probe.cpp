@@ -30,9 +30,9 @@ struct LiveWindow {
     HWND window=nullptr;
     LiveWindow(){
         WNDCLASSW cls{};cls.lpfnWndProc=DefWindowProcW;cls.hInstance=GetModuleHandleW(nullptr);cls.lpszClassName=L"XoneMotorTest";cls.hbrBackground=reinterpret_cast<HBRUSH>(COLOR_WINDOW+1);RegisterClassW(&cls);
-        window=CreateWindowW(cls.lpszClassName,L"xone: тест четырёх моторов — нажми на это окно",WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,CW_USEDEFAULT,580,160,nullptr,nullptr,cls.hInstance,nullptr);
+        window=CreateWindowW(cls.lpszClassName,L"xone: four-motor test - click this window",WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,CW_USEDEFAULT,580,160,nullptr,nullptr,cls.hInstance,nullptr);
         if(!window)throw std::runtime_error("Cannot create live test window");
-        CreateWindowW(L"STATIC",L"Оставь это окно активным.\nЧетыре импульса: левый мотор, правый, левый триггер, правый.",WS_CHILD|WS_VISIBLE,20,20,530,60,window,nullptr,cls.hInstance,nullptr);
+        CreateWindowW(L"STATIC",L"Keep this window active.\nFour pulses: left motor, right motor, left trigger, right trigger.",WS_CHILD|WS_VISIBLE,20,20,530,60,window,nullptr,cls.hInstance,nullptr);
         ShowWindow(window,SW_SHOW);SetForegroundWindow(window);
     }
     ~LiveWindow(){if(IsWindow(window))DestroyWindow(window);}

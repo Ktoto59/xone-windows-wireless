@@ -100,7 +100,7 @@ Bytes Control::submit(const Request &r){
             if(!number && !index)b={4,3,9,4};else if(number==0xee && !index)b=p.os_string;
             else if(index==0x0409){
                 if(number==p.device[14])b=text_descriptor("Microsoft");else if(number==p.device[15])b=text_descriptor(p.product);
-                else if(number==p.device[16]){char serial[32]{};std::snprintf(serial,sizeof(serial),"XONE%04XTEST",static_cast<unsigned>(p.pid));b=text_descriptor(serial);}else throw Stall("Unknown string");
+                else if(number==p.device[16]){char serial[32]{};std::snprintf(serial,sizeof(serial),"XONE%04XTEST",static_cast<unsigned>(p.pid));b=text_descriptor(p.virtual_serial.empty()?serial:p.virtual_serial);}else throw Stall("Unknown string");
             }else throw Stall("Unknown string index");
         }else throw Stall("Unsupported descriptor");
     }else if(kind==0xc0 && code==p.os_string[16] && !value && index==4){b=Bytes(40);b[0]=40;b[5]=1;b[6]=4;b[8]=1;b[17]=1;const std::string compatible="XGIP10";std::copy(compatible.begin(),compatible.end(),b.begin()+18);}

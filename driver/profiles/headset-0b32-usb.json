@@ -11,5 +11,5 @@
   "ReferenceUsbAudioCleanConfirmed": true,
   "ReferenceAccessoriesSettingsConfirmed": true,
   "VirtualTransportVerified": false,
-  "Source": "Local read-only USB descriptor capture, 2026-10-12; physical serial omitted"
+  "Source": "Sanitized model USB descriptor reference; individual serial numbers omitted"
 }

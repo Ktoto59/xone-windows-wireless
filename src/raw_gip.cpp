@@ -4,26 +4,27 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include "raw_gip.hpp"
+#include "radio_ipc_queue.hpp"
 #include <deque>
 #include <algorithm>
 #include <stdexcept>
 namespace xone {
 struct UsbGipBroker::Impl {
     SOCKET socket=INVALID_SOCKET;bool started=false;Bytes mac,input;
-    std::deque<Bytes> output;size_t sent=0;
+    RadioIpcQueue output;
     ~Impl(){if(socket!=INVALID_SOCKET)closesocket(socket);if(started)WSACleanup();}
     void queue(uint8_t kind,uint8_t wcid,uint32_t token,std::span<const uint8_t> data){
-        if(data.size()>1600 || output.size()>=128)throw std::runtime_error("USB GIP broker queue limit");
+        if(data.size()>1600)throw std::runtime_error("USB GIP broker frame limit");
         Bytes b{'X','G','P','1',kind,wcid,static_cast<uint8_t>(data.size()),static_cast<uint8_t>(data.size()>>8)};
         for(unsigned n=0;n<4;++n)b.push_back(static_cast<uint8_t>(token>>(8*n)));
-        b.insert(b.end(),data.begin(),data.end());output.push_back(std::move(b));
+        b.insert(b.end(),data.begin(),data.end());output.push(std::move(b),kind==4);
     }
     void flush(){
-        for(unsigned n=0;n<128 && !output.empty();++n){
-            const auto &b=output.front();const auto result=send(socket,reinterpret_cast<const char *>(b.data()+sent),static_cast<int>(b.size()-sent),0);
+        for(unsigned n=0;n<128;++n){
+            const auto b=output.next();if(b.empty())break;
+            const auto result=send(socket,reinterpret_cast<const char *>(b.data()),static_cast<int>(b.size()),0);
             if(result==SOCKET_ERROR){if(WSAGetLastError()==WSAEWOULDBLOCK)return;throw std::runtime_error("USB GIP broker send failed");}
-            if(!result)throw std::runtime_error("USB GIP broker closed");sent+=static_cast<size_t>(result);
-            if(sent==b.size()){output.pop_front();sent=0;}
+            if(!result)throw std::runtime_error("USB GIP broker closed");output.advance(static_cast<size_t>(result));
         }
     }
 };
