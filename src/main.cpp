@@ -8,6 +8,7 @@
 #include "native_device_route.hpp"
 #endif
 #include "runtime_files.hpp"
+#include "status_schedule.hpp"
 extern "C" {
 #include "mt76/mt76.h"
 }
@@ -397,12 +398,13 @@ int radio_test(const Options &opt,bool controller=false,bool run=false) {
             if(!MoveFileExW(temporary.c_str(),destination.c_str(),MOVEFILE_REPLACE_EXISTING))throw std::runtime_error("Cannot replace controller status file");
         },[&]{return !opt.stop_file.empty() && std::filesystem::exists(opt.stop_file);});
         std::string previous_status;
-        auto status_last=std::chrono::steady_clock::time_point{};
+        xone::StatusSchedule status_schedule(opt.verbose?std::chrono::milliseconds(100):std::chrono::milliseconds(2000));
         auto save_status=[&](bool running){
             if(opt.status_file.empty())return;
             const auto now=std::chrono::steady_clock::now();
-            if(running && now-status_last<std::chrono::milliseconds(100))return;
-            status_last=now;
+            // Publish the first writer fault promptly; repeated failures must
+            // not turn retries against an unavailable file into a tight loop.
+            if(!status_schedule.ready({session.status_revision(),uint64_t(runtime_files.io_errors()!=0)},now,!running))return;
             std::ostringstream json;
             json<<std::boolalpha<<"{\"Running\":"<<running<<",\"Backend\":\""<<xone::utf8(opt.output)<<"\",\"FallbackOutput\":\""<<xone::utf8(opt.usb_gip_fallback)<<"\",\"Pairing\":"<<session.pairing_active()<<",\"RadioChannel\":"<<unsigned(mt.channel->index)<<",\"AutomaticSlots\":"<<opt.usb_auto_slots<<",\"ShareForwardedToWindows\":false,\"BatteryForwardedToWindows\":false,\"Controllers\":[";
             bool first=true;
@@ -416,6 +418,7 @@ int radio_test(const Options &opt,bool controller=false,bool run=false) {
                     constexpr const char *levels[]={"low","normal","high","full"};
                     json<<"{\"Type\":\""<<types[c.battery->type]<<"\",\"Level\":\""<<(c.battery->type?levels[c.battery->level]:"unknown")<<"\",\"RawType\":"<<unsigned(c.battery->type)<<",\"RawLevel\":"<<unsigned(c.battery->level)<<'}';
                 }else json<<"null";
+                json<<",\"MalformedGipPackets\":"<<c.malformed_gip_packets;
                 json<<",\"UsbTx\":{\"Packets\":"<<c.usb_tx.packets<<",\"Over8ms\":"<<c.usb_tx.over_8ms
                     <<",\"MaxUs\":"<<c.usb_tx.max_us<<",\"LastUs\":"<<c.usb_tx.last_us<<"},\"Audio\":";
                 if(c.audio){json<<"{\"Stage\":\""<<c.audio->stage<<"\",\"InputRate\":"<<c.audio->input_rate<<",\"OutputRate\":"<<c.audio->output_rate<<",\"InputChannels\":"<<unsigned(c.audio->input_channels)<<",\"OutputChannels\":"<<unsigned(c.audio->output_channels)<<",\"ReceivedPackets\":"<<c.audio->received_packets<<",\"SilencePackets\":"<<c.audio->silence_packets<<",\"PlaybackPackets\":"<<c.audio->playback_packets<<",\"CapturePackets\":"<<c.audio->capture_packets<<",\"WindowsEndpoint\":"<<(!c.audio->endpoints.render.empty() && !c.audio->endpoints.capture.empty())<<",\"SyntheticGamepadParent\":"<<c.audio->synthetic_parent<<",\"RenderId\":\""<<c.audio->endpoints.render<<"\",\"CaptureId\":\""<<c.audio->endpoints.capture<<"\"}";}

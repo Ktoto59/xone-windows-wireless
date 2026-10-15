@@ -27,6 +27,11 @@ Status disk writes are asynchronous. The host only detaches on an explicit
 lifecycle snapshot/generation transition, never on a missing or unreadable file.
 Rare radio removals and USB closure errors are recorded locally for diagnosis.
 
+Malformed radio GIP framing is rejected before dispatching any packet from that
+transfer. The associated WCID's `MalformedGipPackets` status counter increases;
+other devices and later valid packets continue. Dispatch and physical USB errors
+still reach the transport recovery path.
+
 The source retains legacy synthetic GIP/ViGEm and Python reference experiments;
 these are not installed or selected by the normal runtime. They do not establish
 stock wireless auth v3 support, firmware-update support or kernel-driver status.

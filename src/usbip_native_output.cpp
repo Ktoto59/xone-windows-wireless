@@ -52,13 +52,11 @@ struct NativeUsbOutput::Impl {
     std::string last_usb_error;uint64_t usb_closed=0;
     std::vector<std::unique_ptr<Client>> clients;Client *imported=nullptr;
     std::unique_ptr<LatestSnapshot> status_writer;
-    std::optional<std::pair<uint8_t,uint64_t>> previous_lifecycle;
     usbip::Core::Clock::time_point last_status{};bool mmcss=false,peer_error=false;DWORD mmcss_error=0;
-    std::string previous_minimal;
     std::atomic_uint64_t address_revision=0;
     std::atomic_bool streaming_audio=false;
     uint64_t association_id=0;
-    std::optional<std::tuple<bool,uint8_t,uint64_t,bool,uint64_t>> published_life;
+    std::optional<std::tuple<bool,uint8_t,uint64_t,bool,uint64_t,bool,uint64_t,std::string>> published_life;
     Impl(uint16_t port,Bytes address,uint16_t pid,bool with_audio,const std::wstring &status,bool auto_select,bool trace):mac(std::move(address)),profile(usbip::profile(pid,with_audio)),core(profile,with_audio),audio(with_audio),automatic(auto_select),diagnostics(trace),product(pid){
         if(mac.size()!=6 || port<1024)throw usbip::Error("Invalid native USB route");
         static std::atomic_uint64_t epochs{GetTickCount64()*1000};association_id=++epochs;
@@ -94,20 +92,19 @@ struct NativeUsbOutput::Impl {
         }inbox.push_back(std::move(m));SetEvent(wake);
     }
     void publish(bool connected=true){
-        if(!status_writer)return;const auto &s=core.stats();const auto now=usbip::Core::Clock::now();const auto life=std::pair{s.wcid,s.generation};
-        const auto current_life=std::tuple{connected,s.wcid,s.generation,peer_error,address_revision.load()};
-        if(!diagnostics && published_life==current_life && now-last_status<std::chrono::seconds(2))return;
-        if(connected && previous_lifecycle==life && now-last_status<std::chrono::seconds(2))return;
+        if(!status_writer)return;const auto &s=core.stats();const auto now=usbip::Core::Clock::now();
+        const auto current_life=std::tuple{connected,s.wcid,s.generation,peer_error,address_revision.load(),imported!=nullptr,usb_closed,last_usb_error};
+        if(published_life==current_life && now-last_status<std::chrono::seconds(2))return;
         std::ostringstream json;json<<std::boolalpha<<"{\"Pid\":"<<product<<",\"Connector\":\""<<device_connector(product).name<<"\",\"UsbImported\":"<<(imported!=nullptr)<<",\"VirtualSerial\":\""<<profile.virtual_serial<<"\",\"AssociationId\":"<<association_id<<",\"RadioConnected\":"<<connected<<",\"Ready\":"<<(connected && core.ready())<<",\"Wcid\":"<<unsigned(s.wcid)<<",\"Generation\":"<<(association_id*100+s.generation)
             <<",\"Backend\":\"cpp\",\"PeerProtocolError\":"<<peer_error<<",\"Mac\":\"";
         {std::lock_guard lock(mutex);constexpr char hex[]="0123456789abcdef";for(auto b:mac)json<<hex[b>>4]<<hex[b&15];}
         json<<"\",\"PowerCommands\":"<<s.power_commands<<",\"LastPower\":\""<<s.last_power<<"\",\"UsbModeSwitchSuppressed\":"<<s.mode_suppressed<<",\"UsbClosed\":"<<usb_closed<<",\"LastUsbError\":"<<Json(last_usb_error).dump();
-        if(!diagnostics){json<<'}';const auto text=json.str();status_writer->publish(text);previous_minimal=text;published_life=current_life;last_status=now;return;}
+        if(!diagnostics){json<<'}';status_writer->publish(json.str());published_life=current_life;last_status=now;return;}
         json
             <<",\"RxPackets\":"<<s.rx<<",\"TxPackets\":"<<s.tx<<",\"AudioBridge\":"<<audio<<",\"AudioLayoutSupported\":"<<s.layout
             <<",\"AudioRxPackets\":"<<s.audio_rx<<",\"AudioTxPackets\":"<<s.audio_tx<<",\"UsbAudioInCompletions\":"<<s.capture_slots<<",\"CaptureDroppedFrames\":"<<s.dropped
             <<",\"CaptureQueueHighWater\":"<<s.capture_high_water<<",\"RenderExpiredRequests\":"<<s.render_expired<<",\"CaptureConcealedFrames\":"<<s.concealed<<",\"UsbModeSwitchSuppressed\":"<<s.mode_suppressed<<",\"Mmcss\":"<<mmcss<<",\"MmcssError\":"<<mmcss_error<<"}";
-        status_writer->publish(json.str());previous_lifecycle=life;last_status=now;
+        status_writer->publish(json.str());published_life=current_life;last_status=now;
     }
     void parse(Client &c){
         for(;;){

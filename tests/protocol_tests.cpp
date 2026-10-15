@@ -9,6 +9,7 @@ extern "C" {
 #include <array>
 #include <map>
 #include <cstring>
+#include <chrono>
 
 namespace {
 unsigned passed=0;
@@ -46,6 +47,9 @@ struct Mock {
     std::vector<uint32_t> dma_offsets;
     unsigned controls=0;
     bool fail_read=false,short_read=false,short_bulk=false;
+    bool emulate_startup=false,require_rf_patch=false,warm_start=false;
+    bool wow_to_host=true,wow_enabled=true;
+    std::chrono::steady_clock::time_point mcu_ready{};
     usb_device usb{};
     device dev{};
     xone_mt76 mt{};
@@ -58,12 +62,18 @@ struct Mock {
         if (type&0x80) {
             if (m.fail_read) return -EREMOTEIO;
             if (m.short_read) return 2;
+            // An uploaded MCU can expose its ready bit before USB startup settles.
+            if (m.emulate_startup && !m.warm_start && reg==MT_FCE_DMA_ADDR &&
+                std::chrono::steady_clock::now()<m.mcu_ready) return -EREMOTEIO;
             uint32_t result=m.registers[reg];
             if (reg==MT_FCE_DMA_LEN) result |= 0xc0000000;
             if (reg==MT_EFUSE_CTRL) result &= ~MT_EFUSE_CTRL_KICK;
             if (length==4) std::memcpy(data,&result,4);
         } else if (req==MT_VEND_DEV_MODE) {
             // Fresh upload writes zero at DMA_ADDR, reset starts with nonzero.
+            if (m.require_rf_patch && (m.registers[0x0130]&BIT(19))) return -EREMOTEIO;
+            m.warm_start=m.registers[MT_FCE_DMA_ADDR]!=0;
+            if (m.emulate_startup) m.mcu_ready=std::chrono::steady_clock::now()+std::chrono::milliseconds(400);
             m.registers[MT_FCE_DMA_ADDR]=m.registers[MT_FCE_DMA_ADDR] ? 0x80000000 : 1;
         } else if (length==4) {
             uint32_t result; std::memcpy(&result,data,4); m.registers[reg]=result;
@@ -74,7 +84,13 @@ struct Mock {
     static int bulk(void *context,u8 pipe,void *data,int length,int *actual,unsigned) {
         auto &m=*static_cast<Mock *>(context);
         check(pipe==0x04,"Wrong USB output endpoint");
+        if (m.emulate_startup && std::chrono::steady_clock::now()<m.mcu_ready) return -EREMOTEIO;
         const auto *bytes=static_cast<uint8_t *>(data);
+        if (length>=9 && FIELD_GET(MT_MCU_MSG_CMD_TYPE,get_unaligned_le32(bytes))==MT_CMD_WOW_FEATURE) {
+            const auto feature=get_unaligned_le32(bytes+4);
+            if (feature==1) m.wow_enabled=bytes[8]!=0;
+            if (feature==3) m.wow_to_host=bytes[8]!=0;
+        }
         m.messages.emplace_back(bytes,bytes+length);
         *actual=m.short_bulk ? length-1 : length;
         return 0;
@@ -139,6 +155,20 @@ int main() {
             const std::vector<uint8_t> expected{4,0,0,0x51,2,0,0,0,0,0,0,0};
             check(mock.messages.size()==1 && mock.messages[0]==expected,"MT76 LED bytes differ");
         });
+        test("warm firmware reset waits before issuing MCU commands",[] {
+            const auto fw=firmware_fixture(); Mock mock(fw);
+            mock.emulate_startup=true;mock.registers[MT_FCE_DMA_ADDR]=1;
+            check(xone_mt76_load_firmware(&mock.mt,"mock")==0,"Warm reset failed");
+            check(xone_mt76_set_led_mode(&mock.mt,XONE_MT_LED_OFF)==0 && !mock.usb.sticky_error,
+                  "MCU command issued before warm startup completed");
+        });
+        test("cold firmware applies RF patch and waits for USB startup",[] {
+            const auto fw=firmware_fixture(); Mock mock(fw);
+            mock.emulate_startup=true;mock.require_rf_patch=true;mock.registers[0x0130]=BIT(19)|7;
+            check(xone_mt76_load_firmware(&mock.mt,"mock")==0 && !mock.usb.sticky_error,
+                  "Cold startup RF patch or USB settling delay missing");
+            check(mock.registers[0x0130]==7,"RF patch changed unrelated register bits");
+        });
         test("upstream firmware DMA streaming and chunk boundaries",[] {
             const auto fw=firmware_fixture(0x3804,4); Mock mock(fw);
             check(xone_mt76_load_firmware(&mock.mt,"mock")==0 && !mock.usb.sticky_error,"Firmware upload failed");
@@ -151,6 +181,7 @@ int main() {
             check(xone_mt76_init_radio(&mock.mt)==0 && !mock.usb.sticky_error,"Radio init failed");
             check(mock.mt.address[0]==0x62 && mock.mt.address[1]==0x45 && mock.mt.address[2]==0xbd,"Wrong adapter MAC prefix");
             check(mock.mt.channel && mock.mt.channel->index==0xa5,"Wrong final channel");
+            check(!mock.wow_to_host && !mock.wow_enabled,"Radio init retained wake-only routing");
             check(xone_mt76_set_pairing(&mock.mt,true)==0,"Pair beacon failed");
             const auto &beacon=mock.messages.back();
             check(beacon.size()==88 && beacon[74]==1 && beacon[78]==165,"Wrong pair beacon wire layout/channel");

@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Publish fallback GIP status immediately on state transitions rather than on
+  every control packet; repeated battery/audio-control and ignored messages no
+  longer bypass the normal status-write interval.
+- Restore the MT76 startup fixes lost during the C++ bridge migration: allow
+  firmware startup to settle after warm reset/cold upload, apply the cold RF
+  patch, and clear retained wake-on-wireless routing before enabling beacons.
+- Exercise delayed MCU readiness, cold RF setup and retained wake-only routing
+  in the protocol tests. These checks use a mock adapter; physical validation of
+  the restored startup path is still required.
+
 ## 0.1.0-alpha.5.2 - 2026-10-15
 
 - Fix WinUSB binding failure when Setup starts 32-bit PowerShell: relaunch
