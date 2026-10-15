@@ -1,6 +1,6 @@
 ; SPDX-License-Identifier: GPL-2.0-or-later
 #ifndef AppVersion
-  #define AppVersion "0.1.0-alpha.5"
+  #define AppVersion "0.1.0-alpha.5.1"
 #endif
 #ifndef StageDir
   #error StageDir must point to a verified public release stage
@@ -62,6 +62,26 @@ begin
     'Do not update headset/controller firmware through this bridge. Stop it and use a physical USB data cable.' + NewLine + NewLine +
     'No control window, device-selection dialog, overlay or Python runtime is installed.';
 end;
+function MaintenanceResultPath(Action: String): String;
+begin
+  Result := ExpandConstant('{app}\work\setup-') + Action + '.json';
+end;
+
+function MaintenanceFailure(Action, Message: String; ResultCode: Integer): String;
+var
+  Lines: TArrayOfString;
+  I: Integer;
+begin
+  Result := Message + #13#10 + 'Exit code: ' + IntToStr(ResultCode);
+  if LoadStringsFromFile(MaintenanceResultPath(Action) + '.error.txt', Lines) then begin
+    for I := 0 to GetArrayLength(Lines) - 1 do begin
+      if I >= 8 then Break;
+      Result := Result + #13#10 + Copy(Lines[I], 1, 350);
+    end;
+  end;
+  Result := Result + #13#10 + #13#10 + 'Local details: ' + MaintenanceResultPath(Action);
+end;
+
 function RunMaintenance(Action: String; Elevated: Boolean; var ResultCode: Integer): Boolean;
 var
   ProgramPath, Parameters: String;
@@ -72,8 +92,10 @@ begin
   Result := True;
   Exit;
 #endif
+  ResultCode := 0;
   ProgramPath := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
-  Parameters := '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\scripts\Setup-Action.ps1') + '" -Action ' + Action;
+  DeleteFile(MaintenanceResultPath(Action) + '.error.txt');
+  Parameters := '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\scripts\Setup-Action.ps1') + '" -Action ' + Action + ' -ResultPath "' + MaintenanceResultPath(Action) + '"';
   if Elevated then
     Result := ShellExec('runas', ProgramPath, Parameters, ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode)
   else
@@ -86,17 +108,17 @@ var
 begin
   if CurStep = ssPostInstall then begin
     if not RunMaintenance('InitializePreferences', False, ResultCode) then
-      RaiseException('Could not save installation preferences.');
+      RaiseException(MaintenanceFailure('InitializePreferences', 'Could not save installation preferences.', ResultCode));
     if ResultCode <> 0 then
-      RaiseException('Could not save installation preferences.');
+      RaiseException(MaintenanceFailure('InitializePreferences', 'Could not save installation preferences.', ResultCode));
     if not RunMaintenance('AutomaticSetup', True, ResultCode) then
       RaiseException('Windows did not approve adapter setup. Run Setup again with the adapter connected.');
     if ResultCode <> 0 then
-      RaiseException('Adapter setup did not complete. Keep the adapter connected and run Setup again.');
+      RaiseException(MaintenanceFailure('AutomaticSetup', 'Adapter setup did not complete.', ResultCode));
     if not RunMaintenance('AutomaticEnable', False, ResultCode) then
       RaiseException('Could not enable the background host. Run Setup again.');
     if ResultCode <> 0 then
-      RaiseException('Background startup did not complete. Run Setup again.');
+      RaiseException(MaintenanceFailure('AutomaticEnable', 'Background startup did not complete.', ResultCode));
   end;
 end;
 

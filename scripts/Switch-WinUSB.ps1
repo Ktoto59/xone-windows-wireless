@@ -8,17 +8,21 @@ $ErrorActionPreference = 'Stop'
 $taskRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'Device-Config.ps1')
 $InstanceId=Resolve-XoneAdapterInstance $InstanceId
+$taskPackage=Get-XoneAdapterPackage $InstanceId
 $taskBinder = Join-Path $taskRoot 'outputs\xone-bind.exe'
 $taskStatePath = Join-Path $taskRoot 'work\binding-state.json'
 $taskRegPath = "HKLM:\SYSTEM\CurrentControlSet\Enum\$InstanceId"
 $taskParamsPath = Join-Path $taskRegPath 'Device Parameters'
 $taskGuid = '{215E9D83-9720-4A4C-8CF2-E8F40E366C21}'
-if ($InstanceId -notmatch '^USB\\VID_045E&PID_02FE\\[^\\]+$') { throw 'Only the external 045E:02FE adapter is supported.' }
 if (-not (Test-Path -LiteralPath $taskBinder)) { throw 'Build outputs\xone-bind.exe first.' }
 
 function Invoke-TaskBinder([string]$Action, [string]$Inf, [string]$Section) {
     & $taskBinder $Action --instance $InstanceId --inf $Inf --section $Section
-    if ($LASTEXITCODE -eq 3010) { Write-Warning 'Windows requests a restart. This script will not restart the PC.' }
+    if ($LASTEXITCODE -eq 3010) {
+        [void][IO.Directory]::CreateDirectory((Join-Path $taskRoot 'work'))
+        @{Required=$true;Reason='Adapter binding change'} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $taskRoot 'work/setup-restart-required.json') -Encoding UTF8
+        Write-Warning 'Windows requests a restart. Setup will report it without restarting automatically.'
+    }
     elseif ($LASTEXITCODE -ne 0) { throw "Driver helper failed (exit $LASTEXITCODE)." }
 }
 function Read-TaskProperty([string]$Key) {
@@ -46,8 +50,7 @@ function Restore-TaskRegistry($Saved) {
     Restore-TaskRegistryProperty $taskParamsPath 'DeviceInterfaceGUIDs' $Saved.InterfaceGuids
 }
 function Assert-TaskState($Saved) {
-    if ($Saved.InstanceId -ne $InstanceId -or $Saved.Service -ne 'mt7612US' -or
-        $Saved.InfName -notmatch '^oem\d+\.inf$' -or $Saved.Section -ne 'MTWLAN.ndi') {
+    if ($Saved.InstanceId -ne $InstanceId -or -not (Test-XoneStockBinding $Saved)) {
         throw 'Saved recovery state does not match the expected adapter and stock driver.'
     }
 }
@@ -61,7 +64,7 @@ $taskWinusbInf = Join-Path $taskWindowsInf 'winusb.inf'
 
 if ($Mode -eq 'Plan') {
     Invoke-TaskBinder 'plan' $taskWinusbInf 'WINUSB'
-    if ($taskService -eq 'mt7612US') {
+    if ($taskService -eq $taskPackage.Service) {
         $taskSection = (Read-TaskProperty 'DEVPKEY_Device_DriverInfSection') -replace '(?i)\.NT.*$',''
         Invoke-TaskBinder 'plan' (Join-Path $taskWindowsInf $taskInf) $taskSection
     }
@@ -83,7 +86,7 @@ if ($Mode -eq 'Restore') {
     Write-Output 'Stock binding restored. Unplug/replug the adapter, then run xone-probe xinput.'
     return
 }
-if ($taskService -ne 'mt7612US') { throw 'Bind requires the known stock mt7612US binding; refusing an unexpected current driver.' }
+if ($taskService -ne $taskPackage.Service) { throw 'Bind requires the known Microsoft stock binding for this adapter model.' }
 $taskSection = (Read-TaskProperty 'DEVPKEY_Device_DriverInfSection') -replace '(?i)\.NT.*$',''
 $taskSaved = [pscustomobject]@{
     InstanceId=$InstanceId; Service=$taskService; InfName=$taskInf; Section=$taskSection

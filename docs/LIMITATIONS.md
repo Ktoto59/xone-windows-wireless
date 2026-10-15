@@ -27,9 +27,12 @@ firmware and driver binaries are acquired locally and are not release assets.
 
 ## Hardware and radio
 
-Only the external `045E:02FE` adapter and the three model profiles listed in the
-[README](../README.md) are covered. Different manufacturers, older controllers,
-internal radios and other adapter revisions are unverified. Model profiles are
+The installer, binding helper and host recognize the four upstream xone adapter
+IDs: `045E:02FE`, `045E:02E6`, `045E:02F9` and `045E:091E`. Only `02FE` has
+physical validation here. The other three are enabled but remain hardware
+unverified; they are not a claim of universal adapter compatibility. Setup automatically installs the matching signed Microsoft stock package when
+missing and preserves its recovery metadata before switching to WinUSB.
+Different manufacturers, unknown adapter IDs and older controllers are unverified. Model profiles are
 shared; they do not contain captured individual serials or radio addresses.
 
 The host detects models automatically and maintains separate per-association

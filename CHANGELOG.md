@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.0-alpha.5.1 - 2026-10-15
+
+- Automatically install a missing signed Microsoft adapter driver, prepare
+  verified firmware and install/repair the tested signed USBip dependency. No
+  previous Xbox hardware setup, Python, Accessories or VC++ redistributable needed.
+- Fix first-install firmware downloads: use Microsoft's catalog HTTPS host with
+  valid certificate verification, and pin the CAB SHA-256 before extraction.
+- Preserve maintenance stage, error and transcript locally, including helper-load
+  failures. Display the actual failure in Setup rather than a generic retry prompt.
+- Recognize all four upstream xone adapter IDs consistently in setup, binding and
+  the background host. Honor the saved adapter instead of picking another radio.
+  Only 045E:02FE is physically validated; other models need hardware testing.
+
+Validation: isolated maintenance failure/retry checks; fresh-directory extraction
+and verified import from the official CAB; adapter catalog/configuration checks.
+Actual installation on the reported second PC remains to be confirmed.
+
 ## 0.1.0-alpha.5 - 2026-10-15
 
 - Move automatic USBIP/GIP, PCM processing and background management to C++.

@@ -5,16 +5,28 @@ param([Parameter(Mandatory=$true)][ValidateSet('Prepare','Bind','Restore','Remov
       [ValidateSet('on','off')][string]$Startup='on')
 $ErrorActionPreference='Stop'
 $taskRoot=Split-Path -Parent $PSScriptRoot
-. (Join-Path $PSScriptRoot 'Setup-Helpers.ps1')
-$taskResult=[ordered]@{Success=$false;Action=$Action;Error=$null}
+if(-not $ResultPath){$ResultPath=Join-Path $taskRoot ('work/setup-'+$Action+'.json')}
+$taskErrorPath=$ResultPath+'.error.txt'
+$taskTranscriptPath=$ResultPath+'.log'
+$taskTranscriptStarted=$false
+$script:XoneSetupStage=$Action
+$taskResult=[ordered]@{Success=$false;Action=$Action;Stage=$Action;Error=$null;UpdatedUtc=$null}
 try{
+    [void][IO.Directory]::CreateDirectory((Split-Path -Parent ([IO.Path]::GetFullPath($ResultPath))))
+    if([IO.File]::Exists($taskErrorPath)){[IO.File]::Delete($taskErrorPath)}
+    # Maintenance only: the transcript is local and is never part of a release.
+    try{Start-Transcript -LiteralPath $taskTranscriptPath -Force | Out-Null;$taskTranscriptStarted=$true}catch{}
+    . (Join-Path $PSScriptRoot 'Setup-Helpers.ps1')
     switch($Action){
         InitializePreferences {Write-XoneJson (Join-Path $taskRoot 'config/app.local.json') @{Version=1;AutoStart=($Startup -eq 'on');OwnerSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value}}
         Prepare {Initialize-XonePrerequisites $taskRoot}
         Configure {$taskResult.ReconnectRequired=(Initialize-XoneApplication $taskRoot $InstanceId).ReconnectRequired}
         AutomaticSetup {
+            $script:XoneSetupStage='PreviousInstallation'
             Move-XonePreviousInstallation $taskRoot
+            $script:XoneSetupStage='AdapterSetup'
             $taskResult.ReconnectRequired=(Initialize-XoneApplication $taskRoot $InstanceId -AllowPendingRestart).ReconnectRequired
+            $script:XoneSetupStage='SaveAutomaticConfiguration'
             $path=Join-Path $taskRoot 'config/devices.local.json';$config=Read-XoneJson $path
             $config | Add-Member -NotePropertyName AutoDetect -NotePropertyValue $true -Force
             $config | Add-Member -NotePropertyName BridgeBackend -NotePropertyValue cpp -Force
@@ -76,5 +88,15 @@ try{
     }
     $taskResult.Success=$true
 }catch{$taskResult.Error=$_.Exception.Message;Write-Output $taskResult.Error}
-finally{if($ResultPath){Write-XoneJson $ResultPath $taskResult}}
+finally{
+    $taskResult.Stage=$script:XoneSetupStage
+    $taskResult.UpdatedUtc=[datetime]::UtcNow.ToString('o')
+    if($taskTranscriptStarted){try{Stop-Transcript | Out-Null}catch{}}
+    try{
+        # Do not depend on helpers loading successfully to preserve an error.
+        [void][IO.Directory]::CreateDirectory((Split-Path -Parent ([IO.Path]::GetFullPath($ResultPath))))
+        [IO.File]::WriteAllText($ResultPath,($taskResult | ConvertTo-Json -Depth 6),[Text.UTF8Encoding]::new($false))
+        if(-not $taskResult.Success){[IO.File]::WriteAllText($taskErrorPath,('Stage: '+$taskResult.Stage+"`r`n"+$taskResult.Error),[Text.UTF8Encoding]::new($false))}
+    }catch{$taskResult.Success=$false;Write-Output ('Could not save maintenance diagnostics: '+$_.Exception.Message)}
+}
 if(-not $taskResult.Success){exit 1}

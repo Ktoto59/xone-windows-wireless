@@ -2,6 +2,7 @@
 # Shared by the first-run UI and the uninstall guard. No action on dot-source.
 . (Join-Path $PSScriptRoot 'Device-Config.ps1')
 $script:XoneFirmwareHash='48084d9fa53b9bb04358f3bb127b7495dc8f7bb0b3ca1437bd24ef2b6eabdf66'
+$script:XoneFirmwareCabHash='65736a84ff4036645b8f8ec602bed91ab6353019c9cb3233decab9feec0f6f04'
 $script:XoneUsbipHash='38cad6d4432b52d5bb9409d9ad03b72fdffc4ada4cd3a48fbeca1a2752a8518a'
 function Read-XoneJson([string]$Path){
     $stream=$null;$reader=$null
@@ -65,7 +66,7 @@ function Get-XoneUsbipStatus {
     return [pscustomobject]@{Path=$path;Version=$version;Ready=$ready}
 }
 function Get-XoneSetupStatus([string]$Root){
-    $adapters=@(Get-PnpDevice -PresentOnly | Where-Object {$_.InstanceId -match '^USB\\VID_045E&PID_02FE\\[^\\]+$'} | ForEach-Object {
+    $adapters=@(Get-PnpDevice -PresentOnly | Where-Object {Test-XoneAdapterInstance $_.InstanceId} | ForEach-Object {
         [pscustomobject]@{InstanceId=$_.InstanceId;Name=$_.FriendlyName;Service=(Get-PnpDeviceProperty -InstanceId $_.InstanceId -KeyName DEVPKEY_Device_Service).Data}
     })
     return [pscustomobject]@{Firmware=(Test-XoneFirmware $Root);Usbip=(Get-XoneUsbipStatus);Adapters=$adapters;Python=(Test-Path -LiteralPath (Join-Path $Root 'runtime/python/python.exe'))}
@@ -84,29 +85,82 @@ function Get-XoneDownload([string]$Url,[string]$Path,[string]$Hash=''){
         Move-Item -LiteralPath $temporary -Destination $Path
     }finally{if(Test-Path -LiteralPath $temporary){Remove-Item -LiteralPath $temporary}}
 }
+function Invoke-XonePnputil([string[]]$Arguments){
+    & "$env:windir\System32\pnputil.exe" @Arguments | Out-Host
+    return $LASTEXITCODE
+}
+function Get-XoneDeviceService([string]$InstanceId){
+    return [string](Get-PnpDeviceProperty -InstanceId $InstanceId -KeyName DEVPKEY_Device_Service -ErrorAction SilentlyContinue).Data
+}
+function Initialize-XoneStockDriver([string]$Root,[string]$InstanceId){
+    $package=Get-XoneAdapterPackage $InstanceId
+    $script:XoneSetupStage='StockDriverCheck'
+    $service=Get-XoneDeviceService $InstanceId
+    if($service -eq 'WinUSB' -or $service -eq $package.Service){return $service}
+    if($service){throw 'The adapter is owned by an unexpected driver. Setup will not replace another application driver.'}
+    $script:XoneSetupStage='StockDriverDownload'
+    $downloads=Join-Path $Root 'work/downloads'
+    # Reuse the same verified CAB when firmware preparation downloaded it.
+    $cabName=if($package.Model -eq '02FE'){'adapter-driver.cab'}else{'adapter-'+$package.Model+'.cab'}
+    $cab=Join-Path $downloads $cabName
+    Get-XoneDownload $package.Url $cab $package.Hash
+    $directory=Join-Path $downloads ('stock-'+$package.Model)
+    [void][IO.Directory]::CreateDirectory($directory)
+    $script:XoneSetupStage='StockDriverExtraction'
+    & "$env:windir\System32\expand.exe" '-F:*' $cab $directory | Out-Host
+    if($LASTEXITCODE -ne 0){throw 'Cannot extract the Microsoft adapter driver package.'}
+    $script:XoneSetupStage='StockDriverSignatureCheck'
+    $signature=Get-AuthenticodeSignature -LiteralPath (Join-Path $directory $package.Catalog)
+    if($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'CN=Microsoft Windows Hardware Compatibility Publisher,'){throw 'Microsoft adapter driver catalog verification failed.'}
+    $inf=Join-Path $directory $package.Inf
+    $hardwareId='USB\VID_045E&PID_'+$package.Model
+    if(-not [IO.File]::ReadAllText($inf).Contains($hardwareId)){throw 'The verified driver package does not match the selected adapter model.'}
+    $script:XoneSetupStage='StockDriverInstallation'
+    # Windows validates catalog membership/signatures before accepting the INF.
+    # Only one supported adapter is selected, and this INF matches one model.
+    $code=Invoke-XonePnputil @('/add-driver',$inf,'/install')
+    if($code -notin @(0,3010)){throw ('Microsoft adapter driver installation failed (code '+$code+').')}
+    if($code -eq 3010){Write-XoneJson (Join-Path $Root 'work/setup-restart-required.json') @{Required=$true;Reason='Microsoft adapter driver installation'}}
+    $deadline=[datetime]::UtcNow.AddSeconds(30)
+    do{
+        $service=Get-XoneDeviceService $InstanceId
+        if($service -eq $package.Service){return $service}
+        Start-Sleep -Milliseconds 250
+    }while([datetime]::UtcNow -lt $deadline)
+    throw 'Windows did not bind the installed Microsoft adapter driver. Setup has retained its installation log.'
+}
 function Initialize-XonePrerequisites([string]$Root,[switch]$AllowPendingRestart){
+    $script:XoneSetupStage='RuntimeCheck'
     if(-not (Test-Path -LiteralPath (Join-Path $Root 'outputs/xone-probe-cpp.exe')) -and -not (Test-Path -LiteralPath (Join-Path $Root 'runtime/python/python.exe'))){throw 'The bridge runtime is missing. Reinstall the application.'}
     if(-not (Test-XoneFirmware $Root)){
+        $script:XoneSetupStage='FirmwarePreparation'
         try{& (Join-Path $Root 'scripts/Import-Firmware.ps1')}catch{
             $downloads=Join-Path $Root 'work/downloads'
             $cab=Join-Path $downloads 'adapter-driver.cab'
-            Get-XoneDownload 'https://download.windowsupdate.com/c/msdownload/update/driver/drvs/2017/07/1cd6a87c-623f-4407-a52d-c31be49e925c_e19f60808bdcbfbd3c3df6be3e71ffc52e43261e.cab' $cab
+            $script:XoneSetupStage='FirmwareDownload'
+            Get-XoneDownload 'https://catalog.s.download.windowsupdate.com/c/msdownload/update/driver/drvs/2017/07/1cd6a87c-623f-4407-a52d-c31be49e925c_e19f60808bdcbfbd3c3df6be3e71ffc52e43261e.cab' $cab $script:XoneFirmwareCabHash
+            $script:XoneSetupStage='FirmwareExtraction'
             & "$env:windir\System32\expand.exe" '-F:FW_ACC_00U.bin' $cab $downloads
             if($LASTEXITCODE -ne 0){throw 'Cannot extract the Microsoft firmware CAB.'}
             & (Join-Path $Root 'scripts/Import-Firmware.ps1') -Path (Join-Path $downloads 'FW_ACC_00U.bin')
         }
     }
+    $script:XoneSetupStage='UsbipCheck'
     $usbip=Get-XoneUsbipStatus
     if(Test-Path -LiteralPath $usbip.Path){
-        if(-not $usbip.Ready){throw 'An existing USBip installation has no ready virtual controller. Restart Windows or repair USBip; this wizard will not replace an existing installation.'}
-        if($usbip.Version -notmatch '^0\.9\.8\.1(?:\D|$)'){throw ('Existing USBip '+$usbip.Version+' is not the tested 0.9.8.1. Use the tested upstream version; this wizard will not downgrade it.')}
-        return
+        if($usbip.Version -notmatch '^0\.9\.8\.1(?:\D|$)'){throw ('Existing USBip '+$usbip.Version+' is not the tested 0.9.8.1. Setup will not downgrade another installed version.')}
+        if($usbip.Ready){return}
+        # Repair an incomplete installation of the exact tested dependency.
+        # This also lets a failed first setup be retried using this installer.
     }
     $installer=Join-Path $Root 'work/downloads/USBip-0.9.8.1-x64.exe'
+    $script:XoneSetupStage='UsbipDownload'
     Get-XoneDownload 'https://github.com/vadimgrn/usbip-win2/releases/download/v.0.9.8.1/USBip-0.9.8.1-x64.exe' $installer $script:XoneUsbipHash
+    $script:XoneSetupStage='UsbipSignatureCheck'
     $signature=Get-AuthenticodeSignature -LiteralPath $installer
     if($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Scheibling Consulting AB'){throw 'USBip publisher/signature verification failed.'}
     $arguments='/VERYSILENT /SP- /SUPPRESSMSGBOXES /NORESTART /RESTARTEXITCODE=3010 /NOCLOSEAPPLICATIONS /NORESTARTAPPLICATIONS /COMPONENTS="main,client" /TASKS=""'
+    $script:XoneSetupStage='UsbipInstallation'
     $process=Start-Process -FilePath $installer -ArgumentList $arguments -Verb RunAs -WindowStyle Hidden -PassThru
     [void]$process.Handle;$process.WaitForExit()
     if($process.ExitCode -eq 3010){
@@ -115,7 +169,9 @@ function Initialize-XonePrerequisites([string]$Root,[switch]$AllowPendingRestart
         throw 'USBip installed successfully and requires a Windows restart.'
     }
     if($process.ExitCode -ne 0){throw ('USBip installation failed (code '+$process.ExitCode+').')}
-    if(-not (Get-XoneUsbipStatus).Ready){throw 'USBip installed but its virtual controller is not ready. Restart Windows and reopen this wizard.'}
+    $deadline=[datetime]::UtcNow.AddSeconds(15)
+    do{if((Get-XoneUsbipStatus).Ready){return};Start-Sleep -Milliseconds 250}while([datetime]::UtcNow -lt $deadline)
+    throw 'USBip installation finished but Windows did not start its virtual controller.'
 }
 function Set-XoneSetupConfig([string]$Root,[string]$AdapterId,$Entries){
     $path=Join-Path $Root 'config/devices.local.json'
@@ -143,6 +199,13 @@ function Set-XoneBridgeBackend([string]$Root,[ValidateSet('cpp','python')][strin
     Write-XoneJson $path $value
 }
 function Initialize-XoneApplication([string]$Root,[string]$InstanceId,[switch]$AllowPendingRestart){
+    $restartMarker=Join-Path $Root 'work/setup-restart-required.json'
+    if([IO.File]::Exists($restartMarker)){
+        # A completed Windows reboot must not force every later upgrade to reboot.
+        $boot=(Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime.ToUniversalTime()
+        if([IO.File]::GetLastWriteTimeUtc($restartMarker) -lt $boot){[IO.File]::Delete($restartMarker)}
+    }
+    $script:XoneSetupStage='AdapterDetection'
     $InstanceId=Resolve-XoneAdapterInstance $InstanceId
     $path=Join-Path $Root 'config/devices.local.json'
     $config=Read-XoneJson $path
@@ -150,21 +213,25 @@ function Initialize-XoneApplication([string]$Root,[string]$InstanceId,[switch]$A
         [void](Read-XoneDeviceConfig $path -AllowEmpty)
         if($config.AdapterInstanceId -and $config.AdapterInstanceId -ne $InstanceId){throw 'This configuration belongs to a different adapter. Select it or use Advanced settings.'}
     }
-    $service=(Get-PnpDeviceProperty -InstanceId $InstanceId -KeyName DEVPKEY_Device_Service).Data
-    if($service -notin @('mt7612US','WinUSB')){throw 'The adapter uses an unsupported driver. Open Advanced settings to inspect it.'}
+    $script:XoneSetupStage='StopExistingBridge'
     Stop-XoneManagedBridge $Root;Assert-XoneRadioIdle
     Initialize-XonePrerequisites $Root -AllowPendingRestart:$AllowPendingRestart
+    $service=Initialize-XoneStockDriver $Root $InstanceId
+    $package=Get-XoneAdapterPackage $InstanceId
     $switched=$false
-    if($service -eq 'mt7612US'){
+    if($service -eq $package.Service){
+        $script:XoneSetupStage='WinusbBinding'
         & (Join-Path $Root 'scripts/Switch-WinUSB.ps1') -Mode Bind -InstanceId $InstanceId
         $switched=$true
-    }elseif($service -ne 'WinUSB'){throw 'The adapter uses an unsupported driver. Open Advanced settings to inspect it.'}
+    }elseif($service -ne 'WinUSB'){throw 'Adapter preparation did not select the expected driver.'}
     $reconnect=$false
     if($switched){
-        & "$env:windir\System32\pnputil.exe" /restart-device $InstanceId | Out-Null
-        $reconnect=$LASTEXITCODE -notin @(0,3010)
-        if($LASTEXITCODE -eq 3010){Write-XoneJson (Join-Path $Root 'work/setup-restart-required.json') @{Required=$true;Reason='Adapter driver installation'};if(-not $AllowPendingRestart){throw 'Windows requires a restart to finish adapter setup.'}}
+        $script:XoneSetupStage='AdapterRestart'
+        $restartCode=Invoke-XonePnputil @('/restart-device',$InstanceId)
+        $reconnect=$restartCode -notin @(0,3010)
+        if($restartCode -eq 3010){Write-XoneJson (Join-Path $Root 'work/setup-restart-required.json') @{Required=$true;Reason='Adapter driver installation'};if(-not $AllowPendingRestart){throw 'Windows requires a restart to finish adapter setup.'}}
     }
+    $script:XoneSetupStage='SaveAdapterConfiguration'
     if(-not $config){$config=[pscustomobject]@{Version=1;AdapterInstanceId=$InstanceId;BridgeBackend='cpp';Devices=@()}}
     $config.AdapterInstanceId=$InstanceId
     if(-not $config.BridgeBackend){$config | Add-Member -NotePropertyName BridgeBackend -NotePropertyValue cpp -Force}
@@ -193,7 +260,7 @@ function Move-XonePreviousInstallation([string]$Root){
     if(-not [IO.File]::Exists($newConfig) -and [IO.File]::Exists($oldConfig)){[void](Read-XoneDeviceConfig $oldConfig -AllowEmpty);Copy-Item -LiteralPath $oldConfig -Destination $newConfig}
     $backup=Read-XoneJson (Join-Path $oldRoot 'work/binding-state.json')
     if($backup -and -not [IO.File]::Exists((Join-Path $Root 'work/binding-state.json'))){
-        if($backup.InstanceId -notmatch '^USB\\VID_045E&PID_02FE\\[^\\\r\n]+$' -or $backup.Service -ne 'mt7612US' -or $backup.InfName -notmatch '^oem\d+\.inf$' -or $backup.Section -ne 'MTWLAN.ndi'){throw 'Previous adapter recovery metadata is invalid.'}
+        if(-not (Test-XoneStockBinding $backup)){throw 'Previous adapter recovery metadata is invalid.'}
         Write-XoneJson (Join-Path $Root 'work/binding-state.json') $backup
     }
 }
@@ -252,7 +319,7 @@ function Restore-XoneForRemoval([string]$Root){
         & (Join-Path $Root 'scripts/Switch-WinUSB.ps1') -Mode Restore -InstanceId $state.InstanceId
         $service=(Get-PnpDeviceProperty -InstanceId $state.InstanceId -KeyName DEVPKEY_Device_Service).Data
     }
-    if($service -ne 'mt7612US'){throw 'Stock driver restoration is not verified. Keep this installation and its recovery data.'}
+    if($service -ne (Get-XoneAdapterPackage $state.InstanceId).Service){throw 'Stock driver restoration is not verified. Keep this installation and its recovery data.'}
 }
 function Assert-XonePanelClosed([string]$Root){
     $path=Join-Path $Root 'work/control-panel.lock'

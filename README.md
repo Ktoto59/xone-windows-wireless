@@ -4,7 +4,7 @@ An experimental C++ bridge for the Xbox Wireless Adapter on Windows 11.
 Connect supported Xbox Wireless Headsets and Series controllers through the
 adapter while Windows uses its existing Xbox GIP and audio drivers.
 
-**[Download the alpha.5 installer](https://github.com/Ktoto59/xone-windows-wireless/releases/tag/v0.1.0-alpha.5)**
+**[Download the alpha.5.1 installer](https://github.com/Ktoto59/xone-windows-wireless/releases/tag/v0.1.0-alpha.5.1)**
 | [Installation and removal](docs/INSTALL.md)
 | [Known limitations](docs/LIMITATIONS.md)
 | [Troubleshooting](docs/TROUBLESHOOTING.md)
@@ -13,22 +13,23 @@ adapter while Windows uses its existing Xbox GIP and audio drivers.
 
 | Device | Supported identity | Status |
 | --- | --- | --- |
-| External Xbox Wireless Adapter | USB `045E:02FE` | Required; one adapter per PC |
+| External Xbox Wireless Adapter (slim) | USB `045E:02FE` | Physically tested; one adapter per PC |
+| External Xbox Wireless Adapter (original) | USB `045E:02E6` | Enabled; hardware validation pending |
+| Built-in Xbox Wireless radios | USB `045E:02F9`, `045E:091E` | Enabled; hardware validation pending |
 | Xbox Wireless Headset 2021, green rim | RF `045E:0B31`, USB `045E:0B17` | Playback and pairing tested |
 | Xbox Wireless Headset 2024 | `045E:0B32` | Playback and pairing tested |
 | Xbox Series controller | RF `045E:0B13`, USB `045E:0B12` | Connection and input tested |
 
 These are model IDs, not individual serial numbers. Supported devices are detected
 dynamically: there is no compiled address allowlist or developer-specific device
-mapping. Other Xbox-compatible products, internal radios and adapter variants are
-not covered. Eight software association slots do not imply support for eight
+mapping. The four adapter IDs follow the [upstream xone catalog](https://github.com/medusalix/xone/blob/master/transport/dongle.c). Other Xbox-compatible products and unknown adapter variants are not covered. Eight software association slots do not imply support for eight
 simultaneous audio streams.
 
 ## Quick start
 
 1. On Windows 11 x64, connect the adapter and stop any bridge running from a
    development checkout or a different installation.
-2. Download and run `xone-windows-wireless-0.1.0-alpha.5-Setup-x64.exe` as your
+2. Download and run `xone-windows-wireless-0.1.0-alpha.5.1-Setup-x64.exe` as your
    normal Windows user. Approve the separate administrator prompt for setup.
 3. Let Setup prepare WinUSB, verified adapter RAM firmware and the signed USBip
    dependency. Restart Windows or reconnect the adapter if requested.

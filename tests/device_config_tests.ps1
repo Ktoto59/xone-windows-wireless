@@ -4,6 +4,18 @@ $taskRoot=Split-Path -Parent $PSScriptRoot
 function Check($Condition,[string]$Message){if(-not $Condition){throw $Message}}
 function Get-PnpDevice {param([string]$InstanceId,[switch]$PresentOnly,[string]$ErrorAction) return [pscustomobject]@{InstanceId='USB\VID_045E&PID_02FE\EXAMPLE';Status='OK'}}
 Check ((Resolve-XoneAdapterInstance) -eq 'USB\VID_045E&PID_02FE\EXAMPLE') 'Automatic adapter detection failed'
+foreach($adapterPid in @('02FE','02E6','02F9','091E')){
+    $script:fixtureAdapter='USB\VID_045E&PID_'+$adapterPid+'\EXAMPLE'
+    function Get-PnpDevice {param([string]$InstanceId,[switch]$PresentOnly,[string]$ErrorAction) return [pscustomobject]@{InstanceId=$script:fixtureAdapter;Status='OK'}}
+    Check ((Resolve-XoneAdapterInstance) -eq $script:fixtureAdapter) 'Supported adapter not detected'
+    Check ((Resolve-XoneAdapterInstance $script:fixtureAdapter) -eq $script:fixtureAdapter) 'Explicit adapter rejected'
+}
+foreach($invalidId in @('USB\VID_045E&PID_0000\EXAMPLE','USB\VID_0000&PID_02FE\EXAMPLE','USB\VID_045E&PID_02FE\','USB\VID_045E&PID_02FE&MI_00\EXAMPLE','USB\VID_045E&PID_02FE\EXAMPLE\CHILD',"USB\VID_045E&PID_02FE\EXAMPLE`n")){
+    Check (-not (Test-XoneAdapterInstance $invalidId)) 'Invalid adapter accepted'
+}
+function Get-PnpDevice {param([string]$InstanceId,[switch]$PresentOnly,[string]$ErrorAction) return $null}
+$rejected=$false;try{[void](Resolve-XoneAdapterInstance)}catch{$rejected=$true}
+Check $rejected 'Missing adapter accepted'
 $taskDirectory=Join-Path $taskRoot ('work/config-test-'+[guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory($taskDirectory)
 $taskPath=Join-Path $taskDirectory 'devices.json'
