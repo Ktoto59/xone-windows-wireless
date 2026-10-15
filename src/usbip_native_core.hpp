@@ -3,6 +3,7 @@
 #include "usbip_native_codec.hpp"
 #include <chrono>
 #include <deque>
+#include "device_connector.hpp"
 namespace xone::usbip {
 // Owned by one USB/audio thread. Contains no sockets, files, sleeps or locks.
 class Core {
@@ -10,17 +11,23 @@ public:
     using Clock=std::chrono::steady_clock;
     struct Stats {
         uint8_t wcid=0;uint64_t generation=0,rx=0,tx=0,audio_rx=0,audio_tx=0,capture_slots=0,dropped=0;
-        size_t capture_high_water=0;bool layout=false;
+        size_t capture_high_water=0;bool layout=false;uint64_t render_expired=0,concealed=0,mode_suppressed=0;
+        uint64_t power_commands=0;std::string last_power;
     };
 private:
     enum class Kind {irq_in,irq_out,capture,render};
-    struct Pending {Request request;Kind kind;bool staged=false;uint32_t token=0;Clock::time_point deadline;};
+    struct Pending {Request request;Kind kind;bool staged=false;uint32_t token=0;Clock::time_point deadline,media_deadline;};
     const Profile &profile_;bool audio_;std::unique_ptr<Control> control_;
+    DeviceConnector connector_;
     Stats stats_;std::map<uint32_t,Pending> pending_;std::map<uint32_t,uint32_t> tokens_;
     std::deque<uint32_t> irq_wait_,capture_wait_,render_wait_;
     std::deque<Bytes> irq_,capture_;Bytes pcm_;size_t credits_=0;
     uint32_t next_token_=0;uint8_t capture_sequence_=1,render_sequence_=1;
     Clock::time_point capture_deadline_{};
+    Clock::time_point radio_last_{},render_deadline_{},pcm_started_{};
+    std::deque<Clock::time_point> capture_times_;
+    bool clock_active(Clock::time_point now)const;
+    void trim_capture(Clock::time_point now);
     std::vector<Bytes> replies_;std::vector<RawGipTransmit> outbound_;
     void finish(uint32_t seq,Completion result);
     void fail(uint32_t seq,int32_t status);

@@ -4,7 +4,6 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
-#include <roapi.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
 #include <functiondiscoverykeys_devpkey.h>
@@ -24,7 +23,6 @@
 #include "audio_ipc.hpp"
 #include "synthetic_audio.hpp"
 #include "crash_trace.hpp"
-#include "audio_scheduling.hpp"
 namespace {
 using Microsoft::WRL::ComPtr;
 using Callback=void(CALLBACK *)(void *,ULONG,const void *,ULONG,void *);
@@ -48,21 +46,14 @@ struct Feedback {
     uint64_t samples=0,clipped=0;int peak=0,max_step=0,max_inside=0,max_boundary=0;
     std::array<uint64_t,8> jump_bins{};
     std::array<int,2> previous{};bool have_previous=false;
-    bool detailed=false;
-    std::atomic_uint64_t invalid_context=0;
-    std::atomic_bool closing=false;
 };
-// One host owns one device. Callback storage survives asynchronous teardown.
-Feedback &host_feedback(){static auto *feedback=new Feedback;return *feedback;}
 void CALLBACK callback(void *,ULONG type,const void *buffer,ULONG size,void *context)noexcept{
-    auto &f=host_feedback();
-    if(context!=&f){++f.invalid_context;return;}
-    if(!buffer || f.closing)return;
-    ++f.count;f.bytes+=size;f.last_type=type;f.last_size=size;
+    if(!context || !buffer)return;
+    auto &f=*static_cast<Feedback *>(context);++f.count;f.bytes+=size;f.last_type=type;f.last_size=size;
     if(type==1 && size==1538)try{
         std::lock_guard lock(f.mutex);if(f.playback.size()>=8){f.playback.pop_front();++f.dropped;}
         const auto *b=static_cast<const uint8_t *>(buffer);
-        if(f.detailed)for(size_t at=2;at+3<size;at+=4){
+        for(size_t at=2;at+3<size;at+=4){
             for(unsigned channel=0;channel<2;++channel){
                 int16_t sample=0;std::memcpy(&sample,b+at+channel*2,2);const auto value=int(sample);
                 f.peak=std::max(f.peak,std::abs(value));if(std::abs(value)>=32760)++f.clipped;
@@ -114,12 +105,11 @@ void describe(IMMDeviceEnumerator &enumerator,const std::wstring &id,const Endpo
 }
 int main(int argc,char **argv){
     std::cout.setf(std::ios::unitbuf);SetUnhandledExceptionFilter(xone_crash_trace);
-    if(FAILED(RoInitialize(RO_INIT_MULTITHREADED)))return 1;
-    struct Runtime{~Runtime(){RoUninitialize();}} runtime;
+    if(FAILED(CoInitializeEx(nullptr,COINIT_MULTITHREADED)))return 1;
+    struct Runtime{~Runtime(){CoUninitialize();}} runtime;
     const auto dll=LoadLibraryExW(L"xboxgipsynthetic.dll",nullptr,LOAD_LIBRARY_SEARCH_SYSTEM32);
     if(!dll){std::cerr<<"XboxGipSynthetic unavailable\n";return 1;}
-    // Let process exit unload the system DLL after threads stop. Do not unload
-    // it explicitly while the API can still own asynchronous callbacks.
+    struct Library{HMODULE dll;~Library(){FreeLibrary(dll);}} library{dll};
     try{
         ComPtr<IMMDeviceEnumerator> enumerator;
         checked(CoCreateInstance(__uuidof(MMDeviceEnumerator),nullptr,CLSCTX_ALL,IID_PPV_ARGS(&enumerator)),"MMDeviceEnumerator");
@@ -132,21 +122,13 @@ int main(int argc,char **argv){
         const auto remove_audio=resolve<HRESULT(WINAPI *)(void *)>(dll,"SyntheticController_RemoveAudioHeadset");
         const auto send_audio=resolve<HRESULT(WINAPI *)(void *,const void *,ULONG)>(dll,"SyntheticController_SendAudio");
         const auto device_id=resolve<HRESULT(WINAPI *)(void *,ULONGLONG *)>(dll,"SyntheticController_GetDeviceId");
-        auto &feedback=host_feedback();void *handle=nullptr;checked(create(0,&handle),"CreateAudioParent");
+        Feedback feedback;void *handle=nullptr;checked(create(0,&handle),"CreateAudioParent");
         if(!handle)throw std::runtime_error("Null synthetic controller");
         struct Controller{
             void *handle;decltype(disconnect) disconnect;decltype(remove) remove;decltype(remove_audio) remove_audio;bool audio=false;
-            ~Controller(){host_feedback().closing=true;if(audio)std::cout<<"RemoveAudio HRESULT=0x"<<std::hex<<static_cast<unsigned>(remove_audio(handle))<<std::dec<<'\n';std::cout<<"Disconnect HRESULT=0x"<<std::hex<<static_cast<unsigned>(disconnect(handle))<<std::dec<<'\n';std::cout<<"RemoveParent HRESULT=0x"<<std::hex<<static_cast<unsigned>(remove(handle))<<std::dec<<'\n';}
+            ~Controller(){if(audio)std::cout<<"RemoveAudio HRESULT=0x"<<std::hex<<static_cast<unsigned>(remove_audio(handle))<<std::dec<<'\n';std::cout<<"Disconnect HRESULT=0x"<<std::hex<<static_cast<unsigned>(disconnect(handle))<<std::dec<<'\n';std::cout<<"RemoveParent HRESULT=0x"<<std::hex<<static_cast<unsigned>(remove(handle))<<std::dec<<'\n';}
         } controller{handle,disconnect,remove,remove_audio};
         checked(add_audio(handle,callback,&feedback),"AddAudioHeadset");controller.audio=true;
-        if(argc==2 && std::string_view(argv[1])=="--lifecycle-check"){
-            checked(connect(handle),"DiagnosticConnect");
-            // Silent virtual device only: no adapter access or microphone.
-            std::this_thread::sleep_for(std::chrono::seconds(3));
-            feedback.closing=true;
-            checked(remove_audio(handle),"DiagnosticRemoveAudio");controller.audio=false;
-            std::cout<<"PASS audio API lifecycle callbacks="<<feedback.count<<" invalid_context="<<feedback.invalid_context<<'\n';return 0;
-        }
         checked(connect(handle),"ConnectAudioParent");
         ULONGLONG id=0;checked(device_id(handle,&id),"SyntheticDeviceId");std::cout<<"DEVICE ID="<<id<<'\n';
         if(argc==3 && std::string_view(argv[1])=="--host"){
@@ -156,9 +138,7 @@ int main(int argc,char **argv){
             DWORD mode=PIPE_READMODE_MESSAGE|PIPE_NOWAIT;if(!SetNamedPipeHandleState(pipe,&mode,nullptr,nullptr))throw std::runtime_error("Audio pipe mode failed");
             auto reply=[&](const xone::AudioMessage &m){DWORD done=0;const auto ok=WriteFile(pipe,m.data(),static_cast<DWORD>(m.size()),&done,nullptr);if(ok)return done==m.size();if(GetLastError()==ERROR_NO_DATA)return false;throw std::runtime_error("Audio host write failed");};
             if(!reply(xone::audio_message(3)))throw std::runtime_error("Audio host ready failed");
-            xone::AudioScheduling scheduling;
-            xone::AudioTick tick;
-            Endpoints discovered;auto inspect_at=std::chrono::steady_clock::now();bool running=true;uint64_t capture_packets=0;
+            Endpoints discovered;auto inspect_at=std::chrono::steady_clock::now();auto report_at=inspect_at+std::chrono::seconds(1);bool running=true;uint64_t capture_packets=0;
             const auto microphone_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(15);
             while(running){
                 for(unsigned n=0;n<32;++n){
@@ -176,7 +156,7 @@ int main(int argc,char **argv){
                 }
                 std::deque<std::vector<uint8_t>> playback;{std::lock_guard lock(feedback.mutex);playback.swap(feedback.playback);}
                 if(running)for(const auto &samples:playback)if(!reply(xone::audio_message(2,samples)))++feedback.dropped;
-                if(running && discovered.size()<2 && std::chrono::steady_clock::now()>=inspect_at){
+                if(running && std::chrono::steady_clock::now()>=inspect_at){
                     const auto current=endpoints(*enumerator.Get());
                     for(const auto &[key,endpoint]:current){
                         const auto previous=before.find(key);
@@ -186,7 +166,15 @@ int main(int argc,char **argv){
                     }
                     inspect_at=std::chrono::steady_clock::now()+std::chrono::seconds(1);
                 }
-                tick.wait();
+                if(running && std::chrono::steady_clock::now()>=report_at){
+                    std::lock_guard lock(feedback.mutex);
+                    std::cout<<"AUDIO PCM callbacks="<<feedback.count<<" dropped="<<feedback.dropped<<" samples="<<feedback.samples<<" peak="<<feedback.peak<<" clipped="<<feedback.clipped<<" max_step="<<feedback.max_step<<" inside="<<feedback.max_inside<<" boundary="<<feedback.max_boundary<<" jump_bins=";
+                    for(const auto count:feedback.jump_bins)std::cout<<count<<',';
+                    std::cout<<'\n';
+                    feedback.samples=0;feedback.peak=0;feedback.clipped=0;feedback.max_step=0;feedback.max_inside=0;feedback.max_boundary=0;feedback.jump_bins.fill(0);
+                    report_at=std::chrono::steady_clock::now()+std::chrono::seconds(1);
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
             std::cout<<"AUDIO HOST microphone_packets="<<capture_packets<<" playback_callbacks="<<feedback.count<<" dropped="<<feedback.dropped<<'\n';return 0;
         }

@@ -1,11 +1,24 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Native USB GIP and optional observed PCM layout over local xone radio IPC."""
 import asyncio
-from array import array
 from collections import deque
 import struct
 import time
 from usbip_urb import Completion, IsoPacket, failed_completion
+
+# Four observed 8-ms radio blocks: a recovery budget, not an added delay.
+AUDIO_MAX_AGE = .032
+CAPTURE_MAX_FRAMES = 32
+# Native XboxGip keeps several future 8-ms OUT URBs queued. Its observed
+# ordinary queue wait is ~35 ms; allow that pipeline, expire actual stalls.
+RENDER_MAX_AGE = .064
+# Experimental independent playback clock: tolerate a short microphone RF
+# outage, then wait for fresh radio activity. This is not a PCM queue budget.
+CLOCK_HOLDOVER = .128
+# Known USB initialization forms. The second was observed from XboxGip on
+# headset 2021; preserve its unknown fields rather than generalizing them.
+USB_WIRED_MODE_PAYLOADS = (bytes((6,))+bytes(14),
+                           bytes((6,))+bytes.fromhex('0000000000005553000000000000'))
 
 
 def frame(kind, wcid, payload=b'', token=0):
@@ -132,11 +145,22 @@ def usb_interrupt_packets(data):
 
 class RadioBackend:
     def __init__(self, mac, on_event=None, audio_probe=False, audio_bridge=False,
-                 interrupt_endpoints=(0x01,0x81), audio_endpoints=(0x02,0x82)):
+                 interrupt_endpoints=(0x01,0x81), audio_endpoints=(0x02,0x82),
+                 clock=time.perf_counter, render_max_age=RENDER_MAX_AGE,
+                 independent_clock=False, on_announce=None, preserve_wireless_mode=False):
         self.mac = bytes.fromhex(mac)
         if len(self.mac) != 6:
             raise ValueError('Expected a six-byte radio MAC')
         self.on_event = on_event
+        self.on_announce = on_announce
+        self.power_observations = 0
+        self.preserve_wireless_mode = preserve_wireless_mode
+        self.usb_mode_switch_suppressed = 0
+        self.clock = clock
+        self.render_max_age = render_max_age
+        self.independent_clock = independent_clock
+        self.render_deadline = 0
+        self.capture_concealed = 0
         self.interrupt_endpoints = interrupt_endpoints
         self.audio_endpoints = audio_endpoints
         self.writer = None
@@ -148,6 +172,16 @@ class RadioBackend:
         self.audio_bridge = audio_bridge
         self.audio_layout = False
         self.render_pcm = bytearray()
+        self.render_started = None
+        self.audio_epoch = 0
+        self.capture_dropped = self.render_dropped = self.render_discarded_bytes = 0
+        self.capture_high_water = 0
+        self.render_max_wait = self.radio_ack_max_wait = 0
+        self.render_requests_pending = self.render_requests_high_water = 0
+        self.render_request_count = self.render_fragment_count = 0
+        self.radio_audio_last = None
+        self.radio_audio_max_gap = 0
+        self.render_credit_overflow = 0
         self.audio_sequence = 1
         self.capture_sequence = 1
         self.audio_tx = 0
@@ -156,12 +190,9 @@ class RadioBackend:
         self.capture_delivery = asyncio.Lock()
         self.render_delivery = asyncio.Lock()
         self.render_credits = 0
+        self.render_credit_time = None
         self.capture_deadline = 0
         self.usb_audio_in = 0
-        self.capture_dropped = 0
-        self.capture_high_water = 0
-        self.render_nonzero = 0
-        self.render_peak = 0
         self.pending = {}
         self.token = 0
         self.rx_packets = self.tx_packets = 0
@@ -179,9 +210,7 @@ class RadioBackend:
         self.wcid = 0
         self.generation += 1
         self.queue.clear()
-        self.audio_queue.clear()
-        self.render_pcm.clear()
-        self.audio_layout = False
+        self.clear_audio()
         self.audio_sequence = 1
         self.capture_sequence = 1
         self.capture_deadline = 0
@@ -198,11 +227,39 @@ class RadioBackend:
             self.clear_audio()
 
     def clear_audio(self):
+        self.audio_epoch += 1
         self.render_pcm.clear()
+        self.render_started = None
         self.audio_queue.clear()
         self.audio_layout = False
         self.capture_deadline = 0
         self.render_credits = 0
+        self.render_credit_time = None
+        self.radio_audio_last = None
+        self.render_deadline = 0
+
+    def clock_active(self):
+        return (self.independent_clock and self.audio_layout and self.radio_audio_last is not None
+                and self.clock()-self.radio_audio_last <= CLOCK_HOLDOVER)
+
+    def trim_capture(self):
+        now = self.clock()
+        limit = CAPTURE_MAX_FRAMES if self.audio_bridge else 4
+        while self.audio_queue and (len(self.audio_queue) > limit or
+                                   now-self.audio_queue[0][0] > AUDIO_MAX_AGE):
+            self.audio_queue.popleft()
+            self.capture_dropped += 1
+        self.capture_high_water = max(self.capture_high_water, len(self.audio_queue))
+
+    def discard_render(self, request):
+        self.render_dropped += 1
+        self.render_discarded_bytes += len(self.render_pcm)
+        self.render_pcm.clear()
+        self.render_started = None
+        # An expired ISO packet was not transmitted. usbip-win2 maps EXDEV
+        # to ISO_TD_ERROR and consumes per-packet error_count normally.
+        iso = tuple(IsoPacket(p.offset, p.length, status=-18) for p in request.iso)
+        return Completion(iso=iso, frame=request.frame)
 
     def usb_capture_block(self, packet):
         pcm = packet[gip_header_size(packet)+2:]
@@ -216,7 +273,7 @@ class RadioBackend:
             self.capture_sequence = self.capture_sequence % 255 + 1
         return frames
 
-    async def connection(self, reader, writer):
+    async def connection(self, reader, writer, handshake=None):
         if self.writer is not None:
             writer.close()
             await writer.wait_closed()
@@ -226,20 +283,25 @@ class RadioBackend:
         self.writer = writer
         owns_connection = True
         try:
-            kind, wcid, token, payload = await read_frame(reader)
+            kind, wcid, token, payload = handshake if handshake is not None else await read_frame(reader)
             if (kind, wcid, token, payload) != (0, 0, 0, self.mac):
                 raise ValueError('Radio IPC MAC handshake mismatch')
             self.event(operation='radio_ready')
             while True:
-                # Radio can remain associated and silent; lifetime is bounded
-                # by the outer server/bridge, not a five-second idle timeout.
-                kind, wcid, token, payload = await read_frame(reader, 3600)
+                # An idle headset must not end an unlimited bridge after an
+                # hour. EOF and outer cancellation still close this channel.
+                kind, wcid, token, payload = await read_frame(reader, None)
                 if kind == 1 and 1 <= wcid <= 16 and token == 0 and payload == self.mac:
                     await self.reset()
                     self.wcid = wcid
                     self.event(operation='radio_associated', wcid=wcid)
                 elif kind == 2 and wcid == self.wcid and wcid != 0 and token == 0:
                     radio_packets = gip_packets(payload)
+                    if self.on_announce is not None:
+                        for p in radio_packets:
+                            body = p[gip_header_size(p):]
+                            if p[0] == 2 and p[1] & 0x3f == 32 and len(body) >= 28:
+                                self.on_announce(*struct.unpack_from('<HH',body,8))
                     packets = usb_interrupt_packets(payload)
                     if len(packets) != len(radio_packets):
                         self.event(operation='radio_gip_split', commands=[p[0] for p in radio_packets],
@@ -275,22 +337,10 @@ class RadioBackend:
                                             p[gip_header_size(p):gip_header_size(p)+2] == b'\0\x06' for p in packets)
                     if self.audio_probe:
                         # Bounded volatile queue, no PCM is written to journals.
-                        if self.audio_bridge and len(packets) > 8:
-                            self.capture_dropped += (len(packets)-8)*8
-                            packets = packets[-8:]
-                        queued_frames = len(packets)*(8 if self.audio_bridge else 1)
-                        queue_limit = 64 if self.audio_bridge else 256
-                        if self.audio_bridge and len(self.audio_queue)+queued_frames > queue_limit:
-                            # PCM is a real-time stream, not a reliable command
-                            # queue. Keep recent audio after a consumer stall;
-                            # overflow must not tear down GIP or other peers.
-                            drop = min(len(self.audio_queue),
-                                       ((len(self.audio_queue)+queued_frames-queue_limit+7)//8)*8)
-                            for _ in range(drop):
-                                self.audio_queue.popleft()
-                            self.capture_dropped += drop
-                        elif len(self.audio_queue)+queued_frames > queue_limit:
-                            raise ValueError('Radio audio queue limit')
+                        arrived = self.clock()
+                        if self.radio_audio_last is not None:
+                            self.radio_audio_max_gap = max(self.radio_audio_max_gap, arrived-self.radio_audio_last)
+                        self.radio_audio_last = arrived
                         if self.audio_bridge:
                             if not self.audio_layout:
                                 raise ValueError('Unsupported radio PCM layout')
@@ -298,14 +348,20 @@ class RadioBackend:
                             # native USB driver consumes only the first packet
                             # when multiple GIP packets share one ISO slot.
                             for p in packets:
-                                self.audio_queue.extend(self.usb_capture_block(p))
-                            self.capture_high_water = max(self.capture_high_water,len(self.audio_queue))
+                                self.audio_queue.extend((arrived, p) for p in self.usb_capture_block(p))
                             # length_out is the device's request for its next
                             # 8-ms render block. Never run ahead of its clock;
                             # retain at most two requests to bound burst latency.
-                            self.render_credits = min(2,self.render_credits+len(packets))
+                            if not self.independent_clock:
+                                credits = self.render_credits+len(packets)
+                                self.render_credit_overflow += max(0,credits-2)
+                                self.render_credits = min(2,credits)
+                            self.render_credit_time = arrived
                         else:
-                            self.audio_queue.extend(packets)
+                            self.audio_queue.extend((arrived, p) for p in packets)
+                        # PCM overflow/expiry is local media loss, never a
+                        # reason to close the association or discard commands.
+                        self.trim_capture()
                         async with self.changed:
                             self.changed.notify_all()
                     if self.audio_rx <= 8 or self.audio_rx % 500 == 0:
@@ -330,9 +386,9 @@ class RadioBackend:
                 self.event(operation='radio_stopped')
             writer.close()
             try:
-                await writer.wait_closed()
-            except ConnectionError:
-                pass
+                await asyncio.wait_for(writer.wait_closed(),1)
+            except (ConnectionError,TimeoutError):
+                writer.transport.abort()
 
     async def submit(self, request, endpoint):
         if self.audio_probe and endpoint.address in self.audio_endpoints and request.iso:
@@ -357,6 +413,19 @@ class RadioBackend:
                 return failed_completion(request, -95)
         except ValueError:
             return failed_completion(request, -71)
+        forwarded = []
+        for packet in packets:
+            # Experimental RF/USB adaptation. This non-ACK parent power command
+            # belongs to USB initialization; never consume auth, chunks, child
+            # commands or requests requiring a GIP ACK. Default remains pass-through.
+            if (self.preserve_wireless_mode and packet[:2]==bytes((5,32)) and
+                    packet[gip_header_size(packet):] in USB_WIRED_MODE_PAYLOADS):
+                self.usb_mode_switch_suppressed += 1
+                self.event(operation='usb_mode_switch_suppressed',mode=6,payload_length=15)
+            else:
+                forwarded.append(packet)
+        if not forwarded:
+            return Completion(actual=request.length)
         if len(self.pending) >= 64:
             return failed_completion(request, -12)
         self.token = self.token % 0xffffffff + 1
@@ -366,14 +435,23 @@ class RadioBackend:
         future = asyncio.get_running_loop().create_future()
         self.pending[token] = future
         try:
-            self.writer.write(frame(16, self.wcid, request.data, token))
+            self.writer.write(frame(16, self.wcid, b''.join(forwarded), token))
             await asyncio.wait_for(self.writer.drain(), 5)
             status = await asyncio.wait_for(future, 5)
             if self.generation != generation:
                 status = -19
             if status == 0:
-                self.tx_packets += len(packets)
-            self.event(operation='radio_gip_out', commands=[p[0] for p in packets], lengths=[len(p) for p in packets], status=status)
+                self.tx_packets += len(forwarded)
+            self.event(operation='radio_gip_out', commands=[p[0] for p in forwarded], lengths=[len(p) for p in forwarded], status=status)
+            for packet in forwarded:
+                # Observe only the mode byte, never authentication material/PCM.
+                if packet[0]==5 and packet[1]&0x3f==0x20 and not packet[1]&0x80 and self.power_observations<16:
+                    body = packet[gip_header_size(packet):]
+                    self.power_observations += 1
+                    fields=dict(operation='radio_power_out',mode=body[0] if body else None,
+                                payload_length=len(body),tail_zero=not any(body[1:]),status=status)
+                    if body and body[0]==6:fields['parameters']=body[1:].hex()
+                    self.event(**fields)
             return Completion(actual=request.length) if status == 0 else failed_completion(request, status)
         except (ConnectionError, TimeoutError, AttributeError):
             return failed_completion(request, -19)
@@ -381,10 +459,11 @@ class RadioBackend:
             self.pending.pop(token, None)
 
     async def probe_audio(self, request):
-        """Capture-path experiment; render OUT deliberately remains unsupported."""
+        """Experimental ISO capture and optional observed PCM render bridge."""
         if not self.ready:
             return failed_completion(request, -19)
         generation = self.generation
+        epoch = self.audio_epoch
         if not request.direction:
             if self.audio_bridge:
                 return await self.render_audio(request)
@@ -405,43 +484,85 @@ class RadioBackend:
             return failed_completion(request, -95)
         async with self.capture_delivery:
             count = len(request.iso) if self.audio_bridge else 1
-            if self.audio_bridge and count > 64:
-                return failed_completion(request,-95)
-            async with self.changed:
-                await self.changed.wait_for(lambda: len(self.audio_queue) >= count or not self.ready or self.generation != generation)
-                if not self.ready or self.generation != generation:
-                    return failed_completion(request, -19)
-                if any(len(self.audio_queue[i]) > request.iso[i].length for i in range(count)):
-                    return failed_completion(request, -90)
-            if self.audio_bridge and count < 8:
-                delay = self.capture_deadline-time.perf_counter()
-                if delay > 0:
-                    # Python's Windows sleep uses a high-resolution waitable
-                    # timer; a worker keeps command IPC responsive meanwhile.
-                    await asyncio.to_thread(time.sleep, delay)
-                if not self.ready or self.generation != generation or len(self.audio_queue) < count:
-                    return failed_completion(request, -19)
-                duration = .001*count
-                self.capture_deadline = max(self.capture_deadline+duration,time.perf_counter()-duration)
-            elif self.audio_bridge:
-                # Eight USB slots are exactly one radio block. The condition
-                # above already waits for the physical 8-ms device clock.
-                # A second host timer introduces drift and delays output requests.
-                self.capture_deadline = 0
-            packets = [self.audio_queue.popleft() for _ in range(count)]
+            if count > CAPTURE_MAX_FRAMES:
+                return failed_completion(request, -22)
+            while True:
+                async with self.changed:
+                    self.trim_capture()
+                    await self.changed.wait_for(lambda: len(self.audio_queue) >= count or self.clock_active() or not self.ready or
+                                                self.generation != generation or self.audio_epoch != epoch)
+                    if not self.ready or self.generation != generation or self.audio_epoch != epoch:
+                        return failed_completion(request, -19)
+                    # The wait can resume after a scheduler stall.
+                    self.trim_capture()
+                    if len(self.audio_queue) < count and not self.clock_active():
+                        continue
+                    if any(len(self.audio_queue[i][1]) > request.iso[i].length for i in range(min(count,len(self.audio_queue)))):
+                        return failed_completion(request, -90)
+                    if self.clock_active() and any(p.length < 54 for p in request.iso[:count]):
+                        return failed_completion(request, -90)
+                if self.audio_bridge:
+                    if self.independent_clock and not self.capture_deadline:
+                        # One RF block of jitter reserve, then a continuous USB
+                        # sample clock. Missing microphone PCM becomes silence.
+                        self.capture_deadline = self.clock()+.008
+                    delay = self.capture_deadline-self.clock()
+                    if delay > 0:
+                        # Windows high-resolution sleep, outside the RF loop.
+                        await asyncio.to_thread(time.sleep, delay)
+                    if not self.ready or self.generation != generation or self.audio_epoch != epoch:
+                        return failed_completion(request, -19)
+                    self.trim_capture()
+                    if len(self.audio_queue) < count and not self.clock_active():
+                        continue
+                    duration = .001*count
+                    self.capture_deadline = max(self.capture_deadline+duration,self.clock()-duration)
+                packets = [self.audio_queue.popleft()[1] for _ in range(min(count,len(self.audio_queue)))]
+                while len(packets) < count:
+                    packets.append(bytes((0x60,32,self.capture_sequence,50,192,0))+bytes(48))
+                    self.capture_sequence = self.capture_sequence % 255 + 1
+                    self.capture_concealed += 1
+                break
             self.usb_audio_in += count
         result = tuple(IsoPacket(p.offset, p.length, actual=len(packets[i]) if i < count else 0) for i, p in enumerate(request.iso))
         data = b''.join(packets)
         return Completion(data=data, actual=len(data), iso=result, frame=request.frame)
 
     async def render_audio(self, request):
-        generation = self.generation
-        async with self.render_delivery:
-            if not self.ready or generation != self.generation:
-                return failed_completion(request,-19)
-            return await self._render_audio(request)
+        self.render_requests_pending += 1
+        self.render_requests_high_water = max(self.render_requests_high_water,self.render_requests_pending)
+        self.render_request_count += 1
+        try:
+            return await self.queued_render_audio(request)
+        finally:
+            self.render_requests_pending -= 1
 
-    async def _render_audio(self, request):
+    async def queued_render_audio(self, request):
+        generation = self.generation
+        epoch = self.audio_epoch
+        arrived = self.clock()
+        async with self.render_delivery:
+            if not self.ready or generation != self.generation or epoch != self.audio_epoch:
+                return failed_completion(request,-19)
+            waited = self.clock()-arrived
+            self.render_max_wait = max(self.render_max_wait, waited)
+            if waited > self.render_max_age:
+                return self.discard_render(request)
+            if self.render_started is not None and self.clock()-self.render_started > self.render_max_age:
+                self.render_discarded_bytes += len(self.render_pcm)
+                self.render_pcm.clear()
+                self.render_started = None
+            try:
+                return await self._render_audio(request, arrived, epoch)
+            except asyncio.CancelledError:
+                # UNLINK must not leave unsent PCM for a later URB to replay.
+                if self.audio_epoch == epoch:
+                    self.render_discarded_bytes += len(self.render_pcm)
+                    self.render_pcm.clear()
+                    self.render_started = None
+                raise
+
+    async def _render_audio(self, request, arrived, epoch):
         if not self.audio_layout:
             return failed_completion(request, -95)
         fragments = []
@@ -455,21 +576,48 @@ class RadioBackend:
                     fragments.append(pcm)
         except ValueError:
             return failed_completion(request, -71)
-        if len(self.render_pcm)+192*len(fragments) > 1536*8 or len(self.pending) >= 64:
+        self.render_fragment_count += len(fragments)
+        if len(self.render_pcm)+192*len(fragments) > 192*CAPTURE_MAX_FRAMES or len(self.pending) >= 64:
             return failed_completion(request, -12)
         generation = self.generation
+        if not self.render_pcm:
+            self.render_started = arrived
+        deadline = min(arrived, self.render_started)+self.render_max_age
         self.render_pcm.extend(b''.join(fragments))
         while len(self.render_pcm) >= 1536:
             try:
                 async with self.changed:
-                    await asyncio.wait_for(self.changed.wait_for(lambda: self.render_credits or not self.ready or self.generation != generation),5)
-                    if not self.ready or self.generation != generation:
+                    if self.render_credit_time is not None and self.clock()-self.render_credit_time > AUDIO_MAX_AGE:
+                        self.render_credits = 0
+                    await asyncio.wait_for(self.changed.wait_for(lambda: (self.clock_active() if self.independent_clock else self.render_credits) or not self.ready or
+                                               self.generation != generation or self.audio_epoch != epoch),
+                                           max(.000001, deadline-self.clock()))
+                    if not self.ready or self.generation != generation or self.audio_epoch != epoch:
                         return failed_completion(request,-19)
-                    self.render_credits -= 1
+                    if self.clock() > deadline:
+                        return self.discard_render(request)
+                    if not self.independent_clock:
+                        self.render_credits -= 1
             except TimeoutError:
-                if self.generation == generation:
-                    await self.reset()
-                return failed_completion(request,-19)
+                if not self.ready or self.generation != generation or self.audio_epoch != epoch:
+                    return failed_completion(request,-19)
+                # asyncio's timer and the injected media clock are separate;
+                # always decide expiry from the media deadline, not a wakeup.
+                if self.clock() < deadline:
+                    continue
+                return self.discard_render(request)
+            if self.independent_clock:
+                delay = self.render_deadline-self.clock()
+                if delay > 0:
+                    await asyncio.to_thread(time.sleep,delay)
+                if not self.ready or self.generation != generation or self.audio_epoch != epoch:
+                    return failed_completion(request,-19)
+                if self.clock() > deadline or not self.clock_active():
+                    return self.discard_render(request)
+                # Absolute pacing with at most one block of catch-up, never a
+                # burst replay of all the ticks missed during a scheduler stall.
+                self.render_deadline = (max(self.render_deadline+.008,self.clock())
+                                        if self.render_deadline else self.clock()+.008)
             pcm = bytes(self.render_pcm[:1536])
             del self.render_pcm[:1536]
             # Even GIP header: varint 1536 with a terminal zero padding group.
@@ -482,28 +630,28 @@ class RadioBackend:
             future = asyncio.get_running_loop().create_future()
             self.pending[token] = future
             try:
+                sent = self.clock()
                 self.writer.write(frame(18, self.wcid, packet, token))
                 await asyncio.wait_for(self.writer.drain(), 5)
                 status = await asyncio.wait_for(future, 5)
-                if self.generation != generation:
+                self.radio_ack_max_wait = max(self.radio_ack_max_wait, self.clock()-sent)
+                if self.generation != generation or self.audio_epoch != epoch:
                     status = -19
                 if status != 0:
-                    if self.generation == generation:
+                    if self.generation == generation and self.audio_epoch == epoch:
                         await self.reset()
                     return failed_completion(request, status)
                 self.audio_tx += 1
-                samples = array('h',pcm)
-                peak = max(abs(min(samples)),abs(max(samples)))
-                self.render_peak = max(self.render_peak,peak)
-                self.render_nonzero += peak != 0
                 if self.audio_tx <= 8 or self.audio_tx % 500 == 0:
                     self.event(operation='radio_audio_out', packets=self.audio_tx, pcm_bytes=1536)
             except (ConnectionError, TimeoutError, AttributeError):
-                if self.generation == generation:
+                if self.generation == generation and self.audio_epoch == epoch:
                     await self.reset()
                 return failed_completion(request, -19)
             finally:
                 self.pending.pop(token, None)
+        if not self.render_pcm:
+            self.render_started = None
         # Short USB fragments are accepted into the bounded 8-ms accumulator.
         # A completed radio block is acknowledged only after actual USB TX.
         iso = tuple(IsoPacket(p.offset,p.length,p.length) for p in request.iso)
@@ -521,6 +669,19 @@ class RadioBackend:
                 'RenderBufferedBytes': len(self.render_pcm), 'RenderCredits': self.render_credits,
                 'IsoAudioImplemented': self.audio_bridge,
                 'UsbAudioInCompletions': self.usb_audio_in, 'QueuedAudioFrames': len(self.audio_queue),
-                'CaptureDroppedFrames': self.capture_dropped, 'CaptureQueueHighWater': self.capture_high_water,
-                'RenderNonzeroPackets': self.render_nonzero, 'RenderPeak': self.render_peak,
+                'AudioMaxAgeMs': int(AUDIO_MAX_AGE*1000), 'CaptureQueueHighWater': self.capture_high_water,
+                'RenderMaxAgeMs': int(self.render_max_age*1000),
+                'RenderPendingRequests': self.render_requests_pending,
+                'RenderRequestHighWater': self.render_requests_high_water,
+                'RenderRequests': self.render_request_count, 'RenderFragments': self.render_fragment_count,
+                'IndependentAudioClock': self.independent_clock,
+                'PreserveWirelessMode': self.preserve_wireless_mode,
+                'UsbModeSwitchSuppressed': self.usb_mode_switch_suppressed,
+                'CaptureConcealedFrames': self.capture_concealed,
+                'RadioAudioMaxGapMs': round(self.radio_audio_max_gap*1000,3),
+                'RenderCreditOverflow': self.render_credit_overflow,
+                'CaptureDroppedFrames': self.capture_dropped, 'RenderExpiredRequests': self.render_dropped,
+                'RenderDiscardedBufferedBytes': self.render_discarded_bytes,
+                'RenderMaxQueueWaitMs': round(self.render_max_wait*1000, 3),
+                'RadioAudioMaxAckMs': round(self.radio_ack_max_wait*1000, 3),
                 'RadioBattery': self.battery}

@@ -33,8 +33,10 @@ std::vector<Bytes> interrupt_packets(std::span<const uint8_t> data){
         }
     }return result;
 }
-Core::Core(const Profile &p,bool audio):profile_(p),audio_(audio){}
-void Core::clear_audio(){pcm_.clear();capture_.clear();stats_.layout=false;credits_=0;capture_deadline_={};}
+Core::Core(const Profile &p,bool audio):profile_(p),audio_(audio),connector_(device_connector(p.pid)){}
+bool Core::clock_active(Clock::time_point now)const{return connector_.independent_clock && stats_.layout && radio_last_!=Clock::time_point{} && now-radio_last_<=std::chrono::milliseconds(128);}
+void Core::trim_capture(Clock::time_point now){while(!capture_.empty() && (capture_.size()>32 || now-capture_times_.front()>std::chrono::milliseconds(32))){capture_.pop_front();capture_times_.pop_front();++stats_.dropped;}}
+void Core::clear_audio(){pcm_.clear();capture_.clear();capture_times_.clear();stats_.layout=false;credits_=0;capture_deadline_={};render_deadline_={};radio_last_={};pcm_started_={};}
 void Core::reset(){
     while(!pending_.empty())fail(pending_.begin()->first,-19);
     tokens_.clear();irq_.clear();irq_wait_.clear();capture_wait_.clear();render_wait_.clear();outbound_.clear();clear_audio();
@@ -77,13 +79,26 @@ void Core::submit(Request r,Clock::time_point now){
     if(!endpoint){reject(-32);return;}if(bool(r.iso.size())!=(endpoint->type==1)){reject(-22);return;}
     if(pending_.size()>=64){reject(-12);return;}if(!ready()){reject(-19);return;}
     const auto seq=r.seq;const bool iso=endpoint->type==1;
-    if(iso && (!audio_ || r.iso.size()>64)){reject(-95);return;}
+    if(iso && (!audio_ || r.iso.size()>32)){reject(-95);return;}
     const auto kind=iso?(r.direction?Kind::capture:Kind::render):(r.direction?Kind::irq_in:Kind::irq_out);
     if(!iso && !r.direction){
-        try{auto parsed=packets(r.data);if(r.length>64 || std::any_of(parsed.begin(),parsed.end(),[](const auto &p){return p.decoded.command==0x60;})){reject(-95);return;}}
+        try{auto parsed=packets(r.data);if(r.length>64 || std::any_of(parsed.begin(),parsed.end(),[](const auto &p){return p.decoded.command==0x60;})){reject(-95);return;}
+            for(const auto &p:parsed)if(p.decoded.command==5){++stats_.power_commands;stats_.last_power=hex(p.wire);}}
         catch(const Error &){reject(-71);return;}
     }
-    Pending p{std::move(r),kind,false,0,now+std::chrono::seconds(5)};pending_.emplace(seq,std::move(p));
+    if(kind==Kind::irq_out && connector_.preserve_wireless){
+        const Bytes zero(14),observed{0,0,0,0,0,0,0x55,0x53,0,0,0,0,0,0};Bytes forwarded;
+        for(const auto &packet:packets(r.data)){
+            const auto &g=packet.decoded;const bool consume=g.command==5 && g.options==32 && g.payload.size()==15 && g.payload[0]==6 &&
+                (std::equal(g.payload.begin()+1,g.payload.end(),zero.begin()) || std::equal(g.payload.begin()+1,g.payload.end(),observed.begin()));
+            if(consume)++stats_.mode_suppressed;else forwarded.insert(forwarded.end(),packet.wire.begin(),packet.wire.end());
+        }
+        if(forwarded.empty()){Completion c;c.actual=static_cast<uint32_t>(r.length);replies_.push_back(completion(r,c));return;}
+        // Retain the USB transfer's original length; only the consumed command
+        // is removed from the RF payload below.
+        Pending p{std::move(r),kind,false,0,now+std::chrono::seconds(5),now+connector_.render_age};pending_.emplace(seq,std::move(p));transmit(seq,std::move(forwarded),false,now);return;
+    }
+    Pending p{std::move(r),kind,false,0,now+std::chrono::seconds(5),now+connector_.render_age};pending_.emplace(seq,std::move(p));
     switch(kind){
     case Kind::irq_in:irq_wait_.push_back(seq);break;
     case Kind::capture:capture_wait_.push_back(seq);break;
@@ -92,6 +107,7 @@ void Core::submit(Request r,Clock::time_point now){
     }pump(now);
 }
 void Core::pump(Clock::time_point now){
+    trim_capture(now);
     auto head=[&](std::deque<uint32_t> &q)->std::optional<uint32_t>{while(!q.empty() && !pending_.contains(q.front()))q.pop_front();return q.empty()?std::optional<uint32_t>{}:q.front();};
     while(auto seq=head(irq_wait_)){
         if(irq_.empty())break;const auto &r=pending_.at(*seq).request;
@@ -99,26 +115,31 @@ void Core::pump(Clock::time_point now){
         Completion c;c.data=std::move(irq_.front());irq_.pop_front();c.actual=static_cast<uint32_t>(c.data.size());finish(*seq,std::move(c));
     }
     while(auto seq=head(capture_wait_)){
-        const auto &r=pending_.at(*seq).request;const auto count=r.iso.size();if(capture_.size()<count)break;
-        if(std::any_of(r.iso.begin(),r.iso.end(),[&,i=size_t(0)](const Iso &slot)mutable{return capture_[i++].size()>slot.length;})){fail(*seq,-90);continue;}
-        if(count<8 && now<capture_deadline_)break;
-        if(count<8){const auto duration=std::chrono::milliseconds(count);capture_deadline_=std::max(capture_deadline_+duration,now-duration);}else capture_deadline_={};
+        const auto &r=pending_.at(*seq).request;const auto count=r.iso.size();if(capture_.size()<count && !clock_active(now))break;
+        if(std::any_of(r.iso.begin(),r.iso.end(),[](const Iso &slot){return slot.length<54;})){fail(*seq,-90);continue;}
+        if(connector_.independent_clock && capture_deadline_==Clock::time_point{})capture_deadline_=now+std::chrono::milliseconds(8);
+        if(now<capture_deadline_)break;
+        const auto duration=std::chrono::milliseconds(count);capture_deadline_=std::max(capture_deadline_+duration,now-duration);
         Completion c;c.frame=r.frame;
-        for(const auto &slot:r.iso){auto &frame=capture_.front();c.iso.push_back({slot.offset,slot.length,static_cast<uint32_t>(frame.size()),0});c.data.insert(c.data.end(),frame.begin(),frame.end());capture_.pop_front();}
+        for(const auto &slot:r.iso){Bytes frame;if(!capture_.empty()){frame=std::move(capture_.front());capture_.pop_front();capture_times_.pop_front();}else{frame={0x60,32,sequence(capture_sequence_),50,192,0};frame.resize(54);++stats_.concealed;}c.iso.push_back({slot.offset,slot.length,static_cast<uint32_t>(frame.size()),0});c.data.insert(c.data.end(),frame.begin(),frame.end());}
         c.actual=static_cast<uint32_t>(c.data.size());stats_.capture_slots+=count;finish(*seq,std::move(c));
     }
     while(auto seq=head(render_wait_)){
         auto &p=pending_.at(*seq);const auto &r=p.request;if(p.token)break;
+        if(now>p.media_deadline){++stats_.render_expired;pcm_.clear();pcm_started_={};fail(*seq,-18);continue;}
+        if(pcm_started_!=Clock::time_point{} && now-pcm_started_>connector_.render_age){pcm_.clear();pcm_started_={};}
         if(!p.staged){
             if(!stats_.layout){fail(*seq,-95);continue;}Bytes incoming;
             try{for(const auto &slot:r.iso)for(const auto &frame:packets(std::span<const uint8_t>(r.data).subspan(slot.offset,slot.length))){
                 const auto &g=frame.decoded;if(g.command!=0x60 || g.options!=32 || g.payload.size()!=192)throw Stall("Unsupported render PCM");incoming.insert(incoming.end(),g.payload.begin(),g.payload.end());
             }}catch(const Stall &){fail(*seq,-95);continue;}catch(const Error &){fail(*seq,-71);continue;}
-            if(pcm_.size()+incoming.size()>1536*8){fail(*seq,-12);continue;}
+            if(pcm_.size()+incoming.size()>192*32){fail(*seq,-12);continue;}
+            if(pcm_.empty())pcm_started_=now;
             pcm_.insert(pcm_.end(),incoming.begin(),incoming.end());p.staged=true;
         }
         if(pcm_.size()<1536){p.staged=false;finish(*seq,accepted(r));continue;}
-        if(!credits_)break;--credits_;
+        if(connector_.independent_clock){if(!clock_active(now) || now<render_deadline_)break;render_deadline_=render_deadline_==Clock::time_point{}?now+std::chrono::milliseconds(8):std::max(render_deadline_+std::chrono::milliseconds(8),now);}
+        else {if(now-radio_last_>std::chrono::milliseconds(32))credits_=0;if(!credits_)break;--credits_;}
         Bytes wire{0x60,32,sequence(render_sequence_),0x80,0x8c,0};wire.insert(wire.end(),pcm_.begin(),pcm_.begin()+1536);pcm_.erase(pcm_.begin(),pcm_.begin()+1536);transmit(*seq,std::move(wire),true,now);break;
     }
 }
@@ -130,11 +151,11 @@ void Core::radio(uint8_t kind,uint8_t wcid,std::span<const uint8_t> data,Clock::
     else if(kind==4){
         auto parsed=packets(data);stats_.audio_rx+=parsed.size();
         if(std::any_of(parsed.begin(),parsed.end(),[](const auto &p){return p.decoded.command!=0x60 || p.decoded.payload.size()!=386 || p.decoded.payload[0]!=0 || p.decoded.payload[1]!=6;}))throw Error("Unsupported radio PCM layout");
-        stats_.layout=true;if(!audio_)return;
+        stats_.layout=true;radio_last_=now;if(!audio_)return;
         if(parsed.size()>8){stats_.dropped+=(parsed.size()-8)*8;parsed.erase(parsed.begin(),parsed.end()-8);}
         const auto count=parsed.size()*8;
-        if(capture_.size()+count>64){const auto drop=std::min(capture_.size(),((capture_.size()+count-64+7)/8)*8);stats_.dropped+=drop;for(size_t i=0;i<drop;++i)capture_.pop_front();}
-        for(const auto &p:parsed)for(size_t at=2;at<386;at+=48){Bytes frame{0x60,32,sequence(capture_sequence_),50,192,0};frame.insert(frame.end(),p.decoded.payload.begin()+at,p.decoded.payload.begin()+at+48);capture_.push_back(std::move(frame));}
+        (void)count;
+        for(const auto &p:parsed)for(size_t at=2;at<386;at+=48){Bytes frame{0x60,32,sequence(capture_sequence_),50,192,0};frame.insert(frame.end(),p.decoded.payload.begin()+at,p.decoded.payload.begin()+at+48);capture_.push_back(std::move(frame));capture_times_.push_back(now);}trim_capture(now);
         stats_.capture_high_water=std::max(stats_.capture_high_water,capture_.size());credits_=std::min(size_t(2),credits_+parsed.size());
     }else throw Error("Unknown radio event");pump(now);
 }
@@ -153,7 +174,9 @@ void Core::tick(Clock::time_point now){
 std::optional<Core::Clock::time_point> Core::wake_at()const{
     std::optional<Clock::time_point> result;
     for(const auto &[seq,p]:pending_){(void)seq;if(p.kind==Kind::irq_out || p.kind==Kind::render)if(!result || p.deadline<*result)result=p.deadline;}
-    if(!capture_wait_.empty() && pending_.contains(capture_wait_.front())){const auto &r=pending_.at(capture_wait_.front()).request;if(r.iso.size()<8 && capture_.size()>=r.iso.size() && (!result || capture_deadline_<*result))result=capture_deadline_;}
+    auto need=[&](Clock::time_point at){if(!result || at<*result)result=at;};
+    if(!capture_wait_.empty() && pending_.contains(capture_wait_.front())){const auto &r=pending_.at(capture_wait_.front()).request;if(capture_.size()>=r.iso.size() || clock_active(Clock::now()))need(capture_deadline_);}
+    if(!render_wait_.empty() && pending_.contains(render_wait_.front())){const auto &p=pending_.at(render_wait_.front());if(!p.token){need(p.media_deadline);if(connector_.independent_clock && clock_active(Clock::now()) && pcm_.size()>=1536)need(render_deadline_);}}
     return result;
 }
 }

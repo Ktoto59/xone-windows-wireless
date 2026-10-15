@@ -148,8 +148,9 @@ class UrbSession:
     def send_completion(self, request, result):
         packet = pack_completion(request, result)
         self.writer.write(packet)
-        self.event(operation='complete', seq=request.seq, ep=request.ep,
-                   status=result.status, actual=result.actual, iso=len(result.iso))
+        if self.on_event:
+            self.event(operation='complete', seq=request.seq, ep=request.ep,
+                       status=result.status, actual=result.actual, iso=len(result.iso))
 
     async def execute(self, request, endpoint):
         try:
@@ -185,8 +186,9 @@ class UrbSession:
         tasks = set()
         try:
             while True:
-                request = await read_request(reader, self.timeout, on_header=lambda header: self.event(operation='urb_header', header=header.hex()))
-                if isinstance(request, Submit):
+                on_header = (lambda header: self.event(operation='urb_header', header=header.hex())) if self.on_event else None
+                request = await read_request(reader, self.timeout, on_header=on_header)
+                if self.on_event and isinstance(request, Submit):
                     self.event(operation='submit', seq=request.seq, ep=request.ep,
                                direction=request.direction, length=request.length,
                                setup=request.setup.hex() if request.ep == 0 else None,

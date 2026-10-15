@@ -108,10 +108,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         self.sessions = []
         self.events = []
         async def connection(reader, writer):
-            # Byte-at-a-time debug Proactor writes can exceed .5s under load.
-            # Production uses Selector and a 120s timeout; keep this test bounded
-            # without making CPU scheduling part of the fragmentation assertion.
-            session = UrbSession(self.profile, self.backend, timeout=2, on_event=self.events.append)
+            session = UrbSession(self.profile, self.backend, timeout=.5, on_event=self.events.append)
             self.sessions.append(session)
             await session.run(reader, writer)
         self.server = await asyncio.start_server(connection, '127.0.0.1', 0)
@@ -128,8 +125,8 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(.01)
         self.assertTrue(all(not s.pending for s in self.sessions))
 
-    async def receive(self):
-        header = await asyncio.wait_for(self.reader.readexactly(48), 3)
+    async def receive(self, timeout=1):
+        header = await asyncio.wait_for(self.reader.readexactly(48), timeout)
         values = struct.unpack('!IIIIIiiiii8s', header)
         if values[0] == 3:
             # Tests only request IN or zero-length OUT controls.
@@ -228,7 +225,9 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         for seq in range(2, 67):
             self.writer.write(submit(seq, ep=1, length=64))
         await self.writer.drain()
-        values, _, _ = await self.receive()
+        # This is a resource-limit check after 65 sequential decodes/tasks,
+        # not a one-second Windows scheduler performance requirement.
+        values, _, _ = await self.receive(timeout=5)
         self.assertEqual((values[1], values[5]), (66, -12))
         self.assertEqual(len(self.sessions[0].pending), 64)
 

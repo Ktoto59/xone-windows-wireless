@@ -8,7 +8,6 @@ $ErrorActionPreference = 'Stop'
 $taskRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'Device-Config.ps1')
 $InstanceId=Resolve-XoneAdapterInstance $InstanceId
-[void][IO.Directory]::CreateDirectory((Join-Path $taskRoot 'work'))
 $taskBinder = Join-Path $taskRoot 'outputs\xone-bind.exe'
 $taskStatePath = Join-Path $taskRoot 'work\binding-state.json'
 $taskRegPath = "HKLM:\SYSTEM\CurrentControlSet\Enum\$InstanceId"

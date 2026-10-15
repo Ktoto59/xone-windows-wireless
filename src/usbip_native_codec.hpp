@@ -10,7 +10,7 @@ struct Error:std::runtime_error {using std::runtime_error::runtime_error;};
 struct Stall:Error {using Error::Error;};
 struct Endpoint {uint8_t address,type,interval;uint16_t maximum;};
 struct Profile {
-    uint16_t vid,pid,revision;uint32_t speed;Bytes device,configuration,os_string;std::string product;
+    uint16_t vid,pid,revision;uint32_t speed;Bytes device,configuration,os_string;std::string product,virtual_serial;
     std::map<std::pair<uint8_t,uint8_t>,std::vector<Endpoint>> settings;
     std::map<uint8_t,std::array<uint8_t,3>> classes;
     Profile(uint16_t product_id,uint16_t rev,uint32_t usb_speed,Bytes dev,Bytes config,Bytes os,std::string name);

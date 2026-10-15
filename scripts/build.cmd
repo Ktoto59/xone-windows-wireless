@@ -38,14 +38,11 @@ cl /nologo /std:c++20 /EHsc /O2 /W4 /WX /utf-8 /c src\winusb_transport.cpp /Fobu
 if errorlevel 1 exit /b 1
 cl /nologo /std:c++20 /EHsc /O2 /W4 /WX /utf-8 /c src\main.cpp /Fobuild\main.obj
 if errorlevel 1 exit /b 1
-cl /nologo /std:c++20 /EHsc /O2 /W4 /WX /utf-8 /c src\usbip_native_codec.cpp src\usbip_native_core.cpp src\usbip_native_output.cpp /Fobuild\
+link /nologo build\main.obj build\winusb_transport.obj build\protocol.obj build\gip_link.obj build\auth.obj build\session.obj build\raw_gip.obj build\input_mapping.obj build\vigem_output.obj build\native_gip_output.obj build\native_audio_output.obj build\mt76.obj build\xone_compat.obj setupapi.lib winusb.lib xinput.lib bcrypt.lib uuid.lib runtimeobject.lib ws2_32.lib /out:outputs\xone-probe.exe
 if errorlevel 1 exit /b 1
-link /nologo build\main.obj build\winusb_transport.obj build\protocol.obj build\gip_link.obj build\auth.obj build\session.obj build\raw_gip.obj build\input_mapping.obj build\vigem_output.obj build\native_gip_output.obj build\native_audio_output.obj build\usbip_native_codec.obj build\usbip_native_core.obj build\usbip_native_output.obj build\mt76.obj build\xone_compat.obj setupapi.lib winusb.lib xinput.lib bcrypt.lib uuid.lib runtimeobject.lib ws2_32.lib avrt.lib /out:outputs\xone-probe.exe
-if errorlevel 1 exit /b 1
-copy /y outputs\xone-probe.exe outputs\xone-probe-cpp.exe >nul
 cl /nologo /std:c++20 /EHsc /W4 /WX /utf-8 src\native_gip_probe.cpp build\native_gip_output.obj build\input_mapping.obj /Fobuild\native_gip_probe.obj /Feoutputs\native-gip-probe.exe /link xinput.lib runtimeobject.lib user32.lib
 if errorlevel 1 exit /b 1
-cl /nologo /std:c++20 /EHsc /O2 /W4 /WX /utf-8 src\native_audio_probe.cpp /Fobuild\native_audio_probe.obj /Feoutputs\native-audio-probe.exe /link ole32.lib uuid.lib propsys.lib avrt.lib runtimeobject.lib
+cl /nologo /std:c++20 /EHsc /W4 /WX /utf-8 src\native_audio_probe.cpp /Fobuild\native_audio_probe.obj /Feoutputs\native-audio-probe.exe /link ole32.lib uuid.lib propsys.lib
 if errorlevel 1 exit /b 1
 cl /nologo /std:c++20 /EHsc /W4 /WX /utf-8 src\audio_endpoint_test.cpp /Fobuild\audio_endpoint_test.obj /Feoutputs\audio-endpoint-test.exe /link ole32.lib uuid.lib
 if errorlevel 1 exit /b 1
@@ -64,6 +61,14 @@ if errorlevel 1 exit /b 1
 link /nologo build\session_tests.obj build\protocol.obj build\gip_link.obj build\auth.obj build\session.obj build\input_mapping.obj build\mt76.obj build\xone_compat.obj bcrypt.lib /out:outputs\session-tests.exe
 if errorlevel 1 exit /b 1
 outputs\session-tests.exe
+if errorlevel 1 exit /b 1
+cl /nologo /std:c++20 /EHsc /O2 /W4 /WX /utf-8 /I src tests\bridge_runtime_tests.cpp /Fobuild\bridge_runtime_tests.obj /Feoutputs\bridge-runtime-tests.exe
+if errorlevel 1 exit /b 1
+outputs\bridge-runtime-tests.exe
+if errorlevel 1 exit /b 1
+cl /nologo /std:c++20 /EHsc /O2 /W4 /WX /utf-8 /I src tests\auto_gip_router_tests.cpp /Fobuild\auto_gip_router_tests.obj /Feoutputs\auto-gip-router-tests.exe
+if errorlevel 1 exit /b 1
+outputs\auto-gip-router-tests.exe
 if errorlevel 1 exit /b 1
 popd
 endlocal

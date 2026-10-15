@@ -8,19 +8,13 @@ namespace xone {
 class RawGipRouter final:public RawGipOutput {
     std::vector<std::unique_ptr<RawGipOutput>> outputs_;
     std::array<RawGipOutput *,16> owners_{};
+    size_t first_=0;
 public:
     explicit RawGipRouter(std::vector<std::unique_ptr<RawGipOutput>> outputs):outputs_(std::move(outputs)){
         if(outputs_.empty() || outputs_.size()>16 || std::any_of(outputs_.begin(),outputs_.end(),[](const auto &p){return !p;}))throw std::runtime_error("Invalid USB GIP routes");
     }
     bool target(std::span<const uint8_t> mac)const override{
         return std::any_of(outputs_.begin(),outputs_.end(),[&](const auto &p){return p->target(mac);});
-    }
-    bool automatic()const override{return std::any_of(outputs_.begin(),outputs_.end(),[](const auto &p){return p->automatic();});}
-    bool audio_active()const override{return std::any_of(outputs_.begin(),outputs_.end(),[](const auto &p){return p->audio_active();});}
-    bool claim(std::span<const uint8_t> mac,uint16_t vendor,uint16_t product)override{
-        if(target(mac))return true;
-        for(const auto &p:outputs_)if(p->claim(mac,vendor,product))return true;
-        return false;
     }
     void event(uint8_t kind,uint8_t wcid,std::span<const uint8_t> data={})override{
         if(!wcid || wcid>16)throw std::runtime_error("Invalid routed USB GIP WCID");
@@ -40,12 +34,26 @@ public:
     }
     std::vector<RawGipTransmit> poll()override{
         std::vector<RawGipTransmit> requests;
-        for(const auto &p:outputs_)for(auto &request:p->poll()){
-            if(!request.wcid || request.wcid>16 || owners_[request.wcid-1]!=p.get()){
-                p->complete(request.wcid,request.token,-19);continue;
+        std::vector<std::vector<RawGipTransmit>> batches(outputs_.size());
+        size_t longest=0;
+        for(size_t n=0;n<outputs_.size();++n){
+            const size_t index=(first_+n)%outputs_.size();
+            const auto &p=outputs_[index];
+            for(auto &request:p->poll()){
+                if(!request.wcid || request.wcid>16 || owners_[request.wcid-1]!=p.get()){
+                    p->complete(request.wcid,request.token,-19);continue;
+                }
+                batches[index].push_back(std::move(request));
             }
-            requests.push_back(std::move(request));
+            longest=std::max(longest,batches[index].size());
         }
+        // Keep each device's order, but do not send an entire busy peer's
+        // batch before giving the other headset/controller a turn.
+        for(size_t at=0;at<longest;++at)for(size_t n=0;n<outputs_.size();++n){
+            auto &batch=batches[(first_+n)%outputs_.size()];
+            if(at<batch.size())requests.push_back(std::move(batch[at]));
+        }
+        if(!requests.empty())first_=(first_+1)%outputs_.size();
         return requests;
     }
     void complete(uint8_t wcid,uint32_t token,int status)override{

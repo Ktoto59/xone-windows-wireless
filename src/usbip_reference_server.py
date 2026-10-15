@@ -5,17 +5,14 @@ Does not bind physical USB, change drivers, or expose a network-wide listener.
 """
 import argparse
 import asyncio
-from contextlib import suppress
-import json
-import queue
-import threading
 from pathlib import Path
 import struct
 import sys
+import time
 from usb_headset_profile import HeadsetProfile
 from usbip_urb import UrbSession
 from usb_gip_radio import RadioBackend
-from windows_media import MediaScheduling
+from bridge_telemetry import BridgeTelemetry
 
 
 class EnumerationBackend:
@@ -55,6 +52,12 @@ def radio_endpoints(profile):
     return pair(interrupt,3),pair(audio,1)
 
 
+def render_budget(profile):
+    # The 2021 native USB profile keeps a deeper future-OUT pipeline than
+    # 2024: observed ~66 ms under ordinary playback, without slow radio ACKs.
+    return .096 if profile.pid == 0x0b17 else .064
+
+
 class ReferenceServer:
     def __init__(self, profile, timeout=5, enumeration_probe=False, on_event=None, backend=None):
         self.profile = profile
@@ -64,12 +67,27 @@ class ReferenceServer:
         self.imported = False
         self.on_event = on_event
         self.backend = backend
+        self.connection_tasks = set()
+        self.connection_writers = set()
+
+    async def close_clients(self):
+        """End this device's USB imports when its RF association ends."""
+        tasks = tuple(self.connection_tasks)
+        for writer in tuple(self.connection_writers):
+            writer.transport.abort()
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.wait(tasks,timeout=1)
 
     async def connection(self, reader, writer):
         if self.clients >= 16:
             writer.close()
             return
         self.clients += 1
+        task = asyncio.current_task()
+        self.connection_tasks.add(task)
+        self.connection_writers.add(writer)
         owns_import = False
         try:
             header = await asyncio.wait_for(reader.readexactly(8), self.timeout)
@@ -77,11 +95,11 @@ class ReferenceServer:
             if version != 0x0111 or status != 0:
                 return
             if operation == 0x8005:
-                writer.write(self.profile.usbip_device_list())
+                writer.write(self.profile.usbip_device_list() if self.profile is not None else struct.pack('!HHII',0x0111,5,0,0))
             elif operation == 0x8003:
                 busid = await asyncio.wait_for(reader.readexactly(32), self.timeout)
                 # Import only with an explicit diagnostic mode or a live RF peer.
-                available = self.enumeration_probe or (self.backend is not None and self.backend.ready)
+                available = self.profile is not None and (self.enumeration_probe or (self.backend is not None and self.backend.ready))
                 if available and not self.imported and busid == b'1-1'.ljust(32, b'\0'):
                     self.imported = owns_import = True
                     writer.write(struct.pack('!HHI', 0x0111, 3, 0) + self.profile.usbip_device())
@@ -96,6 +114,8 @@ class ReferenceServer:
         except (asyncio.IncompleteReadError, TimeoutError, ConnectionError):
             pass
         finally:
+            self.connection_tasks.discard(task)
+            self.connection_writers.discard(writer)
             if owns_import:
                 self.imported = False
                 if self.backend is not None:
@@ -108,123 +128,59 @@ class ReferenceServer:
             self.clients -= 1
 
 
-class DiagnosticLog:
-    """Bounded diagnostics, with console/file IO on an ordinary worker thread."""
-    LIFECYCLE = frozenset(('radio_ready', 'radio_associated', 'radio_removed',
-                           'radio_closed', 'radio_stopped', 'radio_waiting',
-                           'usb_audio_profile', 'close'))
-
-    def __init__(self, verbose=False, write=None):
-        self.verbose = verbose
-        self.write = write or (lambda fields: print(json.dumps(fields), flush=True))
-        self.queue = queue.Queue(maxsize=128)
-        self.stop = threading.Event()
-        self.count = 0
-        self.thread = threading.Thread(target=self.run, name='xone-diagnostics', daemon=True)
-        self.thread.start()
-
-    def emit(self, fields):
-        if fields.get('operation') not in self.LIFECYCLE:
-            if not self.verbose or self.count >= 1000:
-                return
-            self.count += 1
-        try:
-            self.queue.put_nowait(dict(fields))
-        except queue.Full:
-            pass
-
-    def run(self):
-        while not self.stop.is_set() or not self.queue.empty():
-            try:
-                fields = self.queue.get(timeout=.1)
-            except queue.Empty:
-                continue
-            try:
-                self.write(fields)
-            except (OSError, ValueError):
-                pass
-
-    def close(self):
-        self.stop.set()
-        self.thread.join(timeout=1)
-
-
-class StatusPublisher:
-    """Publish bounded snapshots off the latency-sensitive event-loop thread."""
-    def __init__(self, path, snapshot, interval=.2, stats_interval=2):
-        self.path = path
-        self.snapshot = snapshot
-        self.interval = interval
-        self.task = None
-        self.stats_interval = stats_interval
-        self.previous = None
-        self.last_write = 0
-
-    def write(self, snapshot):
-        temporary = self.path.with_suffix('.tmp')
-        try:
-            temporary.write_text(json.dumps(snapshot), encoding='utf-8')
-            temporary.replace(self.path)
-        except OSError:
-            pass  # Observational IO contention must not stop radio/audio.
-
-    async def run(self):
-        while True:
-            # Copy counters on their owning thread before dispatching disk IO.
-            snapshot = self.snapshot()
-            lifecycle = tuple(snapshot.get(k) for k in ('RadioConnected', 'Wcid', 'Generation', 'Ready'))
-            now = asyncio.get_running_loop().time()
-            if lifecycle != self.previous or now - self.last_write >= self.stats_interval:
-                await asyncio.to_thread(self.write, snapshot)
-                self.previous, self.last_write = lifecycle, now
-            await asyncio.sleep(self.interval)
-
-    async def __aenter__(self):
-        self.task = asyncio.create_task(self.run())
-        return self
-
-    async def __aexit__(self, *unused):
-        self.task.cancel()
-        with suppress(asyncio.CancelledError):
-            await self.task
+async def wait_for_lifetime(seconds):
+    """Zero means no automatic shutdown; cancellation still performs cleanup."""
+    if seconds:
+        await asyncio.sleep(seconds)
+    else:
+        await asyncio.Future()
 
 
 async def main(args):
-    log = DiagnosticLog(getattr(args, 'verbose', False))
-    try:
-        await serve(args, log.emit)
-    finally:
-        await asyncio.to_thread(log.close)
-
-
-async def serve(args, event):
+    telemetry = BridgeTelemetry(args.status_file)
     backend = None
+    event = telemetry.event
+
+    async def snapshots():
+        maximum_lag = 0
+        while True:
+            if backend is not None:
+                telemetry.publish(dict(backend.status(), EventLoopMaxLagMs=round(maximum_lag*1000, 3)))
+            expected = time.monotonic()+.5
+            await asyncio.sleep(.5)
+            maximum_lag = max(maximum_lag, time.monotonic()-expected)
     profile = transport_profile(args.profile,args.audio_bridge)
     if args.radio_mac:
         interrupt,audio = radio_endpoints(profile)
         backend = RadioBackend(args.radio_mac, on_event=event, audio_probe=args.audio_probe, audio_bridge=args.audio_bridge,
-                               interrupt_endpoints=interrupt,audio_endpoints=audio)
-    reference = ReferenceServer(profile, enumeration_probe=args.enumeration_probe, on_event=event, backend=backend)
+                               interrupt_endpoints=interrupt,audio_endpoints=audio,render_max_age=render_budget(profile),
+                               independent_clock=getattr(args,'audio_independent_clock',False))
+    reference = ReferenceServer(profile, enumeration_probe=args.enumeration_probe,
+                                on_event=event if getattr(args, 'diagnostics', False) else None, backend=backend)
     server = await asyncio.start_server(reference.connection, '127.0.0.1', args.port)
     mode = ('radio GIP; experimental PCM bridge' if args.audio_bridge else
             'radio GIP; capture/header audio probe' if args.audio_probe else
             'radio GIP; ISO audio unavailable') if backend else ('enumeration diagnostic; GIP/audio unavailable' if args.enumeration_probe else 'metadata preview; import disabled')
-    print(f'USB/IP at 127.0.0.1:{server.sockets[0].getsockname()[1]}; {mode}', flush=True)
+    event({'operation': 'listening', 'port': server.sockets[0].getsockname()[1], 'mode': mode,
+           'lifetime_seconds': args.seconds})
     if args.audio_bridge:
         event({'operation': 'usb_audio_profile', 'usbip_speed': 3, 'iso_interval': 1, 'expected_slots': 8})
-    if backend:
-        radio_server = await asyncio.start_server(backend.connection, '127.0.0.1', args.radio_port)
-        print(f'Local radio broker at 127.0.0.1:{args.radio_port}', flush=True)
-        event({'operation': 'radio_waiting'})
-        async with radio_server, server:
-            if args.status_file:
-                async with StatusPublisher(args.status_file, backend.status):
-                    await asyncio.sleep(args.seconds) if args.seconds else await asyncio.Future()
-            else:
-                await asyncio.sleep(args.seconds) if args.seconds else await asyncio.Future()
-    else:
-        async with server:
-            await asyncio.sleep(args.seconds) if args.seconds else await asyncio.Future()
+    status_task = asyncio.create_task(snapshots())
+    try:
+        if backend:
+            radio_server = await asyncio.start_server(backend.connection, '127.0.0.1', args.radio_port)
+            event({'operation': 'radio_waiting', 'port': args.radio_port})
+            async with radio_server, server:
+                await wait_for_lifetime(args.seconds)
+        else:
+            async with server:
+                await wait_for_lifetime(args.seconds)
+    finally:
+        status_task.cancel()
+        await asyncio.gather(status_task, return_exceptions=True)
+        if backend is not None:
+            telemetry.publish(dict(backend.status(), Ready=False))
+        await asyncio.to_thread(telemetry.close)
 
 
 if __name__ == '__main__':
@@ -235,26 +191,25 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--profile', type=Path, default=Path(__file__).resolve().parents[1] / 'driver/profiles/headset-0b32-usb.json')
     parser.add_argument('--port', type=int, default=33240)
-    parser.add_argument('--seconds', type=int, default=60)
+    parser.add_argument('--seconds', type=int, default=0, help='Lifetime in seconds; 0 runs until stopped (default)')
     parser.add_argument('--enumeration-probe', action='store_true', help='Diagnostic attachment only; GIP/audio stall, no RF access')
     parser.add_argument('--radio-mac', help='Route interrupt GIP to this radio MAC through xone-probe --output usb-gip')
     parser.add_argument('--radio-port', type=int, default=33241)
     parser.add_argument('--audio-probe', action='store_true', help='Experimental radio capture ISO path and render header diagnostics; playback unsupported')
     parser.add_argument('--audio-bridge', action='store_true', help='Experimental observed 24k mono / 48k stereo radio PCM conversion')
+    parser.add_argument('--audio-independent-clock', action='store_true',
+                        help='Experimental independent playback and bounded microphone silence concealment; requires audio-bridge')
     parser.add_argument('--status-file', type=Path)
-    parser.add_argument('--verbose', action='store_true', help='Bounded packet diagnostics; disabled during normal operation')
+    parser.add_argument('--diagnostics', action='store_true', help='Enable bounded per-URB header diagnostics; off during ordinary use')
     arguments = parser.parse_args()
+    if arguments.audio_independent_clock and not arguments.audio_bridge:
+        parser.error('audio-independent-clock requires audio-bridge')
     if (arguments.audio_probe or arguments.audio_bridge) and not arguments.radio_mac:
         parser.error('audio options require radio-mac')
-    if not 0 <= arguments.port <= 65535 or not 0 <= arguments.seconds <= 86400:
-        parser.error('port must be 0..65535; seconds must be 0 (until stopped) or 1..86400')
+    if not 0 <= arguments.port <= 65535 or not 0 <= arguments.seconds <= 3600:
+        parser.error('port must be 0..65535; seconds must be 0..3600 (0 runs until stopped)')
     if arguments.radio_mac and (arguments.enumeration_probe or len(arguments.radio_mac) != 12 or any(c not in '0123456789abcdefABCDEF' for c in arguments.radio_mac)):
         parser.error('radio-mac must be twelve hex digits and cannot combine with enumeration-probe')
     if not 1024 <= arguments.radio_port <= 65535 or arguments.radio_port == arguments.port:
         parser.error('radio-port must be 1024..65535 and differ from USB/IP port')
-    # Register the actual event-loop thread, not the snapshot disk worker.
-    with MediaScheduling(arguments.audio_bridge) as scheduling:
-        if arguments.audio_bridge:
-            print(json.dumps({'operation': 'audio_scheduling', 'mmcss': bool(scheduling.handle),
-                              'error': scheduling.error}), flush=True)
-        asyncio.run(main(arguments))
+    asyncio.run(main(arguments))

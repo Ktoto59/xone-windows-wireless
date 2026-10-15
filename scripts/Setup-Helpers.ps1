@@ -31,7 +31,7 @@ function Stop-XoneBridge([string]$Root){
     $path=Join-Path $Root 'work/usb-gip-running.json'
     $state=Read-XoneJson $path
     if($state -and (Test-XoneProcess $state.Worker)){
-        & (Join-Path $Root 'scripts/Run-UsbGip.ps1') -Stop
+        [IO.File]::WriteAllText((Join-Path $Root 'work/usb-gip.stop'),'stop');[IO.File]::WriteAllText((Join-Path $Root 'work/maintenance.stop'),'stop')
         $deadline=(Get-Date).AddSeconds(20)
         while((Test-XoneProcess $state.Worker) -and (Get-Date) -lt $deadline){Start-Sleep -Milliseconds 100}
         if(Test-XoneProcess $state.Worker){throw 'The bridge did not stop. Close it before continuing.'}

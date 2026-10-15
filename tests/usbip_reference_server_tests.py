@@ -1,80 +1,66 @@
 import asyncio
-from contextlib import redirect_stdout
-from io import StringIO
 from pathlib import Path
 import struct
 import sys
-import threading
-from types import SimpleNamespace
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 from usb_headset_profile import HeadsetProfile
-from usbip_reference_server import DiagnosticLog, ReferenceServer, StatusPublisher, transport_profile, main
-
-
-class LoggingTests(unittest.TestCase):
-    def test_slow_log_sink_is_bounded_and_does_not_block_radio_events(self):
-        started, release = threading.Event(), threading.Event()
-        def sink(fields):
-            started.set()
-            release.wait(2)
-        log = DiagnosticLog(verbose=True, write=sink)
-        try:
-            log.emit({'operation': 'radio_associated'})
-            self.assertTrue(started.wait(1))
-            for _ in range(10000):
-                log.emit({'operation': 'radio_audio_in'})
-            self.assertEqual(log.queue.qsize(), 128)
-            self.assertFalse(release.is_set())
-        finally:
-            release.set()
-            log.close()
-
-    def test_normal_operation_does_not_log_audio_packets(self):
-        written = []
-        log = DiagnosticLog(write=written.append)
-        log.emit({'operation': 'radio_audio_in'})
-        log.emit({'operation': 'radio_gip_out'})
-        log.emit({'operation': 'radio_removed'})
-        log.close()
-        self.assertEqual(written, [{'operation': 'radio_removed'}])
-
+from usbip_reference_server import ReferenceServer, transport_profile, main, render_budget
+from bridge_telemetry import BridgeTelemetry
 
 
 class LifetimeTests(unittest.IsolatedAsyncioTestCase):
-    async def test_zero_duration_serves_requests_until_cancelled(self):
-        args = SimpleNamespace(profile=ROOT / 'driver/profiles/headset-0b32-usb.json',
-                               audio_bridge=False, audio_probe=False, radio_mac=None,
-                               enumeration_probe=False, port=0, seconds=0, status_file=None)
-        output = StringIO()
-        with redirect_stdout(output):
-            task = asyncio.create_task(main(args))
-            writer = None
-            try:
-                for _ in range(200):
-                    if output.getvalue() or task.done():
-                        break
-                    await asyncio.sleep(.01)
-                self.assertFalse(task.done(), 'Unlimited server stopped during startup')
-                port = int(output.getvalue().split('127.0.0.1:')[1].split(';')[0])
-                reader, writer = await asyncio.open_connection('127.0.0.1', port)
-                writer.write(bytes.fromhex('0111800500000000'))
-                await writer.drain()
-                expected = HeadsetProfile.load(args.profile).usbip_device_list()
-                self.assertEqual(await asyncio.wait_for(reader.read(), 3), expected)
-                self.assertFalse(task.done(), 'Unlimited server stopped after serving a request')
-            finally:
-                if writer:
-                    writer.close()
-                    await writer.wait_closed()
-                task.cancel()
-                with self.assertRaises(asyncio.CancelledError):
-                    await task
+    async def test_zero_lifetime_serves_requests_until_cancelled_and_finite_mode_still_closes(self):
+        for seconds in (0, .5):
+            with self.subTest(seconds=seconds):
+                started = asyncio.Event()
+                servers = []
+                real_start = asyncio.start_server
+                async def start(*args, **kwargs):
+                    server = await real_start(*args, **kwargs)
+                    servers.append(server)
+                    started.set()
+                    return server
+                args = SimpleNamespace(profile=ROOT / 'driver/profiles/headset-0b32-usb.json',
+                    port=0, seconds=seconds, radio_mac=None, radio_port=0,
+                    audio_bridge=False, audio_probe=False, enumeration_probe=False, status_file=None)
+                with patch('usbip_reference_server.asyncio.start_server', side_effect=start), \
+                     patch('usbip_reference_server.BridgeTelemetry', side_effect=lambda path: BridgeTelemetry(path, emit=lambda fields: None)):
+                    task = asyncio.create_task(main(args))
+                    writer = None
+                    try:
+                        await asyncio.wait_for(started.wait(), 1)
+                        await asyncio.sleep(.02)
+                        self.assertFalse(task.done())
+                        reader, writer = await asyncio.open_connection('127.0.0.1',servers[0].sockets[0].getsockname()[1])
+                        writer.write(bytes.fromhex('0111800500000000'));await writer.drain()
+                        self.assertEqual(await asyncio.wait_for(reader.read(), 1), transport_profile(args.profile).usbip_device_list())
+                        writer.close();await writer.wait_closed();writer = None
+                        if seconds == 0:
+                            task.cancel()
+                            with self.assertRaises(asyncio.CancelledError):
+                                await task
+                        else:
+                            await asyncio.wait_for(task, 2)
+                        self.assertFalse(servers[0].is_serving())
+                    finally:
+                        if writer is not None:
+                            writer.close();await writer.wait_closed()
+                        if not task.done():
+                            task.cancel()
+                        await asyncio.gather(task, return_exceptions=True)
 
 
 class TransportTests(unittest.IsolatedAsyncioTestCase):
+    def test_old_and_new_profiles_keep_independent_render_budgets(self):
+        old = transport_profile(ROOT / 'driver/profiles/headset-0b17-usb.json', True)
+        new = transport_profile(ROOT / 'driver/profiles/headset-0b32-usb.json', True)
+        self.assertEqual((render_budget(old),render_budget(new)),(.096,.064))
+
     def test_audio_transport_preserves_intervals_without_changing_reference(self):
         path = ROOT / 'driver/profiles/headset-0b32-usb.json'
         reference = transport_profile(path)
@@ -106,28 +92,6 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
             writer.close()
             await writer.wait_closed()
         self.assertEqual(self.handler.clients, 0)
-
-    async def test_blocked_status_disk_does_not_block_usb_requests(self):
-        started, release = threading.Event(), threading.Event()
-        publisher = StatusPublisher(None, lambda: {'Ready': True})
-        def slow_disk(snapshot):
-            started.set()
-            release.wait(3)
-        publisher.write = slow_disk
-        writer = None
-        try:
-            async with publisher:
-                self.assertTrue(await asyncio.to_thread(started.wait, 1))
-                reader, writer = await asyncio.open_connection('127.0.0.1', self.port)
-                writer.write(bytes.fromhex('0111800500000000'))
-                await writer.drain()
-                self.assertEqual(await asyncio.wait_for(reader.read(), .5), self.profile.usbip_device_list())
-                self.assertFalse(release.is_set(), 'USB request needed disk IO to complete')
-        finally:
-            release.set()
-            if writer:
-                writer.close()
-                await writer.wait_closed()
 
     async def test_import_fails_explicitly_without_radio_backend(self):
         reader, writer = await asyncio.open_connection('127.0.0.1', self.port)
