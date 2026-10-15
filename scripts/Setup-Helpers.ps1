@@ -86,7 +86,7 @@ function Get-XoneDownload([string]$Url,[string]$Path,[string]$Hash=''){
     }finally{if(Test-Path -LiteralPath $temporary){Remove-Item -LiteralPath $temporary}}
 }
 function Invoke-XonePnputil([string[]]$Arguments){
-    & "$env:windir\System32\pnputil.exe" @Arguments | Out-Host
+    & (Get-XoneSystemTool 'pnputil.exe') @Arguments | Out-Host
     return $LASTEXITCODE
 }
 function Get-XoneDeviceService([string]$InstanceId){
@@ -107,7 +107,7 @@ function Initialize-XoneStockDriver([string]$Root,[string]$InstanceId){
     $directory=Join-Path $downloads ('stock-'+$package.Model)
     [void][IO.Directory]::CreateDirectory($directory)
     $script:XoneSetupStage='StockDriverExtraction'
-    & "$env:windir\System32\expand.exe" '-F:*' $cab $directory | Out-Host
+    & (Get-XoneSystemTool 'expand.exe') '-F:*' $cab $directory | Out-Host
     if($LASTEXITCODE -ne 0){throw 'Cannot extract the Microsoft adapter driver package.'}
     $script:XoneSetupStage='StockDriverSignatureCheck'
     $signature=Get-AuthenticodeSignature -LiteralPath (Join-Path $directory $package.Catalog)
@@ -140,7 +140,7 @@ function Initialize-XonePrerequisites([string]$Root,[switch]$AllowPendingRestart
             $script:XoneSetupStage='FirmwareDownload'
             Get-XoneDownload 'https://catalog.s.download.windowsupdate.com/c/msdownload/update/driver/drvs/2017/07/1cd6a87c-623f-4407-a52d-c31be49e925c_e19f60808bdcbfbd3c3df6be3e71ffc52e43261e.cab' $cab $script:XoneFirmwareCabHash
             $script:XoneSetupStage='FirmwareExtraction'
-            & "$env:windir\System32\expand.exe" '-F:FW_ACC_00U.bin' $cab $downloads
+            & (Get-XoneSystemTool 'expand.exe') '-F:FW_ACC_00U.bin' $cab $downloads
             if($LASTEXITCODE -ne 0){throw 'Cannot extract the Microsoft firmware CAB.'}
             & (Join-Path $Root 'scripts/Import-Firmware.ps1') -Path (Join-Path $downloads 'FW_ACC_00U.bin')
         }

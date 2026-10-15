@@ -1,6 +1,6 @@
-# Install and use the alpha.5.1 candidate
+# Install and use the alpha.5.2 candidate
 
-Download the [alpha.5.1 prerelease](https://github.com/Ktoto59/xone-windows-wireless/releases/tag/v0.1.0-alpha.5.1).
+Download the [alpha.5.2 prerelease](https://github.com/Ktoto59/xone-windows-wireless/releases/tag/v0.1.0-alpha.5.2).
 Use its Setup-x64.exe; extracting the
 runtime ZIP does not register the application or prepare the adapter.
 
@@ -26,7 +26,7 @@ to WinUSB; its stock wireless driver does not run alongside it.
 ## Installation and pairing
 
 1. Connect the adapter and stop a development bridge running from another folder.
-2. Run `xone-windows-wireless-0.1.0-alpha.5.1-Setup-x64.exe` as your normal Windows
+2. Run `xone-windows-wireless-0.1.0-alpha.5.2-Setup-x64.exe` as your normal Windows
    user. Approve the separate administrator prompt for setup.
 3. Allow dependency preparation to finish. Setup downloads and installs missing
    Microsoft adapter drivers, verified RAM firmware and signed USBip automatically.

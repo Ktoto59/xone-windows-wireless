@@ -11,3 +11,14 @@ jobs:
         with:
           python-version: '3.11'
       - run: python scripts/check-public-content.py
+  windows-maintenance:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test native tools and maintenance bootstrap
+        shell: powershell
+        run: |
+          & .\tests\system_tool_tests.ps1
+          & .\tests\setup_action_tests.ps1
+          & .\tests\device_config_tests.ps1
+          & .\tests\setup_helpers_tests.ps1

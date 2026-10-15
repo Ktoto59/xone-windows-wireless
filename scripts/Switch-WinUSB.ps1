@@ -98,7 +98,7 @@ Assert-TaskState $taskSaved
 Invoke-TaskBinder 'plan' $taskWinusbInf 'WINUSB'
 Invoke-TaskBinder 'plan' (Join-Path $taskWindowsInf $taskInf) $taskSection
 New-Item -ItemType Directory -Force -Path (Join-Path $taskRoot 'work\driver-backup') | Out-Null
-& pnputil.exe /export-driver $taskInf (Join-Path $taskRoot 'work\driver-backup')
+& (Get-XoneSystemTool 'pnputil.exe') /export-driver $taskInf (Join-Path $taskRoot 'work\driver-backup')
 if ($LASTEXITCODE -ne 0) { throw 'Cannot export the stock driver; binding was not changed.' }
 if (Test-Path -LiteralPath $taskStatePath) {
     $taskPrevious = Get-Content -LiteralPath $taskStatePath -Raw | ConvertFrom-Json

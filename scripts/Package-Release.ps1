@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 [CmdletBinding()]
-param([ValidatePattern('^\d+\.\d+\.\d+(?:-[a-z0-9.]+)?$')][string]$Version='0.1.0-alpha.5.1',
+param([ValidatePattern('^\d+\.\d+\.\d+(?:-[a-z0-9.]+)?$')][string]$Version='0.1.0-alpha.5.2',
       [string]$LauncherDir='')
 $ErrorActionPreference='Stop'
 $taskRoot=Split-Path -Parent $PSScriptRoot
@@ -40,7 +40,7 @@ $taskSourceExtra=@('README.md','.gitignore','.gitattributes','docs/INSTALLER.md'
     'scripts/Test-Installer.ps1','scripts/generate-usb-profiles.py','scripts/check-public-content.py',
     'CHANGELOG.md','docs/DEVELOPMENT.md','docs/ARCHITECTURE.md','docs/BACKGROUND-MODE.md',
     'docs/AUTO-PAIRING.md','docs/HEADSET-RECONNECT.md','docs/USBIP-LATENCY.md',
-    'docs/RELEASE-alpha.5.md','docs/RELEASE-alpha.5.1.md','.github/workflows/public-content.yml')
+    'docs/RELEASE-alpha.5.md','docs/RELEASE-alpha.5.1.md','docs/RELEASE-alpha.5.2.md','.github/workflows/public-content.yml')
 Push-Location -LiteralPath $taskRoot
 try{
     # Include new, non-ignored source files as well as tracked files. Never
