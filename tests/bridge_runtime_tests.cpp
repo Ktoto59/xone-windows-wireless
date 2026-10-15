@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "radio_ipc_queue.hpp"
 #include "runtime_files.hpp"
+#include "status_schedule.hpp"
 #include <future>
 #include <iostream>
 
@@ -9,6 +10,25 @@ int main(){
     try{
         using namespace std::chrono_literals;
         const auto now=xone::RadioIpcQueue::Clock::now();
+        {
+            xone::StatusSchedule schedule;
+            require(schedule.ready({1,0},now));
+            for(unsigned ms=1;ms<2000;++ms)require(!schedule.ready({1,0},now+std::chrono::milliseconds(ms)));
+            require(schedule.ready({1,0},now+2000ms));
+            require(schedule.ready({2,0},now+2001ms)); // Connection/lifecycle.
+            require(schedule.ready({2,1},now+2002ms)); // Observed writer error.
+            require(!schedule.ready({2,1},now+2003ms));
+            require(schedule.ready({2,1},now+2003ms,true)); // Final stopped state.
+            xone::StatusSchedule diagnostics(100ms);
+            require(diagnostics.ready({0,0},now));
+            require(!diagnostics.ready({0,0},now+99ms));
+            require(diagnostics.ready({0,0},now+100ms));
+            xone::StatusSchedule continuous;
+            unsigned snapshots=0;
+            for(unsigned ms=0;ms<30000;++ms)
+                snapshots+=continuous.ready({1,0},now+std::chrono::milliseconds(ms))?1:0;
+            require(snapshots==15); // Continuous counters: 0.5 Hz, previously 10 Hz.
+        }
         xone::RadioIpcQueue burst;
         burst.push({16},false,now);
         for(unsigned i=0;i<270;++i)burst.push({4,static_cast<uint8_t>(i)},true,now);
@@ -51,7 +71,7 @@ int main(){
             for(unsigned i=0;i<100 && !files.stop_requested();++i)std::this_thread::sleep_for(1ms);
             require(files.stop_requested() && files.io_errors()==1);
         }
-        std::cout<<"Bridge runtime fault tests: 4 passed\n";
+        std::cout<<"Bridge runtime fault tests: 5 passed\n";
         return 0;
     }catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}
 }

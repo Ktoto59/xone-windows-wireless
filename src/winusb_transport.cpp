@@ -121,8 +121,7 @@ WinUsbTransport::WinUsbTransport(const DeviceInfo &device) {
             if (!WinUsb_QueryPipe(usb_,0,i,&pipe)) throw std::runtime_error(win_error(GetLastError()));
             if (pipe.PipeType != UsbdPipeTypeBulk) continue;
             out |= pipe.PipeId==0x04; cmd |= pipe.PipeId==0x85; wlan |= pipe.PipeId==0x84;
-            ULONG timeout=250;
-            if (!WinUsb_SetPipePolicy(usb_,pipe.PipeId,PIPE_TRANSFER_TIMEOUT,sizeof(timeout),&timeout))
+            if (!set_timeout(pipe.PipeId,250))
                 throw std::runtime_error(win_error(GetLastError()));
         }
         if (!out || !cmd || !wlan) throw std::runtime_error("Unexpected USB layout: required bulk endpoints 04/84/85 missing.");
@@ -132,10 +131,15 @@ WinUsbTransport::WinUsbTransport(const DeviceInfo &device) {
     }
 }
 WinUsbTransport::~WinUsbTransport() { if (usb_) WinUsb_Free(usb_); if (file_!=INVALID_HANDLE_VALUE) CloseHandle(file_); }
+bool WinUsbTransport::set_timeout(uint8_t pipe,unsigned timeout) {
+    return timeouts_.set(pipe,timeout,[this](uint8_t endpoint,unsigned requested){
+        ULONG policy=requested;
+        return WinUsb_SetPipePolicy(usb_,endpoint,PIPE_TRANSFER_TIMEOUT,sizeof(policy),&policy)!=FALSE;
+    });
+}
 int WinUsbTransport::control_callback(void *context,u8 request,u8 type,u16 value,u16 index,void *data,u16 size,unsigned timeout) {
     auto &self=*static_cast<WinUsbTransport *>(context);
-    ULONG policy=timeout;
-    if (!WinUsb_SetPipePolicy(self.usb_,0,PIPE_TRANSFER_TIMEOUT,sizeof(policy),&policy)) return -EREMOTEIO;
+    if (!self.set_timeout(0,timeout)) return -EREMOTEIO;
     WINUSB_SETUP_PACKET setup{type,request,value,index,size};
     ULONG transferred=0;
     if (!WinUsb_ControlTransfer(self.usb_,setup,static_cast<PUCHAR>(data),size,&transferred,nullptr)) {
@@ -145,8 +149,8 @@ int WinUsbTransport::control_callback(void *context,u8 request,u8 type,u16 value
 }
 int WinUsbTransport::bulk_callback(void *context,u8 pipe,void *data,int size,int *actual,unsigned timeout) {
     auto &self=*static_cast<WinUsbTransport *>(context);
-    ULONG policy=timeout, transferred=0;
-    if (!WinUsb_SetPipePolicy(self.usb_,pipe,PIPE_TRANSFER_TIMEOUT,sizeof(policy),&policy)) return -EREMOTEIO;
+    ULONG transferred=0;
+    if (!self.set_timeout(pipe,timeout)) return -EREMOTEIO;
     if (!WinUsb_WritePipe(self.usb_,pipe,static_cast<PUCHAR>(data),static_cast<ULONG>(size),&transferred,nullptr)) {
         std::cerr << "Bulk write: " << win_error(GetLastError()) << '\n'; return -EREMOTEIO;
     }

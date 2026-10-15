@@ -6,6 +6,9 @@ import struct
 import subprocess
 import sys
 import unittest
+import json
+import tempfile
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
@@ -31,12 +34,14 @@ def submit(seq, direction, endpoint, data=b'', length=None, setup=bytes(8), iso=
 
 
 class NativeTransportTests(unittest.TestCase):
-    def start(self, pid):
+    def start(self, pid, status=None):
         with socket.socket() as reserve:
             reserve.bind(('127.0.0.1', 0))
             self.port = reserve.getsockname()[1]
-        self.process = subprocess.Popen([str(ROOT/'outputs/usbip-native-server-probe.exe'),
-                                         str(self.port), pid], stdin=subprocess.PIPE,
+        command = [str(ROOT/'outputs/usbip-native-server-probe.exe'), str(self.port), pid]
+        if status is not None:
+            command.append(str(status))
+        self.process = subprocess.Popen(command, stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.addCleanup(self.stop)
         self.assertEqual(self.process.stdout.readline().strip(), 'READY')
@@ -105,6 +110,34 @@ class NativeTransportTests(unittest.TestCase):
         payload, slots = exact(sock, 432), exact(sock, 128)
         self.assertEqual(payload[:8], bytes((0x60, 32, 1, 50, 192, 0, 2, 3)))
         self.assertEqual([struct.unpack_from('!IIII', slots, n*16)[2] for n in range(8)], [54]*8)
+
+    def test_import_and_close_status_bypass_counter_cadence(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        status = Path(directory.name)/'status.json'
+        self.start('0b32', status)
+
+        def wait_for(predicate):
+            # Shorter than the two-second counter interval, while allowing
+            # the asynchronous file worker ample time on Windows CI.
+            deadline = time.monotonic()+1.5
+            while time.monotonic() < deadline:
+                try:
+                    snapshot = json.loads(status.read_text(encoding='utf-8'))
+                    if predicate(snapshot):
+                        return snapshot
+                except (OSError, ValueError):
+                    pass
+                time.sleep(.01)
+            self.fail('Lifecycle status waited for the counter interval')
+
+        wait_for(lambda value: value['Ready'] and not value['UsbImported'])
+        owner = self.connect(0x8003)
+        exact(owner, 320)
+        wait_for(lambda value: value['UsbImported'])
+        owner.close()
+        wait_for(lambda value: not value['UsbImported'] and value['UsbClosed'] == 1)
+        self.stop()
 
 
 if __name__ == '__main__':

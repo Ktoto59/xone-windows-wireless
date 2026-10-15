@@ -4,11 +4,13 @@
 #include "gip_link.hpp"
 #include <iostream>
 #include <thread>
+#include <filesystem>
 int main(int argc,char **argv){
-    if(argc!=3)return 2;
+    if(argc!=3 && argc!=4)return 2;
     try{
         const auto port=static_cast<uint16_t>(std::stoul(argv[1])),pid=static_cast<uint16_t>(std::stoul(argv[2],nullptr,16));
-        const xone::Bytes mac{1,2,3,4,5,6};xone::NativeUsbOutput server(port,mac,pid,pid!=0x0b12,L"");server.event(1,1,mac);
+        const auto status=argc==4?std::filesystem::path(argv[3]).wstring():std::wstring{};
+        const xone::Bytes mac{1,2,3,4,5,6};xone::NativeUsbOutput server(port,mac,pid,pid!=0x0b12,status);server.event(1,1,mac);
         std::jthread ack([&](std::stop_token stop){while(!stop.stop_requested()){
             try{for(const auto &tx:server.poll())server.complete(tx.wcid,tx.token,0);}catch(const std::exception &e){std::cerr<<e.what()<<'\n';return;}
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
