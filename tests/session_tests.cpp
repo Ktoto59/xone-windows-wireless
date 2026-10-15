@@ -282,7 +282,26 @@ int main() {
                 identify.push_back(static_cast<uint8_t>(name.size()));identify.push_back(0);identify.insert(identify.end(),name.begin(),name.end());
                 const auto relative=identify.size()-16;identify[28]=static_cast<uint8_t>(relative);identify[29]=static_cast<uint8_t>(relative>>8);identify.push_back(1);
                 auto guid=unhex("77ce347ae27dc6458ca40042c08bd94a");if(scenario==2)guid.back()^=1;identify.insert(identify.end(),guid.begin(),guid.end());deliver(4,identify);
-                const auto now=std::chrono::steady_clock::now();session.tick(now+std::chrono::seconds(2));deliver(8,{2,9,16});session.tick(now+std::chrono::seconds(2));deliver(8,{3,4,80,50,70,0,0,0});session.tick(now+std::chrono::seconds(3));
+                const auto identified_revision=session.status_revision();deliver(4,identify);
+                check(session.status_revision()==identified_revision,"Duplicate identification bypassed status cadence");
+                const auto now=std::chrono::steady_clock::now();session.tick(now+std::chrono::seconds(2));
+                if(!scenario){
+                    const auto proposed=session.status_revision();deliver(8,{2,5,16});
+                    check(session.status_revision()>proposed && session.status()[0].audio->input_rate==16000,"Changed format without stage change did not wake publication");
+                    const auto revised=session.status_revision();deliver(8,{2,9,16});
+                    check(session.status_revision()>revised && session.status()[0].audio->input_rate==24000,"Second audio format change did not wake publication");
+                }
+                const auto format_sent=session.status_revision();deliver(8,{2,9,16});
+                check(session.status_revision()>format_sent,"Audio format acceptance did not wake publication");
+                const auto accepted=session.status_revision();deliver(8,{2,9,16});
+                check(session.status_revision()==accepted,"Duplicate audio format bypassed status cadence");
+                session.tick(now+std::chrono::seconds(2));
+                const auto waiting_volume=session.status_revision();deliver(8,{3,4,80,50,70,0,0,0});
+                check(session.status_revision()>waiting_volume,"Audio streaming transition did not wake publication");
+                const auto streaming=session.status_revision();
+                for(unsigned i=0;i<1000;++i)deliver(8,{3,4,80,50,70,0,0,0});
+                check(session.status_revision()==streaming,"Repeated audio volume bypassed status cadence");
+                session.tick(now+std::chrono::seconds(3));
                 const auto status=session.status();check(status.size()==1 && !status[0].encrypted && session.authenticated()==0,"Opt-out fabricated authentication/key");
                 if(!scenario){
                     check(status[0].authentication=="pc-opt-out" && output.connections==1 && output.playbacks==1 && session.audio_active(),"Exact model/GUID could not stream plaintext audio");
@@ -292,7 +311,7 @@ int main() {
                 session.close();
             }
         });
-        test("Status lifecycle revision changes independently of PCM counters",[]{
+        test("Status revision ignores repeated controls and wakes on battery changes",[]{
             usb_device usb{};device dev{};xone_mt76 mt{};mt.dev=&dev;mt.udev=&usb;mt.channel=&mt.channels[0];mt.channel->index=165;
             usb.control=[](void *,u8,u8 type,u16,u16,void *data,u16 n,unsigned)->int{if(type&128)std::memset(data,0,n);return n;};
             usb.bulk=[](void *,u8,void *,int n,int *actual,unsigned)->int{if(actual)*actual=n;return 0;};
@@ -302,8 +321,21 @@ int main() {
             e.kind=RadioEvent::Kind::gip;e.wcid=1;e.payload=encode_gip({0x60,32,1,0,Bytes(386)});
             for(unsigned i=0;i<1000;++i)session.process(e);
             check(session.status_revision()==connected,"PCM counters bypassed status cadence");
+            e.payload=encode_gip({0x7f,32,1,0,{}});
+            for(unsigned i=0;i<1000;++i)session.process(e);
+            check(session.status_revision()==connected,"Ignored commands bypassed status cadence");
+            e.payload=encode_gip({3,33,1,0,{0x81,0,0,0}});session.process(e);
+            check(session.status_revision()==connected,"Accessory battery bypassed parent status cadence");
             e.payload=encode_gip({7,32,1,0,{0,0x5b}});session.process(e);
-            check(session.status_revision()>connected,"Control state change did not wake publication");
+            check(session.status_revision()==connected,"Guide event absent from JSON bypassed status cadence");
+            e.payload=encode_gip({3,32,1,0,{0x81,0,0,0}});session.process(e);
+            const auto battery=session.status_revision();check(battery>connected,"First battery status did not wake publication");
+            for(unsigned i=0;i<1000;++i)session.process(e);
+            check(session.status_revision()==battery,"Unchanged battery status bypassed status cadence");
+            e.payload=encode_gip({3,32,1,0,{0x82,0,0,0}});session.process(e);
+            const auto level=session.status_revision();check(level>battery && session.status()[0].battery->level==2,"Battery level change did not wake publication");
+            e.payload=encode_gip({3,32,1,0,{0x86,0,0,0}});session.process(e);
+            check(session.status_revision()>level && session.status()[0].battery->type==1,"Battery type change did not wake publication");
             const auto control=session.status_revision();e.kind=RadioEvent::Kind::lost;session.process(e);
             check(session.status_revision()>control,"Disconnect did not wake status publication");
             session.close();
@@ -510,21 +542,28 @@ int main() {
             for(unsigned n=2;n<=5;++n)session.tick(now+std::chrono::seconds(n+1));
             const auto retries=mock.writes.size();session.tick(now+std::chrono::seconds(20));check(mock.writes.size()==retries,"Identification retry count is unbounded");
             e.kind=RadioEvent::Kind::gip; e.wcid=1; e.payload=encode_gip({2,32,1,0,Bytes(28)}); session.process(e); check(mock.last_gip().command==4,"Identification not requested");
+            const auto before_identification=session.status_revision();
             Bytes identify(33); identify[26]=16; identify[32]=1; const std::string name="Windows.Xbox.Input.Gamepad";
             identify.push_back(static_cast<uint8_t>(name.size()));identify.push_back(0);identify.insert(identify.end(),name.begin(),name.end());
             e.payload=encode_gip({4,32,2,0,identify});session.process(e); const auto auth=mock.last_gip();
             check(auth.command==6 && auth.payload.size()==58 && auth.payload[3]==1,"Gamepad auth not started");
+            check(session.status_revision()>before_identification && session.status()[0].authentication=="negotiating","Identification/auth start did not wake publication");
             const auto identified_count=mock.writes.size();session.tick(now+std::chrono::seconds(10));check(mock.writes.size()==identified_count,"Identification retry continued after identification");
             e.payload=encode_gip({3,32,3,0,{0x86,0,0,0}});session.process(e);
             const auto status=session.status();check(status.size()==1 && status[0].battery && status[0].battery->type==1 && status[0].battery->level==2,"Session did not retain battery");
             e.payload=encode_gip({3,33,4,0,{0,0,0,0}});session.process(e);session.tick();
             check(session.status().size()==1,"Accessory status removed parent controller");
+            const auto before_auth_ack=session.status_revision();
             e.kind=RadioEvent::Kind::gip;e.payload=encode_gip({6,32,5,0,{0,0xc1,0,1,0,0}});session.process(e);
+            check(session.status_revision()==before_auth_ack,"Auth ACK without visible state change bypassed cadence");
             auto unsupported=auth_response(2,{});unsupported[7]=3;e.payload=encode_gip({6,32,6,0,unsupported});session.process(e);
             check(mock.last_gip().payload[3]==0x21,"Session did not send bounded v2 probe");
+            const auto negotiated=session.status_revision();check(negotiated>before_auth_ack,"Auth version change did not wake publication");
             e.payload=encode_gip({6,32,7,0,{0,0xc1,0,1,0,0}});session.process(e);
+            check(session.status_revision()==negotiated,"Negotiation ACK bypassed status cadence");
             unsupported=auth_response(0x22,{});unsupported[7]=3;e.payload=encode_gip({6,32,8,0,unsupported});session.process(e);
             check(session.status()[0].authentication=="unsupported-version" && session.status()[0].peer_auth_version==3,"Unsupported auth not isolated/reported");
+            check(session.status_revision()>negotiated,"Auth failure did not wake publication");
             e.kind=RadioEvent::Kind::client_command;e.command=16;session.process(e);check(session.authenticated()==0 && !session.status()[0].encrypted,"Premature encryption accepted");
             e.kind=RadioEvent::Kind::button;session.process(e);check(session.pairing_active(),"Adapter button stopped after client authentication failure");
             e.kind=RadioEvent::Kind::association;e.address={6,5,4,3,2,1};session.process(e);check(session.status().size()==2,"Another client could not associate after auth failure");

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Publish fallback GIP status immediately on state transitions rather than on
+  every control packet; repeated battery/audio-control and ignored messages no
+  longer bypass the normal status-write interval.
 - Restore the MT76 startup fixes lost during the C++ bridge migration: allow
   firmware startup to settle after warm reset/cold upload, apply the cold RF
   patch, and clear retained wake-on-wireless routing before enabling beacons.

@@ -30,6 +30,9 @@ last connected headset. Losing access to a status file does not remove a device;
 only an explicit disconnect/generation transition permits detaching that slot.
 Status writes run on bounded asynchronous workers, outside PCM/radio processing.
 Normal radio counters are considered every two seconds (100 ms with `--verbose`).
+Repeated battery, audio-control and ignored GIP messages retain that cadence;
+identification, changed battery/authentication state and audio negotiation
+transitions request an immediate update.
 Lifecycle changes, the first observed runtime-file error and final shutdown bypass
 that interval. Per-device USB import, closure and error transitions also publish
 immediately through the asynchronous writer.

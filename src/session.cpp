@@ -83,6 +83,7 @@ struct Session::Client {
                 ++radio.owner.authenticated_; std::cout<<"AUTHENTICATED WCID="<<unsigned(radio.wcid)<<"\n";
             }) {}
         void start_auth(){
+            ++radio.owner.status_revision_;
             auth_failed=false;auth_stage="negotiating";auth_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(15);auth.start();
         }
         void fail_auth(const char *stage,const char *reason){
@@ -92,7 +93,8 @@ struct Session::Client {
             std::cout<<"AUTH FAILED WCID="<<unsigned(radio.wcid)<<" client="<<unsigned(id)<<" stage="<<auth_stage<<" peer_version="<<unsigned(auth.peer_version())<<" reason="<<reason<<'\n';
         }
         void dispatch(const GipPacket &p) {
-            if(p.command!=0x20 && p.command!=0x60)++radio.owner.status_revision_;
+            // Repeated control packets do not bypass the counter publication cadence.
+            // Advance the revision at the state transitions handled below.
             if(radio.owner.trace_)std::cout<<"GIP WCID="<<unsigned(radio.wcid)<<" client="<<unsigned(id)<<" cmd="<<unsigned(p.command)<<" bytes="<<p.payload.size()<<"\n";
             if(p.options&32) {
                 switch(p.command) {
@@ -108,9 +110,14 @@ struct Session::Client {
                 case 3: {
                     const auto status=parse_battery_status(p.payload);
                     if(id)break; // Accessory status must not disconnect its parent gamepad.
-                    if(!status.connected){radio.status_disconnected=true;break;}
-                    if(!radio.battery || radio.battery->type!=status.type || radio.battery->level!=status.level)
+                    if(!status.connected){
+                        if(!radio.status_disconnected)++radio.owner.status_revision_;
+                        radio.status_disconnected=true;break;
+                    }
+                    if(!radio.battery || radio.battery->type!=status.type || radio.battery->level!=status.level){
+                        ++radio.owner.status_revision_;
                         std::cout<<"BATTERY WCID="<<unsigned(radio.wcid)<<" type="<<unsigned(status.type)<<" level="<<unsigned(status.level)<<"\n";
+                    }
                     radio.battery=status;
                     break;
                 }
@@ -120,6 +127,7 @@ struct Session::Client {
                     for(const auto &name:classes) std::cout<<"CLASS "<<name<<"\n";
                     for(const auto &guid:identification_interfaces(p.payload))std::cout<<"INTERFACE WCID="<<unsigned(radio.wcid)<<" client="<<unsigned(id)<<" wire_guid="<<hex(guid)<<'\n';
                     identified=true;
+                    ++radio.owner.status_revision_;
                     if(std::find(classes.begin(),classes.end(),"Windows.Xbox.Input.Gamepad")!=classes.end() && !id) {
                         radio.gamepad=true;radio.kind="gamepad";
                         radio.capabilities=identification_capabilities(p.payload);
@@ -148,23 +156,31 @@ struct Session::Client {
                     } else std::cout<<"Accessory identified; input/audio support pending.\n";
                     break;
                 }
-                case 6:
+                case 6: {
                     if(auth_failed)break;
+                    const auto before_version=auth.version(),before_peer=auth.peer_version();
                     if(p.payload.size()>=10 && !(p.payload[1]&1) && (p.payload[6]==2 || p.payload[6]==0x22))
                         std::cout<<"AUTH HELLO RX WCID="<<unsigned(radio.wcid)<<" outer_command="<<unsigned(p.payload[3])<<" command="<<unsigned(p.payload[6])<<" version="<<unsigned(p.payload[7])<<" declared="<<((unsigned(p.payload[8])<<8)|p.payload[9])<<" packet="<<p.payload.size()<<'\n';
                     try{
                         const auto before=auth.version();auth.receive(p.payload);
                         if(before!=auth.version())std::cout<<"AUTH NEGOTIATE WCID="<<unsigned(radio.wcid)<<" requested_version="<<unsigned(auth.version())<<" peer_version="<<unsigned(auth.peer_version())<<'\n';
-                        if(auth.complete())auth_stage="key-installed";
+                        if(auth.complete() && auth_stage!="key-installed"){auth_stage="key-installed";++radio.owner.status_revision_;}
                     }catch(const UnsupportedAuthVersion &error){fail_auth("unsupported-version",error.what());}
                     catch(const AuthProtocolError &error){
                         std::cout<<"AUTH RESPONSE HEADER WCID="<<unsigned(radio.wcid)<<" data="<<hex(std::span(p.payload).first(std::min(size_t(10),p.payload.size())))<<'\n';
                         fail_auth("failed",error.what());
                     }
+                    if(before_version!=auth.version() || before_peer!=auth.peer_version())++radio.owner.status_revision_;
                     break;
+                }
                 case 7: if(p.payload.size()==2 && p.payload[1]==0x5b) {radio.guide=p.payload[0]!=0;radio.publish();std::cout<<"GUIDE "<<unsigned(p.payload[0])<<"\n";} break;
                 case 8:
-                    if(audio){audio->receive(p.payload,std::chrono::steady_clock::now());std::cout<<"AUDIO CONTROL RX WCID="<<unsigned(radio.wcid)<<" client="<<unsigned(id)<<" data="<<hex(p.payload)<<" stage="<<audio->stage_name()<<"\n";}break;
+                    if(audio){
+                        const auto before=audio->stage();const auto input=audio->input().code,output=audio->output().code;
+                        audio->receive(p.payload,std::chrono::steady_clock::now());
+                        if(before!=audio->stage() || input!=audio->input().code || output!=audio->output().code)++radio.owner.status_revision_;
+                        std::cout<<"AUDIO CONTROL RX WCID="<<unsigned(radio.wcid)<<" client="<<unsigned(id)<<" data="<<hex(p.payload)<<" stage="<<audio->stage_name()<<"\n";
+                    }break;
                 case 0x60:
                     if(audio && p.payload.size()>=2){
                         ++audio_received;if(audio_received==1 || audio_received%125==0)std::cout<<"AUDIO RX WCID="<<unsigned(radio.wcid)<<" client="<<unsigned(id)<<" packets="<<audio_received<<" bytes="<<p.payload.size()-2<<"\n";
@@ -280,7 +296,9 @@ void Session::process(const RadioEvent &e) {
                 if(client.logical[0] && !client.logical[0]->auth_failed)client.logical[0]->fail_auth("failed","Encryption before authentication");
                 std::cout<<"ENCRYPTION REJECTED WCID="<<unsigned(e.wcid)<<'\n';break;
             }
-            std::array<uint8_t,2> zeros{}; check(xone_mt76_send_client_command(&mt_,e.wcid,client.address.data(),XONE_MT_CLIENT_ENABLE_ENCRYPTION,zeros.data(),2),"Enable encryption"); client.encrypted=true;++status_revision_;
+            std::array<uint8_t,2> zeros{}; check(xone_mt76_send_client_command(&mt_,e.wcid,client.address.data(),XONE_MT_CLIENT_ENABLE_ENCRYPTION,zeros.data(),2),"Enable encryption");
+            if(!client.encrypted || client.logical[0]->auth_stage!="encrypted")++status_revision_;
+            client.encrypted=true;
             std::cout<<"ENCRYPTED WCID="<<unsigned(e.wcid)<<"\n";
             client.logical[0]->auth_stage="encrypted";
             if(output_ && client.gamepad)output_->connect(e.wcid);client.publish();client.rumble(0,0);
