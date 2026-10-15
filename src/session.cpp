@@ -211,6 +211,7 @@ struct Session::Client {
     std::array<std::unique_ptr<Logical>,16> logical;
     Client(Session &s,uint8_t w,Bytes mac):owner(s),wcid(w),address(std::move(mac)) {}
     ControllerStatus::UsbTx usb_tx;
+    uint64_t malformed_gip_packets=0;
     void transmit(const GipPacket &p,bool audio=false) {
         const auto encoded=encode_gip(p); const auto packet=wlan_packet(wcid,address,owner.mt_.address,encrypted,encoded,audio);
         const auto started=std::chrono::steady_clock::now();
@@ -281,10 +282,16 @@ void Session::process(const RadioEvent &e) {
         } break;
     case RadioEvent::Kind::gip:
         if(e.wcid && e.wcid<=16 && clients_[e.wcid-1]) {
+            auto &client=*clients_[e.wcid-1];
+            std::vector<GipPacket> packets;
+            // Parse the complete radio transfer before delivering any packet.
+            // Keep dispatch outside the catch: transport/output failures remain fatal.
+            try { packets=parse_gip(e.payload); }
+            catch(const std::runtime_error &) { ++client.malformed_gip_packets; break; }
             if(raw_output_ && raw_output_->target(clients_[e.wcid-1]->address)){
                 // Audio has a separate IPC type and never enters interrupt IN.
-                for(const auto &p:parse_gip(e.payload))raw_output_->event(p.command==0x60?4:2,e.wcid,encode_gip(p));
-            }else for(const auto &p:parse_gip(e.payload)) clients_[e.wcid-1]->receive(p);
+                for(const auto &p:packets)raw_output_->event(p.command==0x60?4:2,e.wcid,encode_gip(p));
+            }else for(const auto &p:packets) client.receive(p);
         }break;
     default: break;
     }
@@ -338,6 +345,7 @@ std::vector<ControllerStatus> Session::status() const {
     std::vector<ControllerStatus> out;
     for(const auto &c:clients_)if(c){
         ControllerStatus s{c->wcid,hex(c->address),c->encrypted,c->input.share,c->capabilities,c->battery,c->kind,{},"not-started",0,0,c->usb_tx};
+        s.malformed_gip_packets=c->malformed_gip_packets;
         if(c->logical[0]){const auto &l=*c->logical[0];s.authentication=l.auth_stage;s.auth_version=l.auth.version();s.peer_auth_version=l.auth.peer_version();}
         for(const auto &l:c->logical)if(l && l->audio){s.audio=ControllerStatus::Audio{l->auth_failed?"authentication-failed":l->audio_connected?"streaming-native":l->audio->stage_name(),l->audio->input().rate,l->audio->output().rate,l->audio->input().channels,l->audio->output().channels,l->audio_received,l->audio_silence,l->audio_playback,l->audio_capture,l->audio_connected?audio_output_->endpoints(c->wcid,l->id):AudioEndpoints{},l->audio_connected};break;}
         out.push_back(std::move(s));

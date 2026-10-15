@@ -333,6 +333,60 @@ int main() {
             e.kind=RadioEvent::Kind::lost;session.process(e);check(raw.events.back().kind==3 && session.status().empty(),"Raw removal not forwarded");
             session.close();
         });
+        test("Malformed radio GIP is isolated per WCID before raw or fallback dispatch",[]{
+            for(const bool passthrough:{false,true}){
+                struct Raw final:RawGipOutput{
+                    bool enabled;std::vector<std::pair<uint8_t,Bytes>> packets;
+                    explicit Raw(bool value):enabled(value){}
+                    bool target(std::span<const uint8_t>)const override{return enabled;}
+                    void event(uint8_t kind,uint8_t wcid,std::span<const uint8_t> data)override{if(kind==2 || kind==4)packets.emplace_back(wcid,Bytes(data.begin(),data.end()));}
+                    std::vector<RawGipTransmit> poll()override{return {};}
+                    void complete(uint8_t,uint32_t,int)override{}
+                } raw(passthrough);
+                usb_device usb{};device dev{};xone_mt76 mt{};mt.dev=&dev;mt.udev=&usb;
+                usb.control=[](void *,u8,u8 type,u16,u16,void *data,u16 n,unsigned)->int{if(type&128)std::memset(data,0,n);return n;};
+                usb.bulk=[](void *,u8,void *,int n,int *actual,unsigned)->int{if(actual)*actual=n;return 0;};
+                Session session(mt,nullptr,false,nullptr,&raw);RadioEvent e;e.kind=RadioEvent::Kind::association;e.address={2,0,0,0,0,1};session.process(e);
+                e.address={2,0,0,0,0,2};session.process(e);e.kind=RadioEvent::Kind::gip;e.wcid=1;
+                const auto valid=encode_gip({2,32,1,0,Bytes(28)});
+                for(const auto &bad:std::vector<Bytes>{{2},{2,32,1,128,128,128,128},{2,32,1,4,0},{2,128,1,0}}){
+                    e.payload=bad;session.process(e);
+                }
+                // A valid prefix must not escape when a later frame is malformed.
+                e.payload=valid;e.payload.push_back(2);session.process(e);
+                check(raw.packets.empty(),"Partially parsed transfer was delivered");
+                auto status=session.status();check(status.size()==2 && status[0].malformed_gip_packets==5 && status[1].malformed_gip_packets==0,
+                    "Parse failure removed a device or affected the sibling counter");
+                e.wcid=2;e.payload=valid;session.process(e);e.wcid=1;session.process(e);
+                if(passthrough)check(raw.packets.size()==2 && raw.packets[0].first==2 && raw.packets[1].first==1,"A malformed peer blocked later input or its sibling");
+                e.wcid=0;e.payload={2};session.process(e);e.wcid=17;session.process(e);
+                check(session.status()[0].malformed_gip_packets==5,"Unknown WCID changed an active counter");
+                e.kind=RadioEvent::Kind::lost;e.wcid=1;session.process(e);
+                check(session.status().size()==1 && session.status()[0].wcid==2,"Peer removal affected sibling");
+                e.kind=RadioEvent::Kind::association;e.address={2,0,0,0,0,1};session.process(e);
+                check(session.status()[0].malformed_gip_packets==0,"Reassociation inherited malformed packet count");
+                session.close();
+            }
+        });
+        test("GIP isolation does not suppress output or USB transport failures",[]{
+            struct Raw final:RawGipOutput{
+                bool fail=false;std::vector<RawGipTransmit> tx;
+                bool target(std::span<const uint8_t>)const override{return true;}
+                void event(uint8_t kind,uint8_t,std::span<const uint8_t>)override{if(kind==2 && fail)throw std::runtime_error("Output failure");}
+                std::vector<RawGipTransmit> poll()override{auto out=std::move(tx);tx.clear();return out;}
+                void complete(uint8_t,uint32_t,int)override{}
+            } raw;
+            usb_device usb{};device dev{};xone_mt76 mt{};mt.dev=&dev;mt.udev=&usb;
+            usb.control=[](void *,u8,u8 type,u16,u16,void *data,u16 n,unsigned)->int{if(type&128)std::memset(data,0,n);return n;};
+            usb.bulk=[](void *,u8,void *,int n,int *actual,unsigned)->int{if(actual)*actual=n;return 0;};
+            Session session(mt,nullptr,false,nullptr,&raw);RadioEvent e;e.kind=RadioEvent::Kind::association;e.address={2,0,0,0,0,1};session.process(e);
+            raw.fail=true;e.kind=RadioEvent::Kind::gip;e.wcid=1;e.payload=encode_gip({4,32,1,0,{}});
+            bool thrown=false;try{session.process(e);}catch(const std::runtime_error &){thrown=true;}
+            check(thrown && !session.status()[0].malformed_gip_packets,"Output failure was hidden as malformed GIP");
+            raw.fail=false;raw.tx={{1,1,e.payload}};usb.bulk=[](void *,u8,void *,int,int *,unsigned)->int{return -EREMOTEIO;};
+            thrown=false;try{session.tick();}catch(const std::runtime_error &){thrown=true;}
+            check(thrown && usb.sticky_error==-EREMOTEIO,"Physical USB failure did not propagate to recovery");
+        });
         test("USB brokers isolate WCIDs, equal completion tokens and reassociation",[]{
             struct Raw final:RawGipOutput{
                 uint8_t id;unsigned events=0;
