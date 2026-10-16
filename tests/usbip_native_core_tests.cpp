@@ -33,5 +33,23 @@ int main(){try{
     require(late.ready() && !late.stats().recovery_required && late.stats().generation==generation && late.stats().render_expired==1 && late.replies().size()==1);
     late.radio(4,1,wire,start+std::chrono::milliseconds(66));late.submit(iso_request(71,false),start+std::chrono::milliseconds(66));out=late.outbound();require(out.size()==1);
     late.complete(1,out[0].token,0,start+std::chrono::milliseconds(66));require(late.stats().audio_tx==1 && late.ready());
-    std::cout<<"PASS: RF audio, real TX ACK, 32-ms FIFO, UNLINK, generation reset, independent 2021 clock/holdover, USB-mode adaptation, render expiry and unsent PCM drop without RF reset\n";return 0;
+    for(const auto pid:{uint16_t(0x0b17),uint16_t(0x0b32)}){
+        const auto prof=profile(pid,true);Core reconnect(prof,true);Bytes body(28);body[8]=0x5e;body[9]=4;body[10]=static_cast<uint8_t>(pid);body[11]=static_cast<uint8_t>(pid>>8);
+        const auto announce=encode_gip({2,32,7,0,body});const auto stale=encode_gip({3,32,9,0,{1,2,3,4}});
+        reconnect.radio(1,1,mac,start);reconnect.radio(2,1,announce,start);configured(reconnect);
+        Request input;input.command=1;input.direction=1;input.ep=pid==0x0b17?6:1;input.length=64;input.seq=80;reconnect.submit(input,start);
+        auto read=reconnect.replies();require(read.size()==1 && Bytes(read[0].begin()+48,read[0].end())==announce);
+        reconnect.radio(2,1,stale,start);reconnect.detached();
+        const auto dropped=reconnect.stats().dropped;
+        for(unsigned i=0;i<500;++i)reconnect.radio(4,1,wire,start+std::chrono::milliseconds(i));
+        require(reconnect.stats().dropped==dropped && reconnect.stats().capture_without_usb==4000);
+        configured(reconnect);input.seq=81;reconnect.submit(input,start+std::chrono::seconds(1));read=reconnect.replies();
+        require(read.size()==1 && Bytes(read[0].begin()+48,read[0].end())==announce && reconnect.stats().announce_replays==1);
+        input.seq=82;reconnect.submit(input,start+std::chrono::seconds(1));require(reconnect.replies().empty());
+        reconnect.radio(2,1,stale,start+std::chrono::seconds(1));read=reconnect.replies();require(read.size()==1 && Bytes(read[0].begin()+48,read[0].end())==stale);
+        const auto reports=reconnect.stats().capture_drop_reports;
+        for(unsigned i=0;i<500;++i)reconnect.radio(4,1,wire,start+std::chrono::seconds(2)+std::chrono::milliseconds(i));
+        require(reconnect.stats().dropped>dropped && reconnect.stats().capture_drop_reports-reports<=1);
+    }
+    std::cout<<"PASS: RF audio, real TX ACK, bounded media, generation reset, 2021 clock, isolated expiry, clean identity-only reimport and coalesced drops\n";return 0;
 }catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}}

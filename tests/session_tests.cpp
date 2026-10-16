@@ -4,6 +4,7 @@
 #include <bcrypt.h>
 #include "session.hpp"
 #include "raw_gip_router.hpp"
+#include "auto_gip_router.hpp"
 #include "headset_audio.hpp"
 #include "audio_ipc.hpp"
 #include "synthetic_audio.hpp"
@@ -434,6 +435,34 @@ int main() {
             raw.fail=false;raw.tx={{1,1,e.payload}};usb.bulk=[](void *,u8,void *,int,int *,unsigned)->int{return -EREMOTEIO;};
             thrown=false;try{session.tick();}catch(const std::runtime_error &){thrown=true;}
             check(thrown && usb.sticky_error==-EREMOTEIO,"Physical USB failure did not propagate to recovery");
+        });
+        test("Failed USB route resets only its RF client with bounded retries",[]{
+            struct Peer final:RawGipOutput{
+                bool *fail;explicit Peer(bool *flag):fail(flag){}
+                bool target(std::span<const uint8_t> b)const override{return b.size()==6;}
+                void event(uint8_t,uint8_t,std::span<const uint8_t>)override{}
+                std::vector<RawGipTransmit> poll()override{if(*fail)throw std::runtime_error("injected route failure");return {};}
+                void complete(uint8_t,uint32_t,int)override{}
+            };
+            bool broken=false,healthy=false;
+            AutoGipRouter router(2,[&](size_t slot,const Bytes &){return std::make_unique<Peer>(slot?&healthy:&broken);});
+            usb_device usb{};device dev{};xone_mt76 mt{};mt.dev=&dev;mt.udev=&usb;
+            usb.control=[](void *,u8,u8 type,u16,u16,void *data,u16 n,unsigned)->int{if(type&128)std::memset(data,0,n);return n;};
+            usb.bulk=[](void *,u8,void *,int n,int *actual,unsigned)->int{if(actual)*actual=n;return 0;};
+            Session session(mt,nullptr,false,nullptr,&router);RadioEvent e;e.kind=RadioEvent::Kind::association;e.address={1,2,3,4,5,6};session.process(e);
+            const auto a=e.address;e.address={6,5,4,3,2,1};session.process(e);const auto now=std::chrono::steady_clock::now();
+            broken=true;session.tick(now);auto s=session.status();
+            check(s.size()==2 && s[0].output_recovering && s[0].output_recovery_attempt==1 && !s[1].output_recovering,"Fault did not isolate/mark affected client");
+            session.tick(now+std::chrono::milliseconds(999));check(session.status().size()==2,"Recovery ignored backoff");
+            session.tick(now+std::chrono::seconds(1));s=session.status();
+            check(s.size()==1 && s[0].wcid==2 && router.active()==1 && session.removals().back().reason=="output-route-failed","Failed client stayed orphaned or sibling was removed");
+            e.address=a;session.process(e);session.tick(now+std::chrono::milliseconds(1100));s=session.status();
+            check(s.size()==2 && s[0].output_recovery_attempt==2,"Repeated route failure did not increase backoff");
+            session.tick(now+std::chrono::seconds(3));check(session.status().size()==2,"Second retry fired too early");
+            session.tick(now+std::chrono::milliseconds(3100));check(session.status().size()==1,"Second retry failed to remove bad association");
+            broken=false;session.process(e);session.tick(now+std::chrono::seconds(4));s=session.status();
+            check(s.size()==2 && !s[0].output_recovering && router.active()==2,"Fresh association could not recreate working route");
+            session.close();
         });
         test("Radio TX prioritizes controls and rejects stale PCM without disconnect",[]{
             struct Raw final:RawGipOutput{

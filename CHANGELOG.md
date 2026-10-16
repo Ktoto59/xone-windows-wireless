@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Recover failed automatic USB routes through their owning RF session instead
+  of leaving an associated peer without a working Windows route. Expose failures
+  and per-device recovery state; retry with a 1-to-30-second backoff, preserving
+  other devices. Include native protocol-worker failures in the same recovery.
+- Seed repeated USB imports with a validated, bounded identity announcement;
+  discard stale service replies from the preceding USB consumer. Preserve the
+  identity across audio recovery, and clear it on a new radio association.
+  Apply the import lifecycle to both the C++ runtime and Python reference server.
+- Coalesce capture/render loss reports once per second. Count microphone frames
+  received without a USB consumer separately instead of flooding anomaly logs.
+  These lifecycle fixes do not establish that keyboard stalls or physical
+  adapter removal have been resolved; hardware checks remain necessary.
 - Isolate reliable radio/control traffic from microphone media in separate
   bounded queues, prioritize controls before unsent audio, and retain lifecycle
   and per-class ordering. Media pressure/age cannot consume control capacity.

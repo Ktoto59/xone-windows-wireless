@@ -14,6 +14,7 @@ public:
         size_t capture_high_water=0;bool layout=false;uint64_t render_expired=0,concealed=0,mode_suppressed=0;
         uint64_t power_commands=0;std::string last_power;
         bool recovery_required=false;
+        uint64_t usb_imports=0,announce_replays=0,capture_without_usb=0,capture_drop_reports=0,render_expiry_reports=0;
     };
 private:
     enum class Kind {irq_in,irq_out,capture,render};
@@ -23,16 +24,21 @@ private:
     Stats stats_;std::map<uint32_t,Pending> pending_;std::map<uint32_t,uint32_t> tokens_;
     std::deque<uint32_t> irq_wait_,capture_wait_,render_wait_;
     std::deque<Bytes> irq_,capture_;Bytes pcm_;size_t credits_=0;
+    Bytes announce_;
+    bool imported_once_=false;
+    uint64_t reported_capture_drops_=0,reported_render_expired_=0;
+    Clock::time_point capture_reported_at_{},render_reported_at_{};
     uint32_t next_token_=0;uint8_t capture_sequence_=1,render_sequence_=1;
     Clock::time_point capture_deadline_{};
     Clock::time_point radio_last_{},render_deadline_{},pcm_started_{};
     std::deque<Clock::time_point> capture_times_;
     bool clock_active(Clock::time_point now)const;
     void trim_capture(Clock::time_point now);
+    void report_media_drops(Clock::time_point now);
     std::vector<Bytes> replies_;std::vector<RawGipTransmit> outbound_;
     void finish(uint32_t seq,Completion result);
     void fail(uint32_t seq,int32_t status);
-    void expire_render(uint32_t seq);
+    void expire_render(uint32_t seq,Clock::time_point now);
     void recover_audio();
     bool cancel(uint32_t seq);
     uint32_t transmit(uint32_t seq,Bytes data,bool audio,Clock::time_point now);

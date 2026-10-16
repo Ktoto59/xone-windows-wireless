@@ -109,7 +109,8 @@ struct NativeUsbOutput::Impl {
             <<",\"Backend\":\"cpp\",\"PeerProtocolError\":"<<peer_error<<",\"Mac\":\"";
         {std::lock_guard lock(mutex);constexpr char hex[]="0123456789abcdef";for(auto b:mac)json<<hex[b>>4]<<hex[b&15];}
         json<<"\",\"PowerCommands\":"<<s.power_commands<<",\"LastPower\":\""<<s.last_power<<"\",\"UsbModeSwitchSuppressed\":"<<s.mode_suppressed<<",\"UsbClosed\":"<<usb_closed<<",\"LastUsbError\":"<<Json(last_usb_error).dump();
-        json<<",\"RecoveryRequired\":"<<s.recovery_required<<",\"RadioAssociated\":"<<(connected && core.associated())<<",\"MailboxDroppedAudio\":"<<mailbox_dropped.load();
+        json<<",\"RecoveryRequired\":"<<s.recovery_required<<",\"RadioAssociated\":"<<(connected && core.associated())<<",\"MailboxDroppedAudio\":"<<mailbox_dropped.load()
+            <<",\"UsbImports\":"<<s.usb_imports<<",\"AnnounceReplays\":"<<s.announce_replays<<",\"CaptureWithoutUsb\":"<<s.capture_without_usb;
         if(!diagnostics){json<<'}';status_writer->publish(json.str());published_life=current_life;last_status=now;return;}
         json
             <<",\"RxPackets\":"<<s.rx<<",\"TxPackets\":"<<s.tx<<",\"AudioBridge\":"<<audio<<",\"AudioLayoutSupported\":"<<s.layout
@@ -179,7 +180,10 @@ struct NativeUsbOutput::Impl {
                     }catch(const usbip::Error &e){
                         diagnostic("peer_protocol_error",{{"association",association_id},{"wcid",m.wcid},{"error",e.what()}},true);
                         peer_error=true;core.radio(3,core.stats().wcid,{});
-                        std::lock_guard lock(mutex);tx.clear();
+                        {std::lock_guard lock(mutex);tx.clear();}
+                        // Report through poll/router to the RF session. Keeping
+                        // a reset core behind a live association cannot recover.
+                        throw;
                     }
                 }
                 core.tick();service();

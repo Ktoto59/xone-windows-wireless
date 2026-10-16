@@ -20,6 +20,21 @@ def request(incoming=True, length=64, data=b''):
 
 
 class FramingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_usb_reimport_replays_only_identity_and_not_old_service_replies(self):
+        backend=RadioBackend(MAC)
+        announce=bytes((2,32,7,28))+bytes(28)
+        stale=bytes((3,32,9,4,1,2,3,4))
+        backend.announce=announce;backend.queue.extend((announce,stale));backend.imported()
+        self.assertEqual(tuple(backend.queue),(announce,stale))
+        backend.queue.popleft();backend.imported()
+        self.assertEqual(tuple(backend.queue),(announce,))
+        backend.queue.clear();backend.imported()
+        self.assertEqual(tuple(backend.queue),(announce,))
+        await backend.reset()
+        backend.imported()
+        self.assertFalse(backend.queue)
+        self.assertIsNone(backend.announce)
+
     async def test_rf_chunks_split_with_original_ack_byte_counts_and_sequence(self):
         payload = bytes(range(250))*2
         packets = [encode_chunk(4,240,149,payload[:122],500),

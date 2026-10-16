@@ -37,18 +37,36 @@ std::vector<Bytes> interrupt_packets(std::span<const uint8_t> data){
 Core::Core(const Profile &p,bool audio):profile_(p),audio_(audio),connector_(device_connector(p.pid)){}
 bool Core::clock_active(Clock::time_point now)const{return connector_.independent_clock && stats_.layout && radio_last_!=Clock::time_point{} && now-radio_last_<=std::chrono::milliseconds(128);}
 void Core::trim_capture(Clock::time_point now){
-    const auto before=stats_.dropped;
     while(!capture_.empty() && (capture_.size()>32 || now-capture_times_.front()>std::chrono::milliseconds(32))){capture_.pop_front();capture_times_.pop_front();++stats_.dropped;}
-    if(stats_.dropped!=before)diagnostic("capture_dropped",{{"wcid",stats_.wcid},{"count",stats_.dropped-before},{"total",stats_.dropped}},true);
+    report_media_drops(now);
+}
+void Core::report_media_drops(Clock::time_point now){
+    if(stats_.dropped!=reported_capture_drops_ && (capture_reported_at_==Clock::time_point{} || now-capture_reported_at_>=std::chrono::seconds(1))){
+        diagnostic("capture_dropped",{{"wcid",stats_.wcid},{"count",stats_.dropped-reported_capture_drops_},{"total",stats_.dropped},{"pending_capture",capture_wait_.size()}},true);
+        reported_capture_drops_=stats_.dropped;capture_reported_at_=now;++stats_.capture_drop_reports;
+    }
+    if(stats_.render_expired!=reported_render_expired_ && (render_reported_at_==Clock::time_point{} || now-render_reported_at_>=std::chrono::seconds(1))){
+        diagnostic("render_expired",{{"wcid",stats_.wcid},{"generation",stats_.generation},{"count",stats_.render_expired-reported_render_expired_},{"total",stats_.render_expired}},true);
+        reported_render_expired_=stats_.render_expired;render_reported_at_=now;++stats_.render_expiry_reports;
+    }
 }
 void Core::clear_audio(){pcm_.clear();capture_.clear();capture_times_.clear();stats_.layout=false;credits_=0;capture_deadline_={};render_deadline_={};radio_last_={};pcm_started_={};}
 void Core::reset(){
     while(!pending_.empty())fail(pending_.begin()->first,-19);
     tokens_.clear();irq_.clear();irq_wait_.clear();capture_wait_.clear();render_wait_.clear();outbound_.clear();clear_audio();
     stats_.wcid=0;++stats_.generation;capture_sequence_=render_sequence_=1;
+    announce_.clear();imported_once_=false;
     stats_.recovery_required=false;
 }
-void Core::imported(){detached();control_=std::make_unique<Control>(profile_);stats_.recovery_required=false;}
+void Core::imported(){
+    detached();
+    // Only the immutable identity announcement belongs in a new USB session.
+    // Never replay previous acknowledgements, power or audio commands.
+    if(imported_once_){irq_.clear();if(!announce_.empty()){irq_.push_back(announce_);++stats_.announce_replays;}}
+    imported_once_=true;++stats_.usb_imports;
+    control_=std::make_unique<Control>(profile_);stats_.recovery_required=false;
+    diagnostic("usb_session_initialized",{{"wcid",stats_.wcid},{"imports",stats_.usb_imports},{"announce_replays",stats_.announce_replays}});
+}
 void Core::detached(){pending_.clear();tokens_.clear();irq_wait_.clear();capture_wait_.clear();render_wait_.clear();outbound_.clear();replies_.clear();control_.reset();clear_audio();}
 bool Core::cancel(uint32_t seq){
     const auto it=pending_.find(seq);if(it==pending_.end())return false;
@@ -61,16 +79,17 @@ void Core::finish(uint32_t seq,Completion result){
     replies_.push_back(completion(it->second.request,result));cancel(seq);
 }
 void Core::fail(uint32_t seq,int32_t status){const auto it=pending_.find(seq);if(it!=pending_.end())finish(seq,failed(it->second.request,status));}
-void Core::expire_render(uint32_t seq){
+void Core::expire_render(uint32_t seq,Clock::time_point now){
     const auto it=pending_.find(seq);if(it==pending_.end())return;
     ++stats_.render_expired;pcm_.clear();pcm_started_={};
-    diagnostic("render_expired",{{"seq",seq},{"wcid",stats_.wcid},{"generation",stats_.generation}},true);
+    report_media_drops(now);
     Completion c;c.frame=it->second.request.frame;
     for(const auto &slot:it->second.request.iso)c.iso.push_back({slot.offset,slot.length,0,-18});
     finish(seq,std::move(c));
 }
 void Core::recover_audio(){
-    const auto wcid=stats_.wcid;reset();stats_.wcid=wcid;stats_.recovery_required=wcid!=0;
+    const auto wcid=stats_.wcid;auto announce=announce_;const auto was_imported=imported_once_;
+    reset();announce_=std::move(announce);imported_once_=was_imported;stats_.wcid=wcid;stats_.recovery_required=wcid!=0;
     diagnostic("audio_recovery_required",{{"wcid",wcid},{"generation",stats_.generation}},true);
 }
 uint32_t Core::transmit(uint32_t seq,Bytes data,bool audio,Clock::time_point now){
@@ -145,9 +164,9 @@ void Core::pump(Clock::time_point now){
     }
     while(auto seq=head(render_wait_)){
         auto &p=pending_.at(*seq);const auto &r=p.request;if(p.token)break;
-        if(now>p.media_deadline){expire_render(*seq);continue;}
+        if(now>p.media_deadline){expire_render(*seq,now);continue;}
         if(pcm_started_!=Clock::time_point{} && now-pcm_started_>connector_.render_age){
-            if(p.staged){expire_render(*seq);continue;}
+            if(p.staged){expire_render(*seq,now);continue;}
             pcm_.clear();pcm_started_={};
         }
         if(!p.staged){
@@ -170,11 +189,20 @@ void Core::radio(uint8_t kind,uint8_t wcid,std::span<const uint8_t> data,Clock::
     if(kind==1){if(!wcid || wcid>16 || data.size()!=6)throw Error("Invalid association");reset();stats_.wcid=wcid;return;}
     if(!wcid || wcid!=stats_.wcid)return;
     if(kind==3){reset();return;}
-    if(kind==2){auto wire=interrupt_packets(data);if(irq_.size()+wire.size()>256)throw Error("Interrupt queue overflow");stats_.rx+=packets(data).size();for(auto &p:wire)irq_.push_back(std::move(p));}
+    if(kind==2){
+        const auto decoded=packets(data);
+        for(const auto &p:decoded)if(p.decoded.command==2 && p.decoded.options==32 && p.decoded.payload.size()>=28 && p.wire.size()<=64){
+            const auto &body=p.decoded.payload;
+            const auto vendor=body[8]|(unsigned(body[9])<<8),product=body[10]|(unsigned(body[11])<<8);
+            if(vendor==0x045e && (product==profile_.pid || (profile_.pid==0x0b17 && product==0x0b31) || (profile_.pid==0x0b12 && product==0x0b13)))announce_=p.wire;
+        }
+        auto wire=interrupt_packets(data);if(irq_.size()+wire.size()>256)throw Error("Interrupt queue overflow");stats_.rx+=decoded.size();for(auto &p:wire)irq_.push_back(std::move(p));
+    }
     else if(kind==4){
         auto parsed=packets(data);stats_.audio_rx+=parsed.size();
         if(std::any_of(parsed.begin(),parsed.end(),[](const auto &p){return p.decoded.command!=0x60 || p.decoded.payload.size()!=386 || p.decoded.payload[0]!=0 || p.decoded.payload[1]!=6;}))throw Error("Unsupported radio PCM layout");
         stats_.layout=true;radio_last_=now;if(!audio_)return;
+        if(!control_){stats_.capture_without_usb+=parsed.size()*8;return;}
         if(parsed.size()>8){stats_.dropped+=(parsed.size()-8)*8;parsed.erase(parsed.begin(),parsed.end()-8);}
         const auto count=parsed.size()*8;
         (void)count;
@@ -183,11 +211,11 @@ void Core::radio(uint8_t kind,uint8_t wcid,std::span<const uint8_t> data,Clock::
     }else throw Error("Unknown radio event");pump(now);
 }
 void Core::complete(uint8_t wcid,uint32_t token,int32_t status,Clock::time_point now){
-    if(status || diagnostic_verbose)diagnostic("radio_tx_complete",{{"wcid",wcid},{"token",token},{"status",status}},status!=0);
+    if((status && status!=-18) || diagnostic_verbose)diagnostic("radio_tx_complete",{{"wcid",wcid},{"token",token},{"status",status}},status!=0);
     if(wcid!=stats_.wcid)return;const auto t=tokens_.find(token);if(t==tokens_.end())return;
     const auto seq=t->second;tokens_.erase(t);auto it=pending_.find(seq);if(it==pending_.end())return;auto &p=it->second;p.token=0;
     // A deliberately expired, unsent PCM block is media loss, not RF failure.
-    if(status==-18 && p.kind==Kind::render){expire_render(seq);pump(now);return;}
+    if(status==-18 && p.kind==Kind::render){expire_render(seq,now);pump(now);return;}
     if(status){const bool audio=p.kind==Kind::render;fail(seq,status);if(audio)recover_audio();pump(now);return;}
     if(p.kind==Kind::render){++stats_.audio_tx;p.deadline=now+std::chrono::seconds(5);}
     else {stats_.tx+=packets(p.request.data).size();Completion c;c.actual=static_cast<uint32_t>(p.request.length);finish(seq,c);}

@@ -2,6 +2,7 @@
 // Port of xone transport/dongle.c, Copyright (C) 2021 Severin von Wnuck-Lipinski.
 #include "session.hpp"
 #include "headset_audio.hpp"
+#include "diagnostic_log.hpp"
 #include <iostream>
 #include <stdexcept>
 #include <algorithm>
@@ -45,6 +46,9 @@ struct Session::Client {
     GamepadCapabilities capabilities{};
     std::optional<BatteryStatus> battery;
     bool status_disconnected=false;
+    std::string output_error;
+    unsigned output_recovery_attempt=0;
+    std::chrono::steady_clock::time_point output_retry{},created=std::chrono::steady_clock::now();
     unsigned identify_attempts=0;
     std::chrono::steady_clock::time_point identify_retry=std::chrono::steady_clock::now()+std::chrono::seconds(1);
     bool gamepad=false;
@@ -318,6 +322,7 @@ void Session::process(const RadioEvent &e) {
     case RadioEvent::Kind::gip:
         if(e.wcid && e.wcid<=16 && clients_[e.wcid-1]) {
             auto &client=*clients_[e.wcid-1];
+            if(!client.output_error.empty())break;
             std::vector<GipPacket> packets;
             // Parse the complete radio transfer before delivering any packet.
             // Keep dispatch outside the catch: transport/output failures remain fatal.
@@ -333,9 +338,21 @@ void Session::process(const RadioEvent &e) {
 }
 void Session::tick(std::chrono::steady_clock::time_point now) {
     auto requests=raw_output_?raw_output_->poll():std::vector<RawGipTransmit>{};
+    if(raw_output_)for(auto &fault:raw_output_->faults()){
+        if(!fault.wcid || fault.wcid>16 || !clients_[fault.wcid-1])continue;
+        auto &client=*clients_[fault.wcid-1];if(!client.output_error.empty())continue;
+        if(!output_retries_.contains(client.address) && output_retries_.size()>=64)output_retries_.erase(output_retries_.begin());
+        auto &retry=output_retries_[client.address];
+        if(now-client.created>=std::chrono::seconds(60) || now-retry.last>=std::chrono::minutes(5))retry.attempts=0;
+        retry.attempts=std::min(retry.attempts+1,6u);retry.last=now;
+        const auto delay=std::min(1u<<(retry.attempts-1),30u);
+        client.output_error=fault.error.empty()?"USB route failed":std::move(fault.error);
+        client.output_recovery_attempt=retry.attempts;client.output_retry=now+std::chrono::seconds(delay);++status_revision_;
+        diagnostic("output_route_failed",{{"wcid",fault.wcid},{"error",client.output_error},{"attempt",retry.attempts},{"retry_seconds",delay}},true);
+    }
     prioritize_control(requests);
     for(const auto &request:requests){
-        if(!request.wcid || request.wcid>16 || !clients_[request.wcid-1] || !raw_output_->target(clients_[request.wcid-1]->address)){
+        if(!request.wcid || request.wcid>16 || !clients_[request.wcid-1] || !clients_[request.wcid-1]->output_error.empty() || !raw_output_->target(clients_[request.wcid-1]->address)){
             raw_output_->complete(request.wcid,request.token,-19);continue;
         }
         std::vector<GipPacket> packets;
@@ -352,6 +369,10 @@ void Session::tick(std::chrono::steady_clock::time_point now) {
         raw_output_->complete(request.wcid,request.token,0);
     }
     // Defer removal until dispatch/GipLink no longer owns the active client stack.
+    for(uint8_t w=1;w<=16;++w)if(clients_[w-1] && !clients_[w-1]->output_error.empty() && now>=clients_[w-1]->output_retry){
+        diagnostic("output_route_recovery_reset",{{"wcid",w},{"attempt",clients_[w-1]->output_recovery_attempt}},true);
+        remove(w,"output-route-failed");
+    }
     for(uint8_t w=1;w<=16;++w)if(clients_[w-1] && clients_[w-1]->status_disconnected)remove(w,"gip-status-disconnected");
     if(pairing_ && now>=pair_deadline_)pairing(false);
     // Scan only with an empty client table: changing channel during auth/audio breaks it.
@@ -387,6 +408,7 @@ std::vector<ControllerStatus> Session::status() const {
     for(const auto &c:clients_)if(c){
         ControllerStatus s{c->wcid,hex(c->address),c->encrypted,c->input.share,c->capabilities,c->battery,c->kind,{},"not-started",0,0,c->usb_tx};
         s.malformed_gip_packets=c->malformed_gip_packets;
+        s.output_recovering=!c->output_error.empty();s.output_recovery_attempt=c->output_recovery_attempt;s.output_error=c->output_error;
         if(c->logical[0]){const auto &l=*c->logical[0];s.authentication=l.auth_stage;s.auth_version=l.auth.version();s.peer_auth_version=l.auth.peer_version();}
         for(const auto &l:c->logical)if(l && l->audio){s.audio=ControllerStatus::Audio{l->auth_failed?"authentication-failed":l->audio_connected?"streaming-native":l->audio->stage_name(),l->audio->input().rate,l->audio->output().rate,l->audio->input().channels,l->audio->output().channels,l->audio_received,l->audio_silence,l->audio_playback,l->audio_capture,l->audio_connected?audio_output_->endpoints(c->wcid,l->id):AudioEndpoints{},l->audio_connected};break;}
         out.push_back(std::move(s));

@@ -173,6 +173,8 @@ class RadioBackend:
         self.wcid = 0
         self.generation = 0
         self.queue = deque()
+        self.announce = None
+        self.usb_imports = 0
         self.audio_queue = deque()
         self.audio_probe = audio_probe or audio_bridge
         self.audio_bridge = audio_bridge
@@ -216,9 +218,16 @@ class RadioBackend:
     def imported(self):
         self.clear_audio()
         self.recovery_required = False
+        if self.usb_imports:
+            self.queue.clear()
+            if self.announce is not None:
+                self.queue.append(self.announce)
+        self.usb_imports += 1
 
     async def recover_audio(self):
+        announce, imports = self.announce, self.usb_imports
         await self.reset(recover_usb=True)
+        self.announce, self.usb_imports = announce, imports
         trace.event('audio_recovery_required', suspicious=True, wcid=self.wcid, generation=self.generation)
 
     def event(self, **fields):
@@ -231,6 +240,8 @@ class RadioBackend:
             self.wcid = 0
         self.generation += 1
         self.queue.clear()
+        self.announce = None
+        self.usb_imports = 0
         self.clear_audio()
         self.audio_sequence = 1
         self.capture_sequence = 1
@@ -325,6 +336,10 @@ class RadioBackend:
                     self.event(operation='radio_associated', wcid=wcid)
                 elif kind == 2 and wcid == self.wcid and wcid != 0 and token == 0:
                     radio_packets = gip_packets(payload)
+                    for p in radio_packets:
+                        body = p[gip_header_size(p):]
+                        if p[0] == 2 and p[1] == 32 and len(body) >= 28 and len(p) <= 64 and body[8:10] == b'\x5e\x04':
+                            self.announce = p
                     if self.on_announce is not None:
                         for p in radio_packets:
                             body = p[gip_header_size(p):]

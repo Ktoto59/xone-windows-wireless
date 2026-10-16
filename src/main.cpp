@@ -439,7 +439,8 @@ int radio_test(const Options &opt,bool controller=false,bool run=false) {
                     constexpr const char *levels[]={"low","normal","high","full"};
                     json<<"{\"Type\":\""<<types[c.battery->type]<<"\",\"Level\":\""<<(c.battery->type?levels[c.battery->level]:"unknown")<<"\",\"RawType\":"<<unsigned(c.battery->type)<<",\"RawLevel\":"<<unsigned(c.battery->level)<<'}';
                 }else json<<"null";
-                json<<",\"MalformedGipPackets\":"<<c.malformed_gip_packets;
+                json<<",\"MalformedGipPackets\":"<<c.malformed_gip_packets
+                    <<",\"OutputRecovering\":"<<c.output_recovering<<",\"OutputRecoveryAttempt\":"<<c.output_recovery_attempt<<",\"OutputError\":"<<xone::Json(c.output_error).dump();
                 json<<",\"UsbTx\":{\"Packets\":"<<c.usb_tx.packets<<",\"Over8ms\":"<<c.usb_tx.over_8ms
                     <<",\"MaxUs\":"<<c.usb_tx.max_us<<",\"LastUs\":"<<c.usb_tx.last_us<<"},\"Audio\":";
                 if(c.audio){json<<"{\"Stage\":\""<<c.audio->stage<<"\",\"InputRate\":"<<c.audio->input_rate<<",\"OutputRate\":"<<c.audio->output_rate<<",\"InputChannels\":"<<unsigned(c.audio->input_channels)<<",\"OutputChannels\":"<<unsigned(c.audio->output_channels)<<",\"ReceivedPackets\":"<<c.audio->received_packets<<",\"SilencePackets\":"<<c.audio->silence_packets<<",\"PlaybackPackets\":"<<c.audio->playback_packets<<",\"CapturePackets\":"<<c.audio->capture_packets<<",\"WindowsEndpoint\":"<<(!c.audio->endpoints.render.empty() && !c.audio->endpoints.capture.empty())<<",\"SyntheticGamepadParent\":"<<c.audio->synthetic_parent<<",\"RenderId\":\""<<c.audio->endpoints.render<<"\",\"CaptureId\":\""<<c.audio->endpoints.capture<<"\"}";}
@@ -448,7 +449,7 @@ int radio_test(const Options &opt,bool controller=false,bool run=false) {
             }
             json<<"],\"RecentRadioRemovals\":[";bool first_removal=true;
             for(const auto &r:session.removals()){if(!first_removal)json<<',';first_removal=false;json<<"{\"Mac\":\""<<r.mac<<"\",\"Reason\":\""<<r.reason<<"\",\"Wcid\":"<<unsigned(r.wcid)<<",\"TickMs\":"<<r.tick_ms<<'}';}
-            json<<"],\"RadioPower\":\""<<radio_power<<"\",\"RuntimeFileIoErrors\":"<<runtime_files.io_errors()<<"}\n";const auto text=json.str();if(text==previous_status)return;
+            json<<"],\"RadioPower\":\""<<radio_power<<"\",\"OutputRouteFailures\":"<<(raw_output?raw_output->failures():0)<<",\"RuntimeFileIoErrors\":"<<runtime_files.io_errors()<<"}\n";const auto text=json.str();if(text==previous_status)return;
             runtime_files.publish(text);
             previous_status=text;
         };

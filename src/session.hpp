@@ -8,6 +8,7 @@
 #include "raw_gip.hpp"
 #include <memory>
 #include <chrono>
+#include <map>
 extern "C" {
 #include "mt76/mt76.h"
 }
@@ -27,6 +28,9 @@ struct ControllerStatus {
     uint8_t auth_version,peer_auth_version;
     struct UsbTx { uint64_t packets=0,over_8ms=0; int64_t max_us=0,last_us=0; } usb_tx;
     uint64_t malformed_gip_packets=0;
+    bool output_recovering=false;
+    unsigned output_recovery_attempt=0;
+    std::string output_error;
 };
 class Session {
     struct Client;
@@ -46,6 +50,8 @@ class Session {
     uint64_t status_revision_=0;
     struct Removal {std::string mac,reason;uint8_t wcid;uint64_t tick_ms;};
     std::vector<Removal> removals_;
+    struct OutputRecovery {unsigned attempts=0;std::chrono::steady_clock::time_point last{};};
+    std::map<Bytes,OutputRecovery> output_retries_;
     void check(int result,const char *operation);
     void pairing(bool enabled);
     void remove(uint8_t wcid,const char *reason="session-close");
