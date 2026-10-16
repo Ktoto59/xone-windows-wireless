@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add a process-local native USB/IP MMCSS override for controlled development
+  comparisons (`Run-Development.ps1 -NoUsbMmcss`). Expose sparse initialization
+  progress and aggregate worker scheduling counters without packet logging.
+  Default scheduling and protocol behavior remain unchanged.
+
 - Recover failed automatic USB routes through their owning RF session instead
   of leaving an associated peer without a working Windows route. Expose failures
   and per-device recovery state; retry with a 1-to-30-second backoff, preserving

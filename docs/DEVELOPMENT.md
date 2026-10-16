@@ -36,6 +36,9 @@ does not change bindings, power policy, pairing, or installed binaries.
 .\scripts\Build-Appliance.cmd
 .\scripts\Run-Development.ps1 -Backend cpp -TakeOverInstalled -Seconds 0
 
+# A/B diagnosis: disable MMCSS only on native USB/IP workers in this session.
+.\scripts\Run-Development.ps1 -Backend cpp -TakeOverInstalled -NoUsbMmcss -Seconds 0
+
 # Explicit short packet/URB trace when individual transfers need investigation.
 .\scripts\Run-Development.ps1 -Backend cpp -TakeOverInstalled -CppPacketTrace -Seconds 60
 ```
@@ -76,6 +79,25 @@ also controls the shared C++ radio in Python sessions; Python call/line tracing
 is separate and remains controlled by `-TraceLevel`. C++ uses independent 2048-event
 ordinary/anomaly queues, 8 MiB journals with three backups and one-second writer
 shutdown; see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+
+`-NoUsbMmcss` sets the child-process override `XONE_USB_MMCSS=0`; the launcher
+restores its previous environment afterward. It changes neither Windows MMCSS
+policy nor the radio process priority. Normal audio workers still request
+`Pro Audio` unless this override is set. Compare both settings on the same
+hardware before treating priority as a cause of input latency.
+
+Quiet C++ slot snapshots also expose `MmcssRequested`, `Mmcss`, worker CPU time
+in 100 ns units, loop iterations, maximum mailbox delay, radio batch and socket
+dispatch duration in microseconds. CPU time and maxima are cumulative per
+worker; compare snapshot deltas for a measurement window. Wall-time maxima
+include preemption and do not establish CPU consumption or end-to-end latency.
+`UsbInitialization` counters reset on each import and identify configuration,
+interface, interrupt and audio requests. Sparse `usb_initialization_*` events
+mark the first request of each kind and first control command ID per import,
+without packet payloads. `Ready` describes the RF route, not completed Windows
+audio enumeration. The existing synthetic server probe does not emulate the
+full headset identity/handshake: a clean enumeration-only test cannot exclude
+a stall during subsequent GIP or audio initialization.
 
 Tracing covers calls/resumes, returns/yields and exceptions in **every Python
 runtime module under `src/`**, including connectors and telemetry. `lines` adds

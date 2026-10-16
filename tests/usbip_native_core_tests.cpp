@@ -39,11 +39,14 @@ int main(){try{
         reconnect.radio(1,1,mac,start);reconnect.radio(2,1,announce,start);configured(reconnect);
         Request input;input.command=1;input.direction=1;input.ep=pid==0x0b17?6:1;input.length=64;input.seq=80;reconnect.submit(input,start);
         auto read=reconnect.replies();require(read.size()==1 && Bytes(read[0].begin()+48,read[0].end())==announce);
+        require(reconnect.initialization().configurations==1 && reconnect.initialization().interfaces==1 && reconnect.initialization().irq_in==1 && reconnect.initialization().irq_delivered==1);
         reconnect.radio(2,1,stale,start);reconnect.detached();
+        require(reconnect.initialization().irq_delivered==1);
         const auto dropped=reconnect.stats().dropped;
         for(unsigned i=0;i<500;++i)reconnect.radio(4,1,wire,start+std::chrono::milliseconds(i));
         require(reconnect.stats().dropped==dropped && reconnect.stats().capture_without_usb==4000);
-        configured(reconnect);input.seq=81;reconnect.submit(input,start+std::chrono::seconds(1));read=reconnect.replies();
+        configured(reconnect);require(reconnect.initialization().irq_in==0 && reconnect.initialization().irq_delivered==0);
+        input.seq=81;reconnect.submit(input,start+std::chrono::seconds(1));read=reconnect.replies();
         require(read.size()==1 && Bytes(read[0].begin()+48,read[0].end())==announce && reconnect.stats().announce_replays==1);
         input.seq=82;reconnect.submit(input,start+std::chrono::seconds(1));require(reconnect.replies().empty());
         reconnect.radio(2,1,stale,start+std::chrono::seconds(1));read=reconnect.replies();require(read.size()==1 && Bytes(read[0].begin()+48,read[0].end())==stale);

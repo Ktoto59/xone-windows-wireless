@@ -113,6 +113,40 @@ class NativeTransportTests(unittest.TestCase):
         self.assertEqual(payload[:8], bytes((0x60, 32, 1, 50, 192, 0, 2, 3)))
         self.assertEqual([struct.unpack_from('!IIII', slots, n*16)[2] for n in range(8)], [54]*8)
 
+    def test_mmcss_can_be_disabled_without_disabling_usb(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        status = Path(directory.name)/'status.json'
+        with patch.dict(os.environ, {'XONE_USB_MMCSS': '0'}):
+            self.start('0b32', status)
+        owner = self.connect(0x8003)
+        exact(owner, 320)
+        owner.sendall(submit(1, 0, 0, setup=bytes.fromhex('0009010000000000')))
+        self.assertEqual(struct.unpack_from('!i', exact(owner, 48), 20)[0], 0)
+        owner.sendall(submit(2, 1, 1, length=64))
+        self.process.stdin.write('input\n')
+        self.process.stdin.flush()
+        self.assertEqual(struct.unpack_from('!ii', exact(owner, 48), 20), (0, 8))
+        self.assertEqual(exact(owner, 8), bytes((3, 32, 1, 4, 0, 0, 0, 0)))
+        deadline = time.monotonic()+4
+        while time.monotonic() < deadline:
+            try:
+                state = json.loads(status.read_text(encoding='utf-8'))
+                if state['UsbInitialization']['InterruptDelivered'] == 1:
+                    break
+            except (OSError, ValueError):
+                pass
+            time.sleep(.02)
+        else:
+            self.fail('Initialization snapshot timeout')
+        self.assertFalse(state['MmcssRequested'])
+        self.assertFalse(state['Mmcss'])
+        self.assertEqual(state['MmcssError'], 0)
+        self.assertEqual(state['UsbInitialization']['Configurations'], 1)
+        self.assertEqual(state['UsbInitialization']['InterruptIn'], 1)
+        self.assertGreater(state['WorkerIterations'], 0)
+        self.assertGreaterEqual(state['WorkerCpu100ns'], 0)
+
     def test_import_and_close_status_bypass_counter_cadence(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)

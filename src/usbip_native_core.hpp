@@ -9,6 +9,11 @@ namespace xone::usbip {
 class Core {
 public:
     using Clock=std::chrono::steady_clock;
+    // Per-import progress, retained after detach so a failed initialization can
+    // be inspected without enabling packet logging. No payloads are retained.
+    struct Initialization {
+        uint64_t configurations=0,interfaces=0,irq_in=0,irq_out=0,irq_delivered=0,capture=0,render=0,commands=0;
+    };
     struct Stats {
         uint8_t wcid=0;uint64_t generation=0,rx=0,tx=0,audio_rx=0,audio_tx=0,capture_slots=0,dropped=0;
         size_t capture_high_water=0;bool layout=false;uint64_t render_expired=0,concealed=0,mode_suppressed=0;
@@ -22,6 +27,7 @@ private:
     const Profile &profile_;bool audio_;std::unique_ptr<Control> control_;
     DeviceConnector connector_;
     Stats stats_;std::map<uint32_t,Pending> pending_;std::map<uint32_t,uint32_t> tokens_;
+    Initialization initialization_;
     std::deque<uint32_t> irq_wait_,capture_wait_,render_wait_;
     std::deque<Bytes> irq_,capture_;Bytes pcm_;size_t credits_=0;
     Bytes announce_;
@@ -50,6 +56,7 @@ public:
     bool associated()const{return stats_.wcid!=0;}
     bool ready()const{return associated() && !stats_.recovery_required;}
     const Stats &stats()const{return stats_;}
+    const Initialization &initialization()const{return initialization_;}
     void imported();
     void detached();
     void submit(Request request,Clock::time_point now=Clock::now());

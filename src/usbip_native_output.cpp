@@ -55,7 +55,8 @@ struct NativeUsbOutput::Impl {
     std::string last_usb_error;uint64_t usb_closed=0;std::atomic_uint64_t mailbox_dropped=0;
     std::vector<std::unique_ptr<Client>> clients;Client *imported=nullptr;
     std::unique_ptr<LatestSnapshot> status_writer;
-    usbip::Core::Clock::time_point last_status{};bool mmcss=false,peer_error=false;DWORD mmcss_error=0;
+    usbip::Core::Clock::time_point last_status{};bool mmcss=false,mmcss_requested=false,peer_error=false;DWORD mmcss_error=0;
+    uint64_t worker_iterations=0,max_mailbox_delay_us=0,max_radio_batch_us=0,max_socket_dispatch_us=0;
     std::atomic_uint64_t address_revision=0;
     std::atomic_bool streaming_audio=false;
     uint64_t association_id=0;
@@ -105,17 +106,23 @@ struct NativeUsbOutput::Impl {
         if(!status_writer)return;const auto &s=core.stats();const auto now=usbip::Core::Clock::now();
         const auto current_life=std::tuple{connected,s.wcid,s.generation,peer_error,address_revision.load(),imported!=nullptr,usb_closed,last_usb_error,s.recovery_required};
         if(published_life==current_life && now-last_status<std::chrono::seconds(2))return;
+        FILETIME created{},exited{},kernel{},user{};uint64_t cpu_100ns=0;
+        if(GetThreadTimes(GetCurrentThread(),&created,&exited,&kernel,&user))cpu_100ns=(uint64_t(kernel.dwHighDateTime)<<32|kernel.dwLowDateTime)+(uint64_t(user.dwHighDateTime)<<32|user.dwLowDateTime);
+        const auto &init=core.initialization();
         std::ostringstream json;json<<std::boolalpha<<"{\"Pid\":"<<product<<",\"Connector\":\""<<device_connector(product).name<<"\",\"UsbImported\":"<<(imported!=nullptr)<<",\"VirtualSerial\":\""<<profile.virtual_serial<<"\",\"AssociationId\":"<<association_id<<",\"RadioConnected\":"<<connected<<",\"Ready\":"<<(connected && core.ready())<<",\"Wcid\":"<<unsigned(s.wcid)<<",\"Generation\":"<<(association_id*100+s.generation)
             <<",\"Backend\":\"cpp\",\"PeerProtocolError\":"<<peer_error<<",\"Mac\":\"";
         {std::lock_guard lock(mutex);constexpr char hex[]="0123456789abcdef";for(auto b:mac)json<<hex[b>>4]<<hex[b&15];}
         json<<"\",\"PowerCommands\":"<<s.power_commands<<",\"LastPower\":\""<<s.last_power<<"\",\"UsbModeSwitchSuppressed\":"<<s.mode_suppressed<<",\"UsbClosed\":"<<usb_closed<<",\"LastUsbError\":"<<Json(last_usb_error).dump();
         json<<",\"RecoveryRequired\":"<<s.recovery_required<<",\"RadioAssociated\":"<<(connected && core.associated())<<",\"MailboxDroppedAudio\":"<<mailbox_dropped.load()
-            <<",\"UsbImports\":"<<s.usb_imports<<",\"AnnounceReplays\":"<<s.announce_replays<<",\"CaptureWithoutUsb\":"<<s.capture_without_usb;
+            <<",\"UsbImports\":"<<s.usb_imports<<",\"AnnounceReplays\":"<<s.announce_replays<<",\"CaptureWithoutUsb\":"<<s.capture_without_usb
+            <<",\"Mmcss\":"<<mmcss<<",\"MmcssRequested\":"<<mmcss_requested<<",\"MmcssError\":"<<mmcss_error
+            <<",\"WorkerCpu100ns\":"<<cpu_100ns<<",\"WorkerIterations\":"<<worker_iterations<<",\"MaxMailboxDelayUs\":"<<max_mailbox_delay_us<<",\"MaxRadioBatchUs\":"<<max_radio_batch_us<<",\"MaxSocketDispatchUs\":"<<max_socket_dispatch_us
+            <<",\"UsbInitialization\":{\"Configurations\":"<<init.configurations<<",\"Interfaces\":"<<init.interfaces<<",\"InterruptIn\":"<<init.irq_in<<",\"InterruptOut\":"<<init.irq_out<<",\"InterruptDelivered\":"<<init.irq_delivered<<",\"Capture\":"<<init.capture<<",\"Render\":"<<init.render<<",\"GipCommands\":"<<init.commands<<'}';
         if(!diagnostics){json<<'}';status_writer->publish(json.str());published_life=current_life;last_status=now;return;}
         json
             <<",\"RxPackets\":"<<s.rx<<",\"TxPackets\":"<<s.tx<<",\"AudioBridge\":"<<audio<<",\"AudioLayoutSupported\":"<<s.layout
             <<",\"AudioRxPackets\":"<<s.audio_rx<<",\"AudioTxPackets\":"<<s.audio_tx<<",\"UsbAudioInCompletions\":"<<s.capture_slots<<",\"CaptureDroppedFrames\":"<<s.dropped
-            <<",\"CaptureQueueHighWater\":"<<s.capture_high_water<<",\"RenderExpiredRequests\":"<<s.render_expired<<",\"CaptureConcealedFrames\":"<<s.concealed<<",\"UsbModeSwitchSuppressed\":"<<s.mode_suppressed<<",\"Mmcss\":"<<mmcss<<",\"MmcssError\":"<<mmcss_error<<"}";
+            <<",\"CaptureQueueHighWater\":"<<s.capture_high_water<<",\"RenderExpiredRequests\":"<<s.render_expired<<",\"CaptureConcealedFrames\":"<<s.concealed<<",\"UsbModeSwitchSuppressed\":"<<s.mode_suppressed<<"}";
         status_writer->publish(json.str());published_life=current_life;last_status=now;
     }
     void parse(Client &c){
@@ -164,14 +171,19 @@ struct NativeUsbOutput::Impl {
         publish();
     }
     void run(){
-        DWORD task_index=0;HANDLE scheduling=audio?AvSetMmThreadCharacteristicsW(L"Pro Audio",&task_index):nullptr;
-        mmcss=scheduling!=nullptr;if(audio && !mmcss)mmcss_error=GetLastError();
+        wchar_t setting[2]{};const auto setting_length=GetEnvironmentVariableW(L"XONE_USB_MMCSS",setting,2);
+        mmcss_requested=audio && !(setting_length==1 && setting[0]==L'0');
+        DWORD task_index=0;HANDLE scheduling=mmcss_requested?AvSetMmThreadCharacteristicsW(L"Pro Audio",&task_index):nullptr;
+        mmcss=scheduling!=nullptr;if(mmcss_requested && !mmcss)mmcss_error=GetLastError();
+        diagnostic("usb_worker_scheduling",{{"association",association_id},{"mmcss_requested",mmcss_requested},{"mmcss",mmcss},{"error",mmcss_error},{"thread_priority",GetThreadPriority(GetCurrentThread())}});
         try{
             publish();
             for(;;){
+                ++worker_iterations;const auto batch_started=usbip::Core::Clock::now();
                 std::deque<Message> events;
                 {std::lock_guard lock(mutex);if(stopping)break;events=inbox.drain();report_mailbox_drops();if(inbox.empty())ResetEvent(wake);else SetEvent(wake);}
                 for(const auto &m:events){
+                    max_mailbox_delay_us=std::max(max_mailbox_delay_us,static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(usbip::Core::Clock::now()-m.arrived).count()));
                     if(m.kind==1 || m.kind==3){std::lock_guard lock(mutex);tx.clear();}
                     if(m.kind==1 || m.kind==3)for(auto &client:clients)client->dead=true;
                     try{
@@ -187,6 +199,7 @@ struct NativeUsbOutput::Impl {
                     }
                 }
                 core.tick();service();
+                max_radio_batch_us=std::max(max_radio_batch_us,static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(usbip::Core::Clock::now()-batch_started).count()));
                 auto deadline=usbip::Core::Clock::now()+std::chrono::seconds(2);if(const auto needed=core.wake_at())deadline=std::min(deadline,*needed);
                 const auto delay=std::chrono::duration_cast<std::chrono::nanoseconds>(deadline-usbip::Core::Clock::now()).count();LARGE_INTEGER due;due.QuadPart=-std::max(int64_t(1),static_cast<int64_t>(delay/100));
                 if(!SetWaitableTimer(timer,&due,0,nullptr,nullptr,FALSE))throw usbip::Error("Cannot schedule native USB timer");
@@ -198,10 +211,12 @@ struct NativeUsbOutput::Impl {
                     WSANETWORKEVENTS flags{};if(WSAEnumNetworkEvents(listener,accept_event,&flags))throw usbip::Error("Native USB listener failed");
                     for(;;){auto s=accept(listener,nullptr,nullptr);if(s==INVALID_SOCKET){if(WSAGetLastError()!=WSAEWOULDBLOCK)throw usbip::Error("USB accept failed");break;}if(clients.size()>=16){closesocket(s);continue;}clients.push_back(std::make_unique<Client>(s));}
                 }else if(index>=3){
+                    const auto dispatch_started=usbip::Core::Clock::now();
                     auto &c=*clients[index-3];WSANETWORKEVENTS flags{};
                     try{if(WSAEnumNetworkEvents(c.socket,c.event,&flags))throw usbip::Error("USB socket failed");
                         if(flags.lNetworkEvents&FD_READ){c.read();if(!c.dead)parse(c);}if(flags.lNetworkEvents&FD_CLOSE)c.dead=true;if(!c.dead)c.flush();
                     }catch(const usbip::Error &e){last_usb_error=e.what();diagnostic("usb_client_error",{{"association",association_id},{"error",last_usb_error}},true);c.dead=true;}
+                    max_socket_dispatch_us=std::max(max_socket_dispatch_us,static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(usbip::Core::Clock::now()-dispatch_started).count()));
                 }
             }
         }catch(const std::exception &e){std::lock_guard lock(mutex);error=e.what();diagnostic("usb_worker_failed",{{"association",association_id},{"error",error}},true);}

@@ -6,8 +6,10 @@ param([ValidateSet('calls','lines')][string]$TraceLevel='calls',
       [ValidateRange(1,16)][int]$Slots=8,
       [string]$InstanceId='', [string]$PythonPath='',
       [switch]$CppPacketTrace,
+      [switch]$NoUsbMmcss,
       [switch]$TakeOverInstalled)
 $ErrorActionPreference='Stop'
+if($NoUsbMmcss -and $Backend -ne 'cpp'){throw '-NoUsbMmcss requires -Backend cpp.'}
 $taskRoot=Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'Setup-Helpers.ps1')
 $taskInstalled=Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Programs/xone-windows-wireless'
@@ -39,8 +41,9 @@ $taskOldDirectory=$env:XONE_DEVELOPMENT_LOG_DIR
 $taskOldTrace=$env:XONE_DEVELOPMENT_TRACE
 $taskOldCppDirectory=$env:XONE_CPP_LOG_DIR
 $taskOldCppTrace=$env:XONE_CPP_TRACE
+$taskOldUsbMmcss=$env:XONE_USB_MMCSS
 $taskChild=$null;$taskRestored=$false;$taskStoppedInstalled=$false
-$taskMetadata=[ordered]@{StartedUtc=[datetime]::UtcNow.ToString('o');FinishedUtc=$null;Backend=$Backend;TraceLevel=$TraceLevel;CppPacketTrace=[bool]$CppPacketTrace;Seconds=$Seconds;Slots=$Slots;RadioSHA256=(Get-FileHash -LiteralPath $taskRadio -Algorithm SHA256).Hash;Python=$PythonPath;ProductionRestored=$false;ExitCode=$null;Error=$null}
+$taskMetadata=[ordered]@{StartedUtc=[datetime]::UtcNow.ToString('o');FinishedUtc=$null;Backend=$Backend;TraceLevel=$TraceLevel;CppPacketTrace=[bool]$CppPacketTrace;UsbMmcssDisabled=([bool]$NoUsbMmcss -or $taskOldUsbMmcss -eq '0');Seconds=$Seconds;Slots=$Slots;RadioSHA256=(Get-FileHash -LiteralPath $taskRadio -Algorithm SHA256).Hash;Python=$PythonPath;ProductionRestored=$false;ExitCode=$null;Error=$null}
 Push-Location -LiteralPath $taskRoot
 try{
     $taskMetadata.Branch=(& git branch --show-current | Out-String).Trim()
@@ -57,6 +60,7 @@ try{
     $env:XONE_DEVELOPMENT_TRACE=$TraceLevel
     $env:XONE_CPP_LOG_DIR=$taskDirectory
     $env:XONE_CPP_TRACE=if($CppPacketTrace){'1'}else{'0'}
+    if($NoUsbMmcss){$env:XONE_USB_MMCSS='0'}
     $taskArguments='-u '+(Quote-XonePath (Join-Path $taskRoot 'src/usbip_auto_manager.py'))+' --root '+(Quote-XonePath $taskRoot)+' --instance '+(Quote-XonePath $taskAdapter)+' --usbip '+(Quote-XonePath $taskUsbip)+' --slots '+$Slots
     $taskLaunch=@{FilePath=$PythonPath;ArgumentList=$taskArguments;WorkingDirectory=$taskRoot;WindowStyle='Hidden';RedirectStandardOutput=(Join-Path $taskDirectory 'supervisor-stdout.log');RedirectStandardError=(Join-Path $taskDirectory 'supervisor-stderr.log');PassThru=$true}
     if($Backend -eq 'cpp'){$taskLaunch.FilePath=$taskHost;$taskLaunch.ArgumentList='--instance '+(Quote-XonePath $taskAdapter)}
@@ -79,6 +83,7 @@ try{
     $env:XONE_DEVELOPMENT_TRACE=$taskOldTrace
     $env:XONE_CPP_LOG_DIR=$taskOldCppDirectory
     $env:XONE_CPP_TRACE=$taskOldCppTrace
+    $env:XONE_USB_MMCSS=$taskOldUsbMmcss
     if($taskChild){
         if(-not $taskChild.HasExited){
             [IO.File]::WriteAllText((Join-Path $taskRoot 'work/usb-gip.stop'),'development session finished')

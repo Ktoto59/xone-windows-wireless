@@ -56,6 +56,7 @@ void Core::reset(){
     tokens_.clear();irq_.clear();irq_wait_.clear();capture_wait_.clear();render_wait_.clear();outbound_.clear();clear_audio();
     stats_.wcid=0;++stats_.generation;capture_sequence_=render_sequence_=1;
     announce_.clear();imported_once_=false;
+    initialization_={};
     stats_.recovery_required=false;
 }
 void Core::imported(){
@@ -64,6 +65,7 @@ void Core::imported(){
     // Never replay previous acknowledgements, power or audio commands.
     if(imported_once_){irq_.clear();if(!announce_.empty()){irq_.push_back(announce_);++stats_.announce_replays;}}
     imported_once_=true;++stats_.usb_imports;
+    initialization_={};
     control_=std::make_unique<Control>(profile_);stats_.recovery_required=false;
     diagnostic("usb_session_initialized",{{"wcid",stats_.wcid},{"imports",stats_.usb_imports},{"announce_replays",stats_.announce_replays}});
 }
@@ -106,6 +108,8 @@ void Core::submit(Request r,Clock::time_point now){
         try{
             auto data=control_->submit(r);Completion c;c.actual=static_cast<uint32_t>(data.size());c.data=std::move(data);replies_.push_back(completion(r,c));
             if((r.setup[0]==0 && r.setup[1]==9) || (r.setup[0]==1 && r.setup[1]==11)){
+                auto &count=r.setup[1]==9?initialization_.configurations:initialization_.interfaces;
+                if(++count==1)diagnostic("usb_initialization_control",{{"wcid",stats_.wcid},{"import",stats_.usb_imports},{"request",r.setup[1]},{"value",r.setup[2]|(unsigned(r.setup[3])<<8)},{"index",r.setup[4]|(unsigned(r.setup[5])<<8)}});
                 std::vector<uint32_t> disabled;
                 for(const auto &[seq,p]:pending_)if(r.setup[1]==9 || !control_->endpoint(static_cast<uint8_t>(p.request.ep|(p.request.direction?128:0))))disabled.push_back(seq);
                 for(auto seq:disabled)fail(seq,-108);
@@ -121,9 +125,17 @@ void Core::submit(Request r,Clock::time_point now){
     const auto kind=iso?(r.direction?Kind::capture:Kind::render):(r.direction?Kind::irq_in:Kind::irq_out);
     if(!iso && !r.direction){
         try{auto parsed=packets(r.data);if(r.length>64 || std::any_of(parsed.begin(),parsed.end(),[](const auto &p){return p.decoded.command==0x60;})){reject(-95);return;}
-            for(const auto &p:parsed)if(p.decoded.command==5){++stats_.power_commands;stats_.last_power=hex(p.wire);}}
+            for(const auto &p:parsed){
+                if(p.decoded.command==5){++stats_.power_commands;stats_.last_power=hex(p.wire);}
+                if(p.decoded.command<64){const auto bit=uint64_t(1)<<p.decoded.command;
+                    if(!(initialization_.commands&bit))diagnostic("usb_initialization_gip",{{"wcid",stats_.wcid},{"import",stats_.usb_imports},{"command",p.decoded.command},{"length",p.wire.size()}});
+                    initialization_.commands|=bit;
+                }
+            }}
         catch(const Error &){reject(-71);return;}
     }
+    auto &requests=kind==Kind::irq_in?initialization_.irq_in:kind==Kind::irq_out?initialization_.irq_out:kind==Kind::capture?initialization_.capture:initialization_.render;
+    if(++requests==1)diagnostic("usb_initialization_endpoint",{{"wcid",stats_.wcid},{"import",stats_.usb_imports},{"endpoint",r.ep},{"direction",r.direction},{"iso",iso}});
     if(kind==Kind::irq_out && connector_.preserve_wireless){
         const Bytes zero(14),observed{0,0,0,0,0,0,0x55,0x53,0,0,0,0,0,0};Bytes forwarded;
         for(const auto &packet:packets(r.data)){
@@ -150,6 +162,7 @@ void Core::pump(Clock::time_point now){
     while(auto seq=head(irq_wait_)){
         if(irq_.empty())break;const auto &r=pending_.at(*seq).request;
         if(irq_.front().size()>static_cast<size_t>(r.length)){fail(*seq,-90);continue;}
+        if(++initialization_.irq_delivered==1)diagnostic("usb_initialization_reply",{{"wcid",stats_.wcid},{"import",stats_.usb_imports},{"command",irq_.front().front()},{"length",irq_.front().size()}});
         Completion c;c.data=std::move(irq_.front());irq_.pop_front();c.actual=static_cast<uint32_t>(c.data.size());finish(*seq,std::move(c));
     }
     while(auto seq=head(capture_wait_)){
