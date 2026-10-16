@@ -49,8 +49,10 @@ explicit, already tested binaries. Use a fresh version/staging directory; the
 builder refuses to overwrite an existing package stage.
 
 Artifacts in `dist/` are Setup EXE, minimal runtime ZIP and corresponding source
-ZIP. Source packaging includes tracked and new non-ignored source files, including
-C++ connector headers. Each ZIP has a hash manifest with base commit and whether
+ZIP. Source packaging includes tracked and new non-ignored source files, all
+developer scripts and documentation, including historical release notes. The
+installed payload still uses its separate explicit allowlist. Each ZIP has a hash
+manifest with base commit and whether
 the working tree was modified; a modified checkout is not represented as an exact
 build of its base commit. The source ZIP must accompany distribution of this GPL
 candidate. No firmware or Microsoft driver binaries are redistributed.

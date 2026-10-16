@@ -235,15 +235,21 @@ generation, while a real failed TX still invokes recovery.
 | --- | --- |
 | `src/` | C++ radio/USBIP/runtime; Python reference; legacy research sources |
 | `driver/profiles/` | Sanitized model USB descriptors, without physical serials |
+| `driver/native/` | Incomplete kernel-driver research; excluded from the installer |
 | `scripts/` | Build/setup/removal, checks and developer-only experiments |
 | `tests/` | Synthetic identities, protocol, transport and configuration checks |
 | `installer/` | Inno Setup source |
 | `third_party/` | Retained headers and licenses |
 | `config/` | Automatic public template; private generated files are ignored |
 | `docs/` | Current English documentation |
+| `docs/releases/` | Historical release notes and clearly marked test candidates |
+| `work/`, `build/`, `outputs/`, `dist/` | Ignored local diagnostics, objects, binaries and packages |
 
-Legacy synthetic GIP/ViGEm, control-panel and Python launchers remain as research
-references. The historical `driver/native` experiment is not the delivered driver
+Use the [script guide](../scripts/README.md) to distinguish production build/setup
+entry points from development sessions and hardware research. The obsolete
+PowerShell control panels and C# launchers have been removed; their history remains
+in Git. Python reference and synthetic GIP/ViGEm launchers remain available.
+The historical `driver/native` experiment is not the delivered driver
 and must not be installed for normal use. Its signing/trust workflows are unrelated
 to the current Setup. Research tools can change hardware state: use the normal
 installer unless you are deliberately investigating those paths.

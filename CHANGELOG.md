@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Remove obsolete PowerShell control panels and C# launchers; keep Python and
+  hardware research entry points. Add documentation/script indexes and group
+  historical release notes under `docs/releases/`. Include all public developer
+  scripts and documentation in the source archive, retaining the separate
+  installed-runtime allowlist.
+
 - Move installed native runtime state and stop commands to bounded shared memory
   and Windows events; remove periodic state-file IO and file polling. Keep counters
   in RAM and defer newly learned pairing metadata until radio shutdown.

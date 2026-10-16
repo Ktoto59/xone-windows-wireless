@@ -1,6 +1,6 @@
-xone-windows-wireless - C++ bridge alpha.5
+xone-windows-wireless - experimental C++ bridge
 
-Keep the external 045E:02FE adapter connected during Setup. Setup prepares
+Keep the supported Xbox Wireless Adapter connected during Setup. Setup prepares
 verified adapter RAM firmware, the signed USBip dependency and system WinUSB.
 UAC, internet access, adapter reconnect or a reboot may be required. The first
 USBip installation can briefly restart USB hubs.

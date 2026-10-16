@@ -8,6 +8,7 @@ adapter while Windows uses its existing Xbox GIP and audio drivers.
 | [Installation and removal](docs/INSTALL.md)
 | [Known limitations](docs/LIMITATIONS.md)
 | [Troubleshooting](docs/TROUBLESHOOTING.md)
+| [Documentation index](docs/README.md)
 
 ## Supported hardware
 
@@ -73,6 +74,8 @@ see [development sessions](docs/DEVELOPMENT.md#development-session).
 [Build instructions](docs/INSTALLER.md),
 [architecture](docs/ARCHITECTURE.md), [development checks](docs/DEVELOPMENT.md),
 [changelog](CHANGELOG.md) and [upstream attribution](docs/UPSTREAM.md).
+See the [repository map](docs/DEVELOPMENT.md#repository-layout) and
+[script guide](scripts/README.md) for the supported entry points and research tools.
 
 The repository and release payloads exclude real device addresses, captured
 serials, user SIDs, local configurations, recordings, packet captures, firmware,
