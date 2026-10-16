@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 [CmdletBinding()]
 param([ValidateSet('calls','lines')][string]$TraceLevel='calls',
+      [ValidateSet('python','cpp')][string]$Backend='python',
       [ValidateRange(0,86400)][int]$Seconds=300,
       [ValidateRange(1,16)][int]$Slots=8,
       [string]$InstanceId='', [string]$PythonPath='',
@@ -17,10 +18,14 @@ $taskPrevious=Read-XoneJson (Join-Path $taskRoot 'work/usb-gip-running.json')
 if($taskPrevious -and (Test-XoneProcess $taskPrevious.Worker)){throw 'A bridge already owns this development checkout. Stop that owned session first.'}
 $taskAdapter=Resolve-XoneAdapterInstance $InstanceId
 if((Get-PnpDeviceProperty -InstanceId $taskAdapter -KeyName DEVPKEY_Device_Service).Data -ne 'WinUSB'){throw 'The adapter must already use WinUSB.'}
-if(-not $PythonPath){$PythonPath=(Get-Command python.exe -ErrorAction Stop).Source}
-$taskVersion=@(& $PythonPath -c 'import sys; print(sys.version_info >= (3,11))')
-if($LASTEXITCODE -ne 0 -or ($taskVersion -join '').Trim() -ne 'True'){throw 'Python 3.11 or newer is required.'}
-$taskRadio=Join-Path $taskRoot 'outputs/xone-probe.exe'
+if($Backend -eq 'python'){
+    if(-not $PythonPath){$PythonPath=(Get-Command python.exe -ErrorAction Stop).Source}
+    $taskVersion=@(& $PythonPath -c 'import sys; print(sys.version_info >= (3,11))')
+    if($LASTEXITCODE -ne 0 -or ($taskVersion -join '').Trim() -ne 'True'){throw 'Python 3.11 or newer is required.'}
+}elseif($Slots -ne 8){throw 'The C++ host currently uses eight automatic slots.'}
+$taskRadio=Join-Path $taskRoot $(if($Backend -eq 'cpp'){'outputs/appliance-candidate/xone-probe-cpp.exe'}else{'outputs/xone-probe.exe'})
+$taskHost=Join-Path $taskRoot 'outputs/appliance-candidate/xone-background.exe'
+if($Backend -eq 'cpp' -and -not [IO.File]::Exists($taskHost)){throw 'Build the C++ candidate with Build-Appliance.cmd first.'}
 $taskUsbip=Join-Path $env:ProgramW6432 'USBip/usbip.exe'
 foreach($taskRequired in @($taskRadio,$taskUsbip,(Join-Path $taskRoot 'work/firmware/FW_ACC_00U.bin'))){
     if(-not [IO.File]::Exists($taskRequired)){throw ('Missing development prerequisite: '+$taskRequired+'. See docs/DEVELOPMENT.md.')}
@@ -29,8 +34,10 @@ $taskDirectory=Join-Path $taskRoot ('work/development/'+[datetime]::UtcNow.ToStr
 [void][IO.Directory]::CreateDirectory($taskDirectory)
 $taskOldDirectory=$env:XONE_DEVELOPMENT_LOG_DIR
 $taskOldTrace=$env:XONE_DEVELOPMENT_TRACE
+$taskOldCppDirectory=$env:XONE_CPP_LOG_DIR
+$taskOldCppTrace=$env:XONE_CPP_TRACE
 $taskChild=$null;$taskRestored=$false;$taskStoppedInstalled=$false
-$taskMetadata=[ordered]@{StartedUtc=[datetime]::UtcNow.ToString('o');FinishedUtc=$null;TraceLevel=$TraceLevel;Seconds=$Seconds;Slots=$Slots;RadioSHA256=(Get-FileHash -LiteralPath $taskRadio -Algorithm SHA256).Hash;Python=$PythonPath;ProductionRestored=$false;ExitCode=$null;Error=$null}
+$taskMetadata=[ordered]@{StartedUtc=[datetime]::UtcNow.ToString('o');FinishedUtc=$null;Backend=$Backend;TraceLevel=$TraceLevel;Seconds=$Seconds;Slots=$Slots;RadioSHA256=(Get-FileHash -LiteralPath $taskRadio -Algorithm SHA256).Hash;Python=$PythonPath;ProductionRestored=$false;ExitCode=$null;Error=$null}
 Push-Location -LiteralPath $taskRoot
 try{
     $taskMetadata.Branch=(& git branch --show-current | Out-String).Trim()
@@ -45,12 +52,16 @@ try{
     }
     $env:XONE_DEVELOPMENT_LOG_DIR=$taskDirectory
     $env:XONE_DEVELOPMENT_TRACE=$TraceLevel
+    $env:XONE_CPP_LOG_DIR=$taskDirectory
+    $env:XONE_CPP_TRACE='1'
     $taskArguments='-u '+(Quote-XonePath (Join-Path $taskRoot 'src/usbip_auto_manager.py'))+' --root '+(Quote-XonePath $taskRoot)+' --instance '+(Quote-XonePath $taskAdapter)+' --usbip '+(Quote-XonePath $taskUsbip)+' --slots '+$Slots
-    $taskChild=Start-Process -FilePath $PythonPath -ArgumentList $taskArguments -WorkingDirectory $taskRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $taskDirectory 'supervisor-stdout.log') -RedirectStandardError (Join-Path $taskDirectory 'supervisor-stderr.log') -PassThru
+    $taskLaunch=@{FilePath=$PythonPath;ArgumentList=$taskArguments;WorkingDirectory=$taskRoot;WindowStyle='Hidden';RedirectStandardOutput=(Join-Path $taskDirectory 'supervisor-stdout.log');RedirectStandardError=(Join-Path $taskDirectory 'supervisor-stderr.log');PassThru=$true}
+    if($Backend -eq 'cpp'){$taskLaunch.FilePath=$taskHost;$taskLaunch.ArgumentList='--instance '+(Quote-XonePath $taskAdapter)}
+    $taskChild=Start-Process @taskLaunch
     # Retain the process handle before a fast startup failure can discard it.
     $taskChildHandle=$taskChild.Handle
     Write-Output ('Development session: '+$taskDirectory)
-    Write-Output 'Anomalies: anomalies-*.jsonl; complete trace: supervisor-*.jsonl and worker-*.jsonl.'
+    Write-Output 'Anomalies: anomalies-*.jsonl; trace: cpp-*.jsonl, supervisor-*.jsonl and worker-*.jsonl.'
     $taskDeadline=if($Seconds){[datetime]::UtcNow.AddSeconds($Seconds)}else{[datetime]::MaxValue}
     while(-not $taskChild.HasExited -and [datetime]::UtcNow -lt $taskDeadline){
         Start-Sleep -Milliseconds 500
@@ -62,9 +73,12 @@ try{
 }finally{
     $env:XONE_DEVELOPMENT_LOG_DIR=$taskOldDirectory
     $env:XONE_DEVELOPMENT_TRACE=$taskOldTrace
+    $env:XONE_CPP_LOG_DIR=$taskOldCppDirectory
+    $env:XONE_CPP_TRACE=$taskOldCppTrace
     if($taskChild){
         if(-not $taskChild.HasExited){
             [IO.File]::WriteAllText((Join-Path $taskRoot 'work/usb-gip.stop'),'development session finished')
+            if($Backend -eq 'cpp'){[IO.File]::WriteAllText((Join-Path $taskRoot 'work/maintenance.stop'),'development session finished')}
             [void]$taskChild.WaitForExit(30000)
             $taskChild.Refresh()
         }

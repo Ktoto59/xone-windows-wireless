@@ -8,6 +8,7 @@
 #include "usbip_native_core.hpp"
 #include "latest_snapshot.hpp"
 #include "appliance_config.hpp"
+#include "diagnostic_log.hpp"
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -49,14 +50,14 @@ struct NativeUsbOutput::Impl {
     SOCKET listener=INVALID_SOCKET;WSAEVENT accept_event=WSA_INVALID_EVENT;
     HANDLE wake=nullptr,timer=nullptr;std::thread thread;std::mutex mutex;
     bool stopping=false;std::string error;std::deque<Message> inbox;std::vector<RawGipTransmit> tx;
-    std::string last_usb_error;uint64_t usb_closed=0;
+    std::string last_usb_error;uint64_t usb_closed=0;std::atomic_uint64_t mailbox_dropped=0;
     std::vector<std::unique_ptr<Client>> clients;Client *imported=nullptr;
     std::unique_ptr<LatestSnapshot> status_writer;
     usbip::Core::Clock::time_point last_status{};bool mmcss=false,peer_error=false;DWORD mmcss_error=0;
     std::atomic_uint64_t address_revision=0;
     std::atomic_bool streaming_audio=false;
     uint64_t association_id=0;
-    std::optional<std::tuple<bool,uint8_t,uint64_t,bool,uint64_t,bool,uint64_t,std::string>> published_life;
+    std::optional<std::tuple<bool,uint8_t,uint64_t,bool,uint64_t,bool,uint64_t,std::string,bool>> published_life;
     Impl(uint16_t port,Bytes address,uint16_t pid,bool with_audio,const std::wstring &status,bool auto_select,bool trace):mac(std::move(address)),profile(usbip::profile(pid,with_audio)),core(profile,with_audio),audio(with_audio),automatic(auto_select),diagnostics(trace),product(pid){
         if(mac.size()!=6 || port<1024)throw usbip::Error("Invalid native USB route");
         static std::atomic_uint64_t epochs{GetTickCount64()*1000};association_id=++epochs;
@@ -73,8 +74,9 @@ struct NativeUsbOutput::Impl {
                 const auto path=std::filesystem::path(status),temporary=std::filesystem::path(status+L".tmp");
                 status_writer=std::make_unique<LatestSnapshot>([path,temporary](const std::string &text){
                     SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_BELOW_NORMAL);
-                    {std::ofstream out(temporary,std::ios::binary|std::ios::trunc);if(!out || !out.write(text.data(),static_cast<std::streamsize>(text.size())))return;}
+                    {std::ofstream out(temporary,std::ios::binary|std::ios::trunc);if(!out || !out.write(text.data(),static_cast<std::streamsize>(text.size()))){diagnostic("status_write_failed",{},true);return;}}
                     for(unsigned attempt=0;attempt<20;++attempt){if(MoveFileExW(temporary.c_str(),path.c_str(),MOVEFILE_REPLACE_EXISTING))return;std::this_thread::sleep_for(std::chrono::milliseconds(10));}
+                    diagnostic("status_replace_failed",{},true);
                 });
             }
             thread=std::thread([this]{run();});
@@ -85,20 +87,21 @@ struct NativeUsbOutput::Impl {
     void post(Message m){
         std::lock_guard lock(mutex);
         if(m.kind==1 || m.kind==3)tx.clear();
-        if(m.kind==4 && std::count_if(inbox.begin(),inbox.end(),[](const auto &v){return v.kind==4;})>=4){const auto old=std::find_if(inbox.begin(),inbox.end(),[](const auto &v){return v.kind==4;});inbox.erase(old);}
+        if(m.kind==4 && std::count_if(inbox.begin(),inbox.end(),[](const auto &v){return v.kind==4;})>=4){const auto old=std::find_if(inbox.begin(),inbox.end(),[](const auto &v){return v.kind==4;});inbox.erase(old);++mailbox_dropped;diagnostic("mailbox_audio_dropped",{{"association",association_id},{"wcid",m.wcid},{"queued",inbox.size()}},true);}
         if(inbox.size()>=4096){
             const auto old=std::find_if(inbox.begin(),inbox.end(),[](const auto &v){return v.kind==4;});
-            if(old!=inbox.end())inbox.erase(old);else throw usbip::Error("Native USB mailbox overflow");
+            if(old!=inbox.end()){inbox.erase(old);++mailbox_dropped;diagnostic("mailbox_pressure_drop",{{"association",association_id}},true);}else throw usbip::Error("Native USB mailbox overflow");
         }inbox.push_back(std::move(m));SetEvent(wake);
     }
     void publish(bool connected=true){
         if(!status_writer)return;const auto &s=core.stats();const auto now=usbip::Core::Clock::now();
-        const auto current_life=std::tuple{connected,s.wcid,s.generation,peer_error,address_revision.load(),imported!=nullptr,usb_closed,last_usb_error};
+        const auto current_life=std::tuple{connected,s.wcid,s.generation,peer_error,address_revision.load(),imported!=nullptr,usb_closed,last_usb_error,s.recovery_required};
         if(published_life==current_life && now-last_status<std::chrono::seconds(2))return;
         std::ostringstream json;json<<std::boolalpha<<"{\"Pid\":"<<product<<",\"Connector\":\""<<device_connector(product).name<<"\",\"UsbImported\":"<<(imported!=nullptr)<<",\"VirtualSerial\":\""<<profile.virtual_serial<<"\",\"AssociationId\":"<<association_id<<",\"RadioConnected\":"<<connected<<",\"Ready\":"<<(connected && core.ready())<<",\"Wcid\":"<<unsigned(s.wcid)<<",\"Generation\":"<<(association_id*100+s.generation)
             <<",\"Backend\":\"cpp\",\"PeerProtocolError\":"<<peer_error<<",\"Mac\":\"";
         {std::lock_guard lock(mutex);constexpr char hex[]="0123456789abcdef";for(auto b:mac)json<<hex[b>>4]<<hex[b&15];}
         json<<"\",\"PowerCommands\":"<<s.power_commands<<",\"LastPower\":\""<<s.last_power<<"\",\"UsbModeSwitchSuppressed\":"<<s.mode_suppressed<<",\"UsbClosed\":"<<usb_closed<<",\"LastUsbError\":"<<Json(last_usb_error).dump();
+        json<<",\"RecoveryRequired\":"<<s.recovery_required<<",\"RadioAssociated\":"<<(connected && core.associated())<<",\"MailboxDroppedAudio\":"<<mailbox_dropped.load();
         if(!diagnostics){json<<'}';status_writer->publish(json.str());published_life=current_life;last_status=now;return;}
         json
             <<",\"RxPackets\":"<<s.rx<<",\"TxPackets\":"<<s.tx<<",\"AudioBridge\":"<<audio<<",\"AudioLayoutSupported\":"<<s.layout
@@ -116,8 +119,9 @@ struct NativeUsbOutput::Impl {
                 if(operation!=3)throw usbip::Error("Unsupported USB/IP operation");c.phase=1;
             }else if(c.phase==1){
                 if(c.input.size()<32)return;Bytes bus(32);bus[0]='1';bus[1]='-';bus[2]='1';
-                const bool ok=core.ready() && !imported && std::equal(bus.begin(),bus.end(),c.input.begin());c.input.erase(c.input.begin(),c.input.begin()+32);c.send(import_header(ok));
+                const bool ok=core.associated() && !imported && std::equal(bus.begin(),bus.end(),c.input.begin());c.input.erase(c.input.begin(),c.input.begin()+32);c.send(import_header(ok));
                 if(!ok){c.phase=3;return;}core.imported();imported=&c;c.phase=2;c.send(profile.metadata());
+                diagnostic("usb_imported",{{"association",association_id},{"wcid",core.stats().wcid},{"generation",core.stats().generation}});
             }else if(c.phase==2){
                 const auto parsed=usbip::request(c.input);if(!parsed)return;auto r=std::move(parsed->first);c.input.erase(c.input.begin(),c.input.begin()+parsed->second);core.submit(std::move(r));
             }else return;
@@ -128,14 +132,15 @@ struct NativeUsbOutput::Impl {
         if(imported && !imported->dead){for(auto &reply:core.replies())imported->send(std::move(reply));}else core.replies();
         auto requests=core.outbound();
         {std::lock_guard lock(mutex);
-            const bool reset_pending=std::any_of(inbox.begin(),inbox.end(),[](const auto &m){return m.kind==1 || m.kind==3;});
+            const bool reset_pending=core.stats().recovery_required || std::any_of(inbox.begin(),inbox.end(),[](const auto &m){return m.kind==1 || m.kind==3;});
+            if(reset_pending)tx.clear();
             if(!reset_pending){if(tx.size()+requests.size()>128)throw usbip::Error("Native radio TX queue overflow");for(auto &request:requests)tx.push_back(std::move(request));}
         }
         const auto now=usbip::Core::Clock::now();
         // A live USB interrupt URB may wait indefinitely on an idle device.
         // Limit only incomplete imports; TCP close and RF generation own lifetime.
         for(auto &c:clients){if(c->phase!=2 && now-c->last>std::chrono::seconds(5))c->dead=true;if(!c->dead)c->flush();}
-        std::erase_if(clients,[&](const auto &c){if(!c->dead)return false;if(c.get()==imported){++usb_closed;core.detached();imported=nullptr;std::lock_guard lock(mutex);tx.clear();}return true;});
+        std::erase_if(clients,[&](const auto &c){if(!c->dead)return false;if(c.get()==imported){++usb_closed;diagnostic("usb_import_closed",{{"association",association_id},{"wcid",core.stats().wcid},{"count",usb_closed}},core.associated());core.detached();imported=nullptr;std::lock_guard lock(mutex);tx.clear();}return true;});
         publish();
     }
     void run(){
@@ -147,13 +152,14 @@ struct NativeUsbOutput::Impl {
                 std::deque<Message> events;
                 {std::lock_guard lock(mutex);if(stopping)break;events.swap(inbox);ResetEvent(wake);}
                 for(const auto &m:events){
-                    if(m.kind==4 && usbip::Core::Clock::now()-m.arrived>std::chrono::milliseconds(32))continue;
+                    if(m.kind==4 && usbip::Core::Clock::now()-m.arrived>std::chrono::milliseconds(32)){++mailbox_dropped;diagnostic("mailbox_audio_expired",{{"association",association_id},{"wcid",m.wcid}},true);continue;}
                     if(m.kind==1 || m.kind==3){std::lock_guard lock(mutex);tx.clear();}
                     if(m.kind==1 || m.kind==3)for(auto &client:clients)client->dead=true;
                     try{
                         if(m.kind==17)core.complete(m.wcid,m.token,m.status);else core.radio(m.kind,m.wcid,m.data);
                         if(m.kind==1)peer_error=false;
-                    }catch(const usbip::Error &){
+                    }catch(const usbip::Error &e){
+                        diagnostic("peer_protocol_error",{{"association",association_id},{"wcid",m.wcid},{"error",e.what()}},true);
                         peer_error=true;core.radio(3,core.stats().wcid,{});
                         std::lock_guard lock(mutex);tx.clear();
                     }
@@ -173,10 +179,10 @@ struct NativeUsbOutput::Impl {
                     auto &c=*clients[index-3];WSANETWORKEVENTS flags{};
                     try{if(WSAEnumNetworkEvents(c.socket,c.event,&flags))throw usbip::Error("USB socket failed");
                         if(flags.lNetworkEvents&FD_READ){c.read();if(!c.dead)parse(c);}if(flags.lNetworkEvents&FD_CLOSE)c.dead=true;if(!c.dead)c.flush();
-                    }catch(const usbip::Error &e){last_usb_error=e.what();c.dead=true;}
+                    }catch(const usbip::Error &e){last_usb_error=e.what();diagnostic("usb_client_error",{{"association",association_id},{"error",last_usb_error}},true);c.dead=true;}
                 }
             }
-        }catch(const std::exception &e){std::lock_guard lock(mutex);error=e.what();}
+        }catch(const std::exception &e){std::lock_guard lock(mutex);error=e.what();diagnostic("usb_worker_failed",{{"association",association_id},{"error",error}},true);}
         publish(false);if(scheduling)AvRevertMmThreadCharacteristics(scheduling);
     }
 };

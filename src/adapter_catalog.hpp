@@ -2,6 +2,8 @@
 #pragma once
 #include <string_view>
 #include <initializer_list>
+#include <string>
+#include <stdexcept>
 namespace xone {
 inline bool supported_adapter_instance(std::wstring_view instance) {
     constexpr std::wstring_view prefix=L"USB\\VID_045E&PID_";
@@ -17,5 +19,13 @@ inline bool supported_adapter_instance(std::wstring_view instance) {
     if(!known)return false;
     for(auto c:instance.substr(separator+1))if(!((c>=L'0' && c<=L'9') || (upper(c)>=L'A' && upper(c)<=L'Z') || c==L'&' || c==L'_' || c==L'-'))return false;
     return true;
+}
+inline std::wstring background_adapter_option(std::wstring_view argument){
+    if(argument.empty())return {};
+    if(!argument.starts_with(L"--instance "))throw std::runtime_error("Unknown background host option");
+    argument.remove_prefix(11);
+    if(argument.size()>=2 && argument.front()==L'"' && argument.back()==L'"'){argument.remove_prefix(1);argument.remove_suffix(1);}
+    if(!supported_adapter_instance(argument))throw std::runtime_error("Invalid background adapter selection");
+    return std::wstring(argument);
 }
 }

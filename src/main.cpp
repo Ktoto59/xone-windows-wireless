@@ -9,6 +9,7 @@
 #endif
 #include "runtime_files.hpp"
 #include "status_schedule.hpp"
+#include "diagnostic_log.hpp"
 extern "C" {
 #include "mt76/mt76.h"
 }
@@ -321,9 +322,10 @@ public:
                                 if (event.kind!=xone::RadioEvent::Kind::ignored) events_.push_back(std::move(event));
                             } else show_radio(event);
                         }
-                        catch (const std::exception &e) { std::cerr << "Packet decode: " << e.what() << '\n'; }
+                        catch (const std::exception &e) { xone::diagnostic("radio_decode_error",{{"endpoint",pipe},{"error",e.what()}},true);std::cerr << "Packet decode: " << e.what() << '\n'; }
                     }
                 } catch (const std::exception &e) {
+                    xone::diagnostic("receiver_failed",{{"endpoint",pipe},{"error",e.what()}},true);
                     std::lock_guard lock(mutex_); if (error_.empty()) error_=e.what();
                 }
             });
@@ -472,6 +474,7 @@ int radio_test(const Options &opt,bool controller=false,bool run=false) {
 }
 }
 int wmain(int argc,wchar_t **argv) {
+    xone::initialize_diagnostics("radio");
     std::cout.setf(std::ios::unitbuf);
     SetUnhandledExceptionFilter(xone_crash_trace);
     SetConsoleOutputCP(CP_UTF8);
@@ -504,6 +507,7 @@ int wmain(int argc,wchar_t **argv) {
         if (command==L"run") return radio_test(opt,true,true);
         throw std::runtime_error("Unknown command; use --help");
     } catch (const std::exception &error) {
+        xone::diagnostic("radio_failed",{{"error",error.what()}},true);
         std::cerr << "Error: " << error.what() << '\n'; return 2;
     }
 }

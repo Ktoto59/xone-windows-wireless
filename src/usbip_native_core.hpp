@@ -5,7 +5,7 @@
 #include <deque>
 #include "device_connector.hpp"
 namespace xone::usbip {
-// Owned by one USB/audio thread. Contains no sockets, files, sleeps or locks.
+// Owned by one USB/audio thread. No transport IO/sleeps; diagnostics enqueue only.
 class Core {
 public:
     using Clock=std::chrono::steady_clock;
@@ -13,6 +13,7 @@ public:
         uint8_t wcid=0;uint64_t generation=0,rx=0,tx=0,audio_rx=0,audio_tx=0,capture_slots=0,dropped=0;
         size_t capture_high_water=0;bool layout=false;uint64_t render_expired=0,concealed=0,mode_suppressed=0;
         uint64_t power_commands=0;std::string last_power;
+        bool recovery_required=false;
     };
 private:
     enum class Kind {irq_in,irq_out,capture,render};
@@ -31,6 +32,8 @@ private:
     std::vector<Bytes> replies_;std::vector<RawGipTransmit> outbound_;
     void finish(uint32_t seq,Completion result);
     void fail(uint32_t seq,int32_t status);
+    void expire_render(uint32_t seq);
+    void recover_audio();
     bool cancel(uint32_t seq);
     uint32_t transmit(uint32_t seq,Bytes data,bool audio,Clock::time_point now);
     void clear_audio();
@@ -38,7 +41,8 @@ private:
     void pump(Clock::time_point now);
 public:
     Core(const Profile &profile,bool audio);
-    bool ready()const{return stats_.wcid!=0;}
+    bool associated()const{return stats_.wcid!=0;}
+    bool ready()const{return associated() && !stats_.recovery_required;}
     const Stats &stats()const{return stats_;}
     void imported();
     void detached();

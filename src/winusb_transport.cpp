@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "winusb_transport.hpp"
 #include "adapter_catalog.hpp"
+#include "diagnostic_log.hpp"
 #include <setupapi.h>
 #include <devpkey.h>
 #include <usbiodef.h>
@@ -30,6 +31,7 @@ std::string win_error(DWORD error) {
     return "Windows error " + std::to_string(error) + ": " + result;
 }
 static std::string transfer_error(const char *operation,uint8_t pipe,size_t requested,DWORD error) {
+    diagnostic("usb_transfer_error",{{"operation",operation},{"endpoint",pipe},{"requested",requested},{"win32_error",error}},true);
     SYSTEMTIME now{};GetSystemTime(&now);
     std::ostringstream message;
     message<<operation<<": "<<win_error(error)<<" [endpoint=0x"<<std::hex<<std::setw(2)<<std::setfill('0')<<unsigned(pipe)<<std::dec
@@ -148,34 +150,41 @@ bool WinUsbTransport::set_timeout(uint8_t pipe,unsigned timeout) {
     });
 }
 int WinUsbTransport::control_callback(void *context,u8 request,u8 type,u16 value,u16 index,void *data,u16 size,unsigned timeout) {
+    const auto started=std::chrono::steady_clock::now();
     auto &self=*static_cast<WinUsbTransport *>(context);
-    if (!self.set_timeout(0,timeout)) return -EREMOTEIO;
+    if (!self.set_timeout(0,timeout)){const auto error=GetLastError();std::cerr<<transfer_error("Control timeout policy",0,size,error)<<'\n';return -EREMOTEIO;}
     WINUSB_SETUP_PACKET setup{type,request,value,index,size};
     ULONG transferred=0;
     if (!WinUsb_ControlTransfer(self.usb_,setup,static_cast<PUCHAR>(data),size,&transferred,nullptr)) {
         const DWORD error=GetLastError();
         std::cerr << transfer_error("Control transfer",0,size,error) << '\n'; return -EREMOTEIO;
     }
+    if(diagnostic_verbose)diagnostic("usb_control",{{"request",request},{"type",type},{"requested",size},{"actual",transferred},{"elapsed_us",std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()-started).count()}});
     return static_cast<int>(transferred);
 }
 int WinUsbTransport::bulk_callback(void *context,u8 pipe,void *data,int size,int *actual,unsigned timeout) {
+    const auto started=std::chrono::steady_clock::now();
     auto &self=*static_cast<WinUsbTransport *>(context);
     ULONG transferred=0;
-    if (!self.set_timeout(pipe,timeout)) return -EREMOTEIO;
+    if (!self.set_timeout(pipe,timeout)){const auto error=GetLastError();std::cerr<<transfer_error("Write timeout policy",pipe,static_cast<size_t>(size),error)<<'\n';return -EREMOTEIO;}
     if (!WinUsb_WritePipe(self.usb_,pipe,static_cast<PUCHAR>(data),static_cast<ULONG>(size),&transferred,nullptr)) {
         const DWORD error=GetLastError();
         std::cerr << transfer_error("Bulk write",pipe,static_cast<size_t>(size),error) << '\n'; return -EREMOTEIO;
     }
+    const auto elapsed=std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()-started).count();
+    if(diagnostic_verbose || elapsed>8000 || transferred!=static_cast<ULONG>(size))diagnostic("usb_write",{{"endpoint",pipe},{"requested",size},{"actual",transferred},{"elapsed_us",elapsed}},elapsed>8000 || transferred!=static_cast<ULONG>(size));
     *actual=static_cast<int>(transferred); return 0;
 }
 std::vector<uint8_t> WinUsbTransport::read(uint8_t pipe) {
+    const auto started=std::chrono::steady_clock::now();
     std::vector<uint8_t> data(0x8400);
     ULONG transferred=0;
     if (!WinUsb_ReadPipe(usb_,pipe,data.data(),static_cast<ULONG>(data.size()),&transferred,nullptr)) {
         const DWORD error=GetLastError();
-        if (error==ERROR_SEM_TIMEOUT) return {};
+        if (error==ERROR_SEM_TIMEOUT){if(diagnostic_verbose)diagnostic("usb_read_timeout",{{"endpoint",pipe},{"win32_error",error}});return {};}
         throw std::runtime_error(transfer_error("Bulk read",pipe,data.size(),error));
     }
+    if(diagnostic_verbose)diagnostic("usb_read",{{"endpoint",pipe},{"actual",transferred},{"elapsed_us",std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()-started).count()}});
     data.resize(transferred); return data;
 }
 void WinUsbTransport::describe() const {

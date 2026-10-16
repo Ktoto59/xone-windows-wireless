@@ -31,6 +31,10 @@ does not change bindings, power policy, pairing, or installed binaries.
 
 # Also trace each executed Python line (much higher overhead).
 .\scripts\Run-Development.ps1 -TakeOverInstalled -TraceLevel lines -Seconds 300
+
+# Exercise the C++ candidate with journals and USB/URB timing metadata.
+.\scripts\Build-Appliance.cmd
+.\scripts\Run-Development.ps1 -Backend cpp -TakeOverInstalled -Seconds 300
 ```
 
 `-TakeOverInstalled` stops the owned installed host for the session and requests
@@ -56,6 +60,14 @@ paths and child identities are recorded in the trace/state. A radio exit event
 also copies the last eight stderr lines into the anomaly journal. WinUSB fatal
 errors include endpoint, requested length and UTC, preserving the original
 Windows error before formatting/cleanup.
+
+The C++ mode runs `outputs/appliance-candidate/xone-background.exe` and its radio
+child, using the checkout's configuration/firmware and selected adapter. It
+does not replace installed binaries. The launcher gives Python and C++ children
+the same capture directory through `XONE_CPP_LOG_DIR`; C++ verbose transfer
+metadata is enabled for these bounded sessions. C++ uses independent 2048-event
+ordinary/anomaly queues, 8 MiB journals with three backups and one-second writer
+shutdown; see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
 Tracing covers calls/resumes, returns/yields and exceptions in **every Python
 runtime module under `src/`**, including connectors and telemetry. `lines` adds
@@ -119,6 +131,16 @@ The appliance builder writes candidates under `outputs/appliance-candidate` and
 does not replace a running copy. See [INSTALLER.md](INSTALLER.md) for installer,
 source archive and isolated registration/removal smoke checks. Synthetic/loopback
 tests do not access the physical adapter; hardware experiments do.
+
+`Test-CppBridge.cmd` builds the differential probe and compares the same
+controlled-time scenarios with Python: successful/failed audio ACK, ACK timeout,
+re-import without RF reassociation, ISO expiry/frame/status, and partial PCM
+age. Loopback tests also inject a failed TX, close/re-import TCP, verify resumed
+audio and inspect the C++ anomaly journal. Recovery policy tests cover initial
+attach grace, stale snapshots, missing import metadata and generation changes.
+Journal tests cover queue saturation, reserved anomaly capacity, rotation, write
+failure and bounded shutdown with a stalled writer. These are synthetic tests;
+they are not physical adapter reliability measurements.
 
 ## Repository layout
 

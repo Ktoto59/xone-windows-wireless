@@ -93,6 +93,7 @@ class Slot:
         self.process = self.identity = self.pending = None
         self.run_id = None
         self.port = 0
+        self.imported_generation = None
         self.info = {}
         self.task = None
         self.retry_at = self.attached_at = 0
@@ -161,6 +162,7 @@ class Supervisor:
                 if slot.port in active:
                     raise
             slot.port = 0
+            slot.imported_generation = None
 
     async def accept(self,slot,listener):
         while True:
@@ -210,13 +212,14 @@ class Supervisor:
                 slot.process.close()
                 slot.process = slot.identity = None
                 slot.info = {}
-            elif slot.info.get('Ready'):
+            elif slot.info.get('Ready') or (slot.info.get('RecoveryRequired') and slot.info.get('RadioAssociated')):
                 if not slot.remembered:
                     if self.registry.remember(slot.info):
                         self.registry_io.publish(self.registry.document())
                     slot.remembered = True
                 now = time.monotonic()
-                if slot.port and not slot.info.get('UsbImported') and now-slot.attached_at>2:
+                if slot.port and ((slot.imported_generation is not None and slot.info.get('Generation')!=slot.imported_generation) or
+                                  ((slot.info.get('RecoveryRequired') or not slot.info.get('UsbImported')) and now-slot.attached_at>2)):
                     await self.detach(slot)
                     slot.retry_at = now+1
                 if not slot.port and now>=slot.retry_at:
@@ -226,6 +229,7 @@ class Supervisor:
                         if not re.fullmatch(r'\d{1,3}',text) or not 1<=int(text)<=255:
                             raise RuntimeError('Cannot identify this worker\'s USBIP port')
                         slot.port,slot.attached_at = int(text),time.monotonic()
+                        slot.imported_generation = slot.info.get('Generation')
                     except (RuntimeError,subprocess.TimeoutExpired) as error:
                         self.state_io.event({'operation':'attach_retry','slot':slot.index,'detail':str(error)})
             elif slot.port:

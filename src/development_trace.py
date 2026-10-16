@@ -159,6 +159,7 @@ class DevelopmentTrace:
 
     def _write(self):
         previous_loss = (0, 0, 0)
+        last_health = 0
         while True:
             with self.condition:
                 self.condition.wait_for(lambda: self.events or self.anomalies or self.stopping, timeout=1)
@@ -194,10 +195,13 @@ class DevelopmentTrace:
                     self.written += 1
                 except Exception:
                     self.io_errors += 1
-            try:
-                self._health()
-            except Exception:
-                self.io_errors += 1
+            now = time.monotonic()
+            if stopping or now-last_health >= 1:
+                last_health = now
+                try:
+                    self._health()
+                except Exception:
+                    self.io_errors += 1
             if stopping:
                 return
 

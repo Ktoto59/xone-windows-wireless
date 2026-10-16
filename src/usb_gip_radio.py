@@ -203,17 +203,32 @@ class RadioBackend:
         self.token = 0
         self.rx_packets = self.tx_packets = 0
         self.battery = None
+        self.recovery_required = False
 
     @property
     def ready(self):
+        return self.importable and not self.recovery_required
+
+    @property
+    def importable(self):
         return self.writer is not None and self.wcid != 0
+
+    def imported(self):
+        self.clear_audio()
+        self.recovery_required = False
+
+    async def recover_audio(self):
+        await self.reset(recover_usb=True)
+        trace.event('audio_recovery_required', suspicious=True, wcid=self.wcid, generation=self.generation)
 
     def event(self, **fields):
         if self.on_event:
             self.on_event(fields)
 
-    async def reset(self):
-        self.wcid = 0
+    async def reset(self, recover_usb=False):
+        self.recovery_required = bool(recover_usb and self.wcid)
+        if not recover_usb:
+            self.wcid = 0
         self.generation += 1
         self.queue.clear()
         self.clear_audio()
@@ -673,14 +688,14 @@ class RadioBackend:
                     status = -19
                 if status != 0:
                     if self.generation == generation and self.audio_epoch == epoch:
-                        await self.reset()
+                        await self.recover_audio()
                     return failed_completion(request, status)
                 self.audio_tx += 1
                 if self.audio_tx <= 8 or self.audio_tx % 500 == 0:
                     self.event(operation='radio_audio_out', packets=self.audio_tx, pcm_bytes=1536)
             except (ConnectionError, TimeoutError, AttributeError):
                 if self.generation == generation and self.audio_epoch == epoch:
-                    await self.reset()
+                    await self.recover_audio()
                 return failed_completion(request, -19)
             finally:
                 self.pending.pop(token, None)
@@ -693,6 +708,7 @@ class RadioBackend:
 
     def status(self):
         return {'RadioConnected': self.writer is not None, 'Wcid': self.wcid,
+                'RadioAssociated': self.importable, 'RecoveryRequired': self.recovery_required,
                 'Generation': self.generation,
                 'Ready': self.ready, 'QueuedPackets': len(self.queue),
                 'PendingWrites': len(self.pending), 'RxPackets': self.rx_packets,

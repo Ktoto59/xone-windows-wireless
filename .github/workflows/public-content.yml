@@ -3,6 +3,24 @@ on: [push, pull_request]
 permissions:
   contents: read
 jobs:
+  windows-bridge:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Build C++ bridge
+        shell: cmd
+        run: scripts\Build-CppBridge.cmd
+      - name: Build C++ host and production candidate
+        shell: cmd
+        run: scripts\Build-Appliance.cmd
+      - name: Test C++ recovery, journals and Python parity
+        shell: cmd
+        run: scripts\Test-CppBridge.cmd
+      - name: Test Python reference and loopback faults
+        run: python -m unittest discover -s tests -p '*tests.py'
   public-content:
     runs-on: ubuntu-latest
     steps:

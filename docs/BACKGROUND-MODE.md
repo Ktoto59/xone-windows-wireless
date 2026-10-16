@@ -15,6 +15,22 @@ The installation waits for a missing adapter/device and retries radio startup
 with bounded backoff. Lifecycle recovery and sleep handling exist, but broad
 sleep/resume and fresh-PC reliability are not fully verified.
 
+On experimental builds, an explicit `UsbImported=false` snapshot after the
+two-second attach grace detaches only that slot's owned port and schedules a
+retry. Missing/unreadable snapshots do not detach devices. A failed audio TX or
+ACK timeout marks `RecoveryRequired=true`, increments the generation and makes
+`Ready=false`, while `RadioAssociated=true` retains a live RF association. The
+host can re-import that route without a new RF association; successful import
+clears recovery and Windows reinitializes its USB/audio session. True RF removal
+clears the association and prevents such an import. Late ACKs from the previous
+USB session cannot complete requests in the new one.
+
+Expired media is a local per-ISO loss, preserving the request's frame number;
+it does not trigger RF/USB recovery. Fatal physical WinUSB failures still leave
+the radio process and reach host retry, with the original error in the C++
+anomaly journal. These distinctions do not establish the cause of historical
+adapter error 31 or prove hardware recovery without physical testing.
+
 To stop this installation from PowerShell:
 
 ```powershell

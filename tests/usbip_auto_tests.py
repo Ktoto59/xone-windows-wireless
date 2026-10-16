@@ -170,6 +170,23 @@ class SpawnedWorkerTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SupervisorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_audio_recovery_generation_invalidates_old_import_immediately(self):
+        with tempfile.TemporaryDirectory() as directory:
+            supervisor=object.__new__(Supervisor)
+            slot=Slot(0,44000,Path(directory))
+            class Alive:
+                def is_alive(self):return True
+            slot.process=Alive();slot.run_id='synthetic-recovery';slot.remembered=True
+            slot.port=7;slot.imported_generation=1;slot.attached_at=time.monotonic();slot.retry_at=time.monotonic()+2
+            slot.status.write_text(json.dumps(dict(RunId=slot.run_id,Generation=2,Ready=False,
+                RecoveryRequired=True,RadioAssociated=True,UsbImported=True)),encoding='utf-8')
+            commands=[]
+            async def usbip(*arguments):commands.append(arguments);return ''
+            supervisor.usbip_command=usbip
+            await supervisor.maintain(slot)
+            self.assertEqual(commands,[('detach','-p','7')])
+            self.assertEqual(slot.port,0)
+
     async def test_next_association_replaces_stalled_worker_without_touching_sibling(self):
         with tempfile.TemporaryDirectory() as directory:
             supervisor=object.__new__(Supervisor)

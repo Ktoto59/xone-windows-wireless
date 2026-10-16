@@ -21,8 +21,10 @@
   the device, endpoint, USB controller or power transition caused the failure.
   Diagnostic radio stderr includes the endpoint (`0x84` WLAN or `0x85` MCU),
   requested buffer size and UTC failure time. Ordinary read timeouts (`121`)
-  remain nonfatal. The normal background host does not retain radio stderr;
-  capture it explicitly during a bounded diagnostic run. For a USB ETW trace,
+  remain nonfatal. The experimental C++ runtime also records these errors in
+  `work/diagnostics/cpp/anomalies-radio-<pid>.jsonl`, including the numeric
+  Windows error and endpoint. Older installed builds require an explicit stderr
+  capture. For a USB ETW trace,
   use `HeadersBusTrace` rather than data-payload keywords and correlate the
   failure with the controller/endpoint and power events. See
   [WinUSB read errors](https://learn.microsoft.com/en-us/windows/win32/api/winusb/nf-winusb-winusb_readpipe)
@@ -38,3 +40,20 @@
 The adapter belongs to WinUSB while this bridge runs. Old devices cannot bypass
 it through the stock wireless driver on the same physical adapter. USBip remains
 in the virtual USB transport; replacing Python with C++ does not remove USBip.
+
+Experimental C++ builds retain bounded JSONL lifecycle/error journals under
+`work/diagnostics/cpp`. `anomalies-*.jsonl` contains errors, audio loss, stalled
+writes and recovery requests; `cpp-*.jsonl` also contains ordinary lifecycle
+events. Records share process-local sequence numbers, UTC/monotonic time, process,
+thread and session. No PCM/authentication buffers are logged. Set
+`XONE_CPP_TRACE=1` before startup for USB/URB metadata and transfer timings;
+`XONE_CPP_LOG_DIR` selects a local capture directory. Normal read timeout 121 is
+only traced at this verbose level, not classified as an error.
+
+Each journal rotates at 8 MiB with three backups. Ordinary and anomaly queues
+each hold at most 2048 records. Saturation/I/O failure is reported through
+`trace_loss` and `<role>-<pid>-health.json`. Disk writes run on one worker per
+process; health snapshots are limited to once per second plus final shutdown.
+Shutdown waits at most one second for that worker. A blocked writer
+can lose its final records/health update. Keep captures local and inspect these
+counters before treating an absent event as proof it never happened.

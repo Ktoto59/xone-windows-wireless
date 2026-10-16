@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Restore a closed USBIP import per slot while retaining a live RF association.
+  Audio TX failures/ACK timeouts now invalidate the USB session explicitly and
+  allow re-import without a new RF announcement, in both Python and C++.
+- Align C++ render expiry with Python per-ISO errors and frame numbers. Preserve
+  the oldest accumulated PCM deadline and report staged media loss explicitly.
+- Add bounded asynchronous C++ lifecycle/anomaly journals, opt-in USB/URB timing
+  metadata and a C++ candidate mode in the development launcher. Cover recovery,
+  audio parity, actual loopback re-import and journal faults with regression tests.
 - Separate the stable `main` channel from `experimental` development. Add a
   Python development launcher with source-wide call/exception tracing, optional
   line tracing, process/task/URB correlation and independent rotating anomaly
