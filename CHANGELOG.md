@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Prepare the alpha.5.4 installer candidate from `experimental`. Installer
+  builds disable C++ diagnostic journals and packet tracing at compile time;
+  development builds retain diagnostics. Keep release build outputs separate
+  from the running development candidate and test that environment overrides
+  cannot activate a release journal. Operational recovery/status files remain.
+
 - Add a process-local native USB/IP MMCSS override for controlled development
   comparisons (`Run-Development.ps1 -NoUsbMmcss`). Expose sparse initialization
   progress and aggregate worker scheduling counters without packet logging.

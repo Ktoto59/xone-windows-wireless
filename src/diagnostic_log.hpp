@@ -113,6 +113,9 @@ public:
 inline std::unique_ptr<DiagnosticJournal> diagnostic_journal;
 inline bool diagnostic_verbose=false;
 inline void initialize_diagnostics(const std::string &role,const std::filesystem::path &directory={})noexcept{
+#ifdef XONE_DISABLE_DIAGNOSTICS
+    (void)role;(void)directory;
+#else
     try{
         if(diagnostic_journal)return;
         wchar_t configured[32768]{};const auto size=GetEnvironmentVariableW(L"XONE_CPP_LOG_DIR",configured,32768);
@@ -126,6 +129,7 @@ inline void initialize_diagnostics(const std::string &role,const std::filesystem
         diagnostic_journal=std::make_unique<DiagnosticJournal>(path,role,DiagnosticJournal::Limits{});
         diagnostic_journal->event("process_started",{{"verbose",diagnostic_verbose}});
     }catch(...){}
+#endif
 }
 inline void diagnostic(const char *operation,Json fields={},bool anomaly=false)noexcept{
     if(diagnostic_journal)diagnostic_journal->event(operation,std::move(fields),anomaly);

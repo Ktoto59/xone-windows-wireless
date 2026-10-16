@@ -34,8 +34,15 @@ Use Windows x64, Visual Studio C++ Build Tools, a Windows SDK and Inno Setup:
 .\scripts\Build-Installer.ps1 -IsccPath 'C:\path\to\ISCC.exe'
 ```
 
-The builder compiles candidate binaries into `outputs/appliance-candidate` and
-leaves a running copy untouched. `-SkipBuild -LauncherDir <directory>` packages
+The builder compiles release binaries into `outputs/appliance-release` with
+`XONE_DISABLE_DIAGNOSTICS`: no C++ journal writer, anomaly files, journal health
+files or packet tracing, even when diagnostic environment overrides are present.
+Maintenance results/transcripts and operational status/recovery files remain.
+Use `-EnableDiagnostics` to build a diagnostic installer into
+`outputs/appliance-candidate`; ordinary `Build-Appliance.cmd` development builds
+retain diagnostics. `Build-Appliance.cmd --no-diagnostics <output-directory>`
+can also build a separate release candidate without replacing a running copy.
+`-SkipBuild -LauncherDir <directory>` packages
 explicit, already tested binaries. Use a fresh version/staging directory; the
 builder refuses to overwrite an existing package stage.
 
