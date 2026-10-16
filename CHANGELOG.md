@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Preserve radio retry backoff across USB disappearance/re-enumeration and
+  resume. Cap repeated startup retries at one per 60 seconds and reset only
+  after a continuous stable run; cover rapid USB return with regression tests.
+- Default development C++ diagnostics to errors/anomalies and sparse lifecycle
+  context; require `-CppPacketTrace` for per-transfer logs.
+
 - Restore a closed USBIP import per slot while retaining a live RF association.
   Audio TX failures/ACK timeouts now invalidate the USB session explicitly and
   allow re-import without a new RF announcement, in both Python and C++.

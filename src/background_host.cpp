@@ -16,6 +16,7 @@
 #include "winusb_transport.hpp"
 #include "adapter_catalog.hpp"
 #include "usb_import_recovery.hpp"
+#include "radio_restart_backoff.hpp"
 #include "diagnostic_log.hpp"
 namespace {
 using xone::Json;namespace fs=std::filesystem;using Clock=std::chrono::steady_clock;
@@ -80,13 +81,13 @@ bool healthy(const std::wstring &id){DEVINST node=0;ULONG status=0,problem=0;ret
 struct Peer {xone::ApplianceDevice model;int port=0;uint64_t generation=0;bool ready=false;Clock::time_point attached_at{},retry_at{};};
 class Host {
     std::array<Peer,8> peers_;Json config_,previous_state_;Child radio_;std::wstring adapter_;Window window_;
-    Clock::time_point retry_at_=Clock::now(),started_{},adapter_check_{};unsigned retries_=0;
+    Clock::time_point adapter_check_{};xone::RadioRestartBackoff radio_retry_;std::string retry_reason_;
     DWORD last_radio_exit_=0;
     fs::path work=root/L"work";Json me_=identity(GetCurrentProcess(),GetCurrentProcessId());
     fs::path peer_status(const Peer &peer)const{return work/xone::wide("native-"+peer.model.name+".json");}
     void state(std::string phase,std::string error={}){
         Json ready=Json::array(),devices=Json::array();for(const auto &p:peers_){if(p.ready && p.port)ready.push_back(p.model.name);devices.push_back({{"Name",p.model.name},{"Mac",p.model.mac},{"Audio",p.model.audio},{"Port",p.port},{"Generation",p.generation},{"Status",xone::narrow(peer_status(p).wstring())},{"UsbPort",p.model.port}});}
-        Json status={{"Phase",phase},{"Error",error.empty()?Json(nullptr):Json(error)},{"Process",me_},{"WorkerActive",radio_.alive()},{"RadioActive",radio_.alive()},{"DevicesReady",ready},{"Devices",devices},{"AudioSelected",false},{"RetryCount",retries_},{"LastRadioExit",last_radio_exit_},{"Backend","cpp-headless"}};
+        Json status={{"Phase",phase},{"Error",error.empty()?Json(nullptr):Json(error)},{"Process",me_},{"WorkerActive",radio_.alive()},{"RadioActive",radio_.alive()},{"DevicesReady",ready},{"Devices",devices},{"AudioSelected",false},{"RetryCount",radio_retry_.failures()},{"RetryDelaySeconds",radio_retry_.delay().count()},{"LastRadioExit",last_radio_exit_},{"Backend","cpp-headless"}};
         if(status==previous_state_)return;
         xone::diagnostic("host_state",{{"phase",phase},{"error",error},{"ready",ready},{"last_radio_exit",last_radio_exit_}},!error.empty());
         write(work/L"maintenance-status.json",status);
@@ -100,6 +101,7 @@ class Host {
         }peer.port=0;}peer.ready=false;
     }
     void stop_radio(){
+        radio_retry_.stopped();
         xone::diagnostic("radio_stop_requested");
         for(auto &p:peers_)detach(p);
         if(radio_.alive()){std::ofstream stop(work/L"usb-gip.stop");stop<<"stop";stop.close();WaitForSingleObject(radio_.process.value,8000);}radio_.close();
@@ -118,7 +120,11 @@ class Host {
         xone::diagnostic("radio_start_requested");
         fs::remove(work/L"usb-gip.stop");for(auto &p:peers_){std::error_code e;fs::remove(peer_status(p),e);p.ready=false;p.generation=0;}
         std::wstring arguments=L"run --output usb-gip --native-usb --usb-auto-slots 8 --usb-gip-port 33400 --seconds 0 --instance "+quote(adapter_)+L" --firmware "+quote((work/L"firmware/FW_ACC_00U.bin").wstring())+L" --stop-file "+quote((work/L"usb-gip.stop").wstring())+L" --status-file "+quote((work/L"usb-gip-controller-status.json").wstring());
-        radio_.start(binary_dir/L"xone-probe-cpp.exe",std::move(arguments));SetPriorityClass(radio_.process.value,ABOVE_NORMAL_PRIORITY_CLASS);started_=Clock::now();state("StartingRadio");
+        radio_.start(binary_dir/L"xone-probe-cpp.exe",std::move(arguments));SetPriorityClass(radio_.process.value,ABOVE_NORMAL_PRIORITY_CLASS);radio_retry_.started(Clock::now());retry_reason_.clear();state("StartingRadio");
+    }
+    void failed_radio(std::string reason){
+        retry_reason_=std::move(reason);radio_retry_.failed(Clock::now());
+        xone::diagnostic("radio_retry_scheduled",{{"reason",retry_reason_},{"failures",radio_retry_.failures()},{"delay_seconds",radio_retry_.delay().count()}},true);
     }
 public:
     explicit Host(const std::wstring &selected={}){config_=read(root/L"config/devices.local.json");if(!selected.empty())config_["AdapterInstanceId"]=xone::utf8(selected);for(size_t n=0;n<peers_.size();++n)peers_[n].model={"slot-"+std::to_string(n),"","000000000000",0,static_cast<uint16_t>(33400+2*n),false};}
@@ -128,7 +134,7 @@ public:
         // Change notifications own the idle wait. No console or UI is shown.
         while(!fs::exists(work/L"maintenance.stop") && !fs::exists(work/L"usb-gip.stop")){
             window_.pump();try{
-                if(resumed){xone::diagnostic("power_resume");stop_radio();resumed=false;retry_at_=Clock::now();}
+                if(resumed){xone::diagnostic("power_resume");stop_radio();resumed=false;}
                 if(hardware_changed || (!radio_.alive() && Clock::now()>=adapter_check_)){
                     hardware_changed=false;adapter_check_=Clock::now()+std::chrono::seconds(30);
                     const auto devices=xone::adapters();
@@ -140,13 +146,15 @@ public:
                         else {if(found!=devices.end()){found=devices.end();break;}found=d;}
                     }
                     if(found!=devices.end() && healthy(found->instance))adapter_=found->instance;else adapter_.clear();
-                    if(adapter_.empty() && radio_.alive()){xone::diagnostic("adapter_unavailable",{},true);stop_radio();}
+                    if(adapter_.empty() && radio_.alive()){xone::diagnostic("adapter_unavailable",{},true);failed_radio("Adapter disconnected; waiting before radio restart");stop_radio();}
                 }
                 if(!radio_.alive()){
-                    if(radio_.process.value){GetExitCodeProcess(radio_.process.value,&last_radio_exit_);stop_radio();++retries_;retry_at_=Clock::now()+std::chrono::seconds(std::min(30u,2u<<std::min(retries_,3u)));state("Retrying","Radio exited with code "+std::to_string(last_radio_exit_));}
-                    if(adapter_.empty())state("WaitingForAdapter");else if(Clock::now()>=retry_at_){if(!fs::exists(work/L"firmware/FW_ACC_00U.bin"))state("SetupRequired","Adapter firmware is missing");else start_radio();}
+                    if(radio_.process.value){GetExitCodeProcess(radio_.process.value,&last_radio_exit_);failed_radio("Radio exited with code "+std::to_string(last_radio_exit_));stop_radio();}
+                    if(adapter_.empty())state("WaitingForAdapter",retry_reason_);
+                    else if(!radio_retry_.ready(Clock::now()))state("Retrying",retry_reason_);
+                    else if(!fs::exists(work/L"firmware/FW_ACC_00U.bin"))state("SetupRequired","Adapter firmware is missing");else start_radio();
                 }else{
-                    if(Clock::now()-started_>std::chrono::seconds(30))retries_=0;
+                    if(radio_retry_.observe_running(Clock::now()))xone::diagnostic("radio_recovery_stable");
                     for(auto &p:peers_){const auto s=read(peer_status(p));
                         // An unavailable/partially observed status file is not
                         // a radio disconnect. Only an explicit snapshot may
@@ -166,7 +174,7 @@ public:
                     // Connecting another peer must not change global defaults.
                     state(std::any_of(peers_.begin(),peers_.end(),[](const auto &p){return p.ready && p.port!=0;})?"DevicesReady":"WaitingForDevices");
                 }
-            }catch(const std::exception &e){xone::diagnostic("host_retry",{{"error",e.what()}},true);state("Retrying",e.what());retry_at_=Clock::now()+std::chrono::seconds(10);}
+            }catch(const std::exception &e){xone::diagnostic("host_retry",{{"error",e.what()}},true);if(!radio_.alive())failed_radio(e.what());state("Retrying",e.what());}
             HANDLE waits[2]{};DWORD count=0;if(directory.value && directory.value!=INVALID_HANDLE_VALUE)waits[count++]=directory.value;if(radio_.alive())waits[count++]=radio_.process.value;
             const auto event=MsgWaitForMultipleObjects(count,waits,FALSE,2000,QS_ALLINPUT);if(count && event==WAIT_OBJECT_0 && waits[0]==directory.value)FindNextChangeNotification(directory.value);
         }

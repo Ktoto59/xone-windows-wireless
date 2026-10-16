@@ -5,6 +5,7 @@ param([ValidateSet('calls','lines')][string]$TraceLevel='calls',
       [ValidateRange(0,86400)][int]$Seconds=300,
       [ValidateRange(1,16)][int]$Slots=8,
       [string]$InstanceId='', [string]$PythonPath='',
+      [switch]$CppPacketTrace,
       [switch]$TakeOverInstalled)
 $ErrorActionPreference='Stop'
 $taskRoot=Split-Path -Parent $PSScriptRoot
@@ -16,6 +17,8 @@ $taskInstalledRunning=$taskInstalledState -and (Test-XoneProcess $taskInstalledS
 if($taskInstalledRunning -and -not $TakeOverInstalled){throw 'The installed bridge is running. Use -TakeOverInstalled to stop it for this session and restore it afterward.'}
 $taskPrevious=Read-XoneJson (Join-Path $taskRoot 'work/usb-gip-running.json')
 if($taskPrevious -and (Test-XoneProcess $taskPrevious.Worker)){throw 'A bridge already owns this development checkout. Stop that owned session first.'}
+$taskPreviousHost=Read-XoneJson (Join-Path $taskRoot 'work/maintenance-status.json')
+if($taskPreviousHost -and (Test-XoneProcess $taskPreviousHost.Process)){throw 'A C++ host already owns this development checkout. Stop that owned session first.'}
 $taskAdapter=Resolve-XoneAdapterInstance $InstanceId
 if((Get-PnpDeviceProperty -InstanceId $taskAdapter -KeyName DEVPKEY_Device_Service).Data -ne 'WinUSB'){throw 'The adapter must already use WinUSB.'}
 if($Backend -eq 'python'){
@@ -37,7 +40,7 @@ $taskOldTrace=$env:XONE_DEVELOPMENT_TRACE
 $taskOldCppDirectory=$env:XONE_CPP_LOG_DIR
 $taskOldCppTrace=$env:XONE_CPP_TRACE
 $taskChild=$null;$taskRestored=$false;$taskStoppedInstalled=$false
-$taskMetadata=[ordered]@{StartedUtc=[datetime]::UtcNow.ToString('o');FinishedUtc=$null;Backend=$Backend;TraceLevel=$TraceLevel;Seconds=$Seconds;Slots=$Slots;RadioSHA256=(Get-FileHash -LiteralPath $taskRadio -Algorithm SHA256).Hash;Python=$PythonPath;ProductionRestored=$false;ExitCode=$null;Error=$null}
+$taskMetadata=[ordered]@{StartedUtc=[datetime]::UtcNow.ToString('o');FinishedUtc=$null;Backend=$Backend;TraceLevel=$TraceLevel;CppPacketTrace=[bool]$CppPacketTrace;Seconds=$Seconds;Slots=$Slots;RadioSHA256=(Get-FileHash -LiteralPath $taskRadio -Algorithm SHA256).Hash;Python=$PythonPath;ProductionRestored=$false;ExitCode=$null;Error=$null}
 Push-Location -LiteralPath $taskRoot
 try{
     $taskMetadata.Branch=(& git branch --show-current | Out-String).Trim()
@@ -53,7 +56,7 @@ try{
     $env:XONE_DEVELOPMENT_LOG_DIR=$taskDirectory
     $env:XONE_DEVELOPMENT_TRACE=$TraceLevel
     $env:XONE_CPP_LOG_DIR=$taskDirectory
-    $env:XONE_CPP_TRACE='1'
+    $env:XONE_CPP_TRACE=if($CppPacketTrace){'1'}else{'0'}
     $taskArguments='-u '+(Quote-XonePath (Join-Path $taskRoot 'src/usbip_auto_manager.py'))+' --root '+(Quote-XonePath $taskRoot)+' --instance '+(Quote-XonePath $taskAdapter)+' --usbip '+(Quote-XonePath $taskUsbip)+' --slots '+$Slots
     $taskLaunch=@{FilePath=$PythonPath;ArgumentList=$taskArguments;WorkingDirectory=$taskRoot;WindowStyle='Hidden';RedirectStandardOutput=(Join-Path $taskDirectory 'supervisor-stdout.log');RedirectStandardError=(Join-Path $taskDirectory 'supervisor-stderr.log');PassThru=$true}
     if($Backend -eq 'cpp'){$taskLaunch.FilePath=$taskHost;$taskLaunch.ArgumentList='--instance '+(Quote-XonePath $taskAdapter)}
@@ -61,6 +64,7 @@ try{
     # Retain the process handle before a fast startup failure can discard it.
     $taskChildHandle=$taskChild.Handle
     Write-Output ('Development session: '+$taskDirectory)
+    Write-Output ('C++ packet tracing: '+[bool]$CppPacketTrace+'; seconds: '+$Seconds+' (0 = until stopped).')
     Write-Output 'Anomalies: anomalies-*.jsonl; trace: cpp-*.jsonl, supervisor-*.jsonl and worker-*.jsonl.'
     $taskDeadline=if($Seconds){[datetime]::UtcNow.AddSeconds($Seconds)}else{[datetime]::MaxValue}
     while(-not $taskChild.HasExited -and [datetime]::UtcNow -lt $taskDeadline){

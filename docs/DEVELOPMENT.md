@@ -32,9 +32,12 @@ does not change bindings, power policy, pairing, or installed binaries.
 # Also trace each executed Python line (much higher overhead).
 .\scripts\Run-Development.ps1 -TakeOverInstalled -TraceLevel lines -Seconds 300
 
-# Exercise the C++ candidate with journals and USB/URB timing metadata.
+# C++ errors/anomalies and sparse lifecycle context, until explicitly stopped.
 .\scripts\Build-Appliance.cmd
-.\scripts\Run-Development.ps1 -Backend cpp -TakeOverInstalled -Seconds 300
+.\scripts\Run-Development.ps1 -Backend cpp -TakeOverInstalled -Seconds 0
+
+# Explicit short packet/URB trace when individual transfers need investigation.
+.\scripts\Run-Development.ps1 -Backend cpp -TakeOverInstalled -CppPacketTrace -Seconds 60
 ```
 
 `-TakeOverInstalled` stops the owned installed host for the session and requests
@@ -64,8 +67,13 @@ Windows error before formatting/cleanup.
 The C++ mode runs `outputs/appliance-candidate/xone-background.exe` and its radio
 child, using the checkout's configuration/firmware and selected adapter. It
 does not replace installed binaries. The launcher gives Python and C++ children
-the same capture directory through `XONE_CPP_LOG_DIR`; C++ verbose transfer
-metadata is enabled for these bounded sessions. C++ uses independent 2048-event
+the same capture directory through `XONE_CPP_LOG_DIR`. C++ packet/URB tracing is
+off by default, including ordinary empty-read timeouts and successful transfers.
+Errors, anomalies and sparse lifecycle transitions remain enabled. Use the
+explicit `-CppPacketTrace` switch only to investigate individual transfers; this
+can saturate the ordinary journal and produce `trace_loss` warnings. The switch
+also controls the shared C++ radio in Python sessions; Python call/line tracing
+is separate and remains controlled by `-TraceLevel`. C++ uses independent 2048-event
 ordinary/anomaly queues, 8 MiB journals with three backups and one-second writer
 shutdown; see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
