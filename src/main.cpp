@@ -11,6 +11,7 @@
 #include "status_schedule.hpp"
 #include "diagnostic_log.hpp"
 #include "radio_idle_power.hpp"
+#include "radio_event_queue.hpp"
 extern "C" {
 #include "mt76/mt76.h"
 }
@@ -290,7 +291,9 @@ class Receiver {
     std::ofstream output_;
     std::vector<std::jthread> threads_;
     std::string error_;
-    std::deque<xone::RadioEvent> events_;
+    xone::RadioEventQueue events_;
+    uint64_t reported_media_drops_=0;
+    std::chrono::steady_clock::time_point reported_at_{};
     bool session_;
     std::atomic_uint64_t count_=0;
     std::chrono::steady_clock::time_point start_=std::chrono::steady_clock::now();
@@ -308,24 +311,18 @@ public:
                         auto bytes=usb_.read(pipe,token);
                         if (bytes.empty()) continue;
                         const auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-start_).count();
-                        std::lock_guard lock(mutex_);
                         ++count_;
                         if (output_.is_open()) {
+                            std::lock_guard lock(mutex_);
                             output_ << "{\"ms\":" << ms << ",\"pipe\":" << unsigned(pipe) << ",\"hex\":\"" << xone::hex(bytes) << "\"}\n";
                             output_.flush();
                             if (!output_) throw std::runtime_error("Cannot write capture file");
                         }
-                        try {
-                            auto event=xone::parse_radio(bytes);
-                            if (session_) {
-                                if (events_.size()>=4096) {
-                                    error_="Radio event queue overflow";
-                                    throw std::runtime_error(error_);
-                                }
-                                if (event.kind!=xone::RadioEvent::Kind::ignored) events_.push_back(std::move(event));
-                            } else show_radio(event);
-                        }
-                        catch (const std::exception &e) { xone::diagnostic("radio_decode_error",{{"endpoint",pipe},{"error",e.what()}},true);std::cerr << "Packet decode: " << e.what() << '\n'; }
+                        xone::RadioEvent event;
+                        try {event=xone::parse_radio(bytes);}
+                        catch (const std::exception &e) { xone::diagnostic("radio_decode_error",{{"endpoint",pipe},{"error",e.what()}},true);std::cerr << "Packet decode: " << e.what() << '\n';continue; }
+                        if(session_){std::lock_guard lock(mutex_);events_.push(std::move(event));}
+                        else {std::lock_guard lock(mutex_);show_radio(event);}
                     }
                 } catch (const std::exception &e) {
                     xone::diagnostic("receiver_failed",{{"endpoint",pipe},{"error",e.what()}},true);
@@ -338,7 +335,13 @@ public:
     void stop() { for (auto &t : threads_) t.request_stop(); threads_.clear(); }
     void check() { std::lock_guard lock(mutex_); if (!error_.empty()) throw std::runtime_error(error_); }
     uint64_t count() const { return count_.load(); }
-    std::deque<xone::RadioEvent> drain() { std::lock_guard lock(mutex_); std::deque<xone::RadioEvent> out; out.swap(events_); return out; }
+    std::deque<xone::RadioEvent> drain() {
+        std::lock_guard lock(mutex_);auto out=events_.drain();const auto now=std::chrono::steady_clock::now();
+        if(events_.dropped_media()!=reported_media_drops_ && now-reported_at_>=std::chrono::seconds(1)){
+            xone::diagnostic("radio_capture_queue_drop",{{"count",events_.dropped_media()-reported_media_drops_},{"total",events_.dropped_media()},{"control_high_water",events_.reliable_high_water()}},true);
+            reported_media_drops_=events_.dropped_media();reported_at_=now;
+        }return out;
+    }
 };
 void check_mt76(int result,usb_device &usb,const char *operation) {
     if (result || usb.sticky_error) throw std::runtime_error(std::string(operation)+" failed: " + std::to_string(usb.sticky_error ? usb.sticky_error : result));

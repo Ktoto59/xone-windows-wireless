@@ -27,6 +27,30 @@ Status disk writes are asynchronous. The host only detaches on an explicit
 lifecycle snapshot/generation transition, never on a missing or unreadable file.
 Rare radio removals and USB closure errors are recorded locally for diagnosis.
 
+Radio ingress and each native USB worker isolate reliable control/lifecycle/ACK
+messages from microphone PCM. Control messages keep FIFO order and a separate
+4096-entry capacity. Microphone queues retain at most four transfers per WCID
+and expire at 32 ms; a microphone flood cannot evict a service message. Consumers
+process bounded batches, with control messages before media and no media passing
+a still-queued lifecycle barrier. Disconnect/reassociation invalidates old media.
+Mixed or undecodable GIP messages remain reliable rather than being guessed to
+be droppable audio.
+
+Playback has a separate path and model-specific media deadline. Before serialized
+physical USB writes, controls precede unsent playback while FIFO/peer fairness
+is retained within each class. The render deadline follows each native request
+to the physical TX stage: unsent stale PCM gets an explicit ISO expiry, preserving
+the RF association and USB generation. Real transport failures retain recovery.
+The legacy TCP radio broker likewise prioritizes reliable frames but always
+finishes a partially sent frame before switching traffic classes.
+
+These are application queues, not additional physical USB endpoints or parallel
+writes. Reliable means no silent media-style eviction or expiry: capacity and
+transport failures are explicit errors, not a promise of delivery through a
+failed adapter. Commands are not blindly replayed; protocol/Windows sequencing
+still owns acknowledgements and retries. Queue-pressure drops are logged with
+counts at most once per second, not once per microphone packet.
+
 Malformed radio GIP framing is rejected before dispatching any packet from that
 transfer. The associated WCID's `MalformedGipPackets` status counter increases;
 other devices and later valid packets continue. Dispatch and physical USB errors

@@ -36,4 +36,8 @@ if errorlevel 1 exit /b 1
 cl /nologo /std:c++20 /EHsc /O2 /W4 /WX /utf-8 /I src tests\radio_idle_power_tests.cpp /Fobuild\appliance\radio_idle_power_tests.obj /Feoutputs\appliance-candidate\radio-idle-power-tests.exe
 if errorlevel 1 exit /b 1
 outputs\appliance-candidate\radio-idle-power-tests.exe
+if errorlevel 1 exit /b 1
+cl /nologo /std:c++20 /EHsc /O2 /W4 /WX /utf-8 /I src tests\control_media_queue_tests.cpp build\appliance\protocol.obj build\appliance\gip_link.obj /Fobuild\appliance\control_media_queue_tests.obj /Feoutputs\appliance-candidate\control-media-queue-tests.exe
+if errorlevel 1 exit /b 1
+outputs\appliance-candidate\control-media-queue-tests.exe
 exit /b %errorlevel%

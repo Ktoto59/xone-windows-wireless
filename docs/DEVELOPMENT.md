@@ -199,6 +199,14 @@ Journal tests cover queue saturation, reserved anomaly capacity, rotation, write
 failure and bounded shutdown with a stalled writer. These are synthetic tests;
 they are not physical adapter reliability measurements.
 
+The appliance build also runs control/media isolation tests: 10,000 microphone
+messages cannot evict reliable traffic, control saturation fails explicitly,
+per-peer media limits isolate siblings, control messages survive media expiry,
+and mixed GIP/lifecycle/partial-TCP frames retain their required ordering. Session
+tests verify physical TX priority and explicit unsent PCM expiry. Native core and
+Python/C++ differential tests verify that this expiry does not reset the RF/USB
+generation, while a real failed TX still invokes recovery.
+
 ## Repository layout
 
 | Directory | Purpose |

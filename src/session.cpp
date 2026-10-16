@@ -332,7 +332,9 @@ void Session::process(const RadioEvent &e) {
     }
 }
 void Session::tick(std::chrono::steady_clock::time_point now) {
-    if(raw_output_)for(const auto &request:raw_output_->poll()){
+    auto requests=raw_output_?raw_output_->poll():std::vector<RawGipTransmit>{};
+    prioritize_control(requests);
+    for(const auto &request:requests){
         if(!request.wcid || request.wcid>16 || !clients_[request.wcid-1] || !raw_output_->target(clients_[request.wcid-1]->address)){
             raw_output_->complete(request.wcid,request.token,-19);continue;
         }
@@ -342,6 +344,9 @@ void Session::tick(std::chrono::steady_clock::time_point now) {
         const bool invalid_data=!request.audio && (request.data.size()>64 || std::any_of(packets.begin(),packets.end(),[](const auto &p){return p.command==0x60;}));
         if(packets.empty() || invalid_audio || invalid_data){
             raw_output_->complete(request.wcid,request.token,-95);continue;
+        }
+        if(request.audio && std::chrono::steady_clock::now()>request.media_deadline){
+            raw_output_->complete(request.wcid,request.token,-18);continue;
         }
         for(const auto &p:packets)clients_[request.wcid-1]->transmit(p,request.audio);
         raw_output_->complete(request.wcid,request.token,0);

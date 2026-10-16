@@ -2,9 +2,18 @@
 #pragma once
 #include "protocol.hpp"
 #include <memory>
+#include <chrono>
+#include <algorithm>
 namespace xone {
 using Bytes=std::vector<uint8_t>;
-struct RawGipTransmit { uint8_t wcid; uint32_t token; Bytes data; bool audio=false; };
+struct RawGipTransmit {
+    uint8_t wcid;uint32_t token;Bytes data;bool audio=false;
+    std::chrono::steady_clock::time_point media_deadline=std::chrono::steady_clock::time_point::max();
+};
+inline void prioritize_control(std::vector<RawGipTransmit> &requests){
+    // FIFO within each traffic class, including per-peer round-robin order.
+    std::stable_partition(requests.begin(),requests.end(),[](const auto &r){return !r.audio;});
+}
 class RawGipOutput {
 public:
     virtual ~RawGipOutput()=default;

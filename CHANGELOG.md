@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Isolate reliable radio/control traffic from microphone media in separate
+  bounded queues, prioritize controls before unsent audio, and retain lifecycle
+  and per-class ordering. Media pressure/age cannot consume control capacity.
+  Check render deadlines again before physical USB TX; deliberately expired PCM
+  completes with ISO expiry without resetting the USB/RF session in C++/Python.
+  Log control saturation explicitly and aggregate microphone queue-drop reports.
+
 - Add wake-capable idle power for the shared C++ radio runtime: arm firmware
   wake-on-wireless after 30 seconds without clients/pairing, allow WinUSB selective
   suspend, resume before dispatch, and provide a 30-second watchdog receive window.

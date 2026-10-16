@@ -435,6 +435,25 @@ int main() {
             thrown=false;try{session.tick();}catch(const std::runtime_error &){thrown=true;}
             check(thrown && usb.sticky_error==-EREMOTEIO,"Physical USB failure did not propagate to recovery");
         });
+        test("Radio TX prioritizes controls and rejects stale PCM without disconnect",[]{
+            struct Raw final:RawGipOutput{
+                std::vector<RawGipTransmit> tx;std::vector<std::pair<uint32_t,int>> completed;
+                bool target(std::span<const uint8_t>)const override{return true;}
+                void event(uint8_t,uint8_t,std::span<const uint8_t>)override{}
+                std::vector<RawGipTransmit> poll()override{auto result=std::move(tx);tx.clear();return result;}
+                void complete(uint8_t,uint32_t token,int status)override{completed.emplace_back(token,status);}
+            } raw;
+            usb_device usb{};device dev{};xone_mt76 mt{};mt.dev=&dev;mt.udev=&usb;
+            usb.control=[](void *,u8,u8 type,u16,u16,void *data,u16 n,unsigned)->int{if(type&128)std::memset(data,0,n);return n;};
+            usb.bulk=[](void *,u8,void *,int n,int *actual,unsigned)->int{if(actual)*actual=n;return 0;};
+            Session session(mt,nullptr,false,nullptr,&raw);RadioEvent e;e.kind=RadioEvent::Kind::association;e.address={2,0,0,0,0,1};session.process(e);
+            const auto audio=encode_gip({0x60,32,1,0,Bytes(1536)}),control=encode_gip({4,32,1,0,{}});
+            raw.tx={{1,1,audio,true},{1,2,control,false},{1,3,audio,true,std::chrono::steady_clock::now()-std::chrono::seconds(1)},{1,4,control,false}};
+            session.tick();
+            check(raw.completed==std::vector<std::pair<uint32_t,int>>{{2,0},{4,0},{1,0},{3,-18}},"Control priority or explicit PCM expiry failed");
+            check(session.has_clients() && session.status()[0].usb_tx.packets==3 && !usb.sticky_error,"Stale PCM reached USB or killed RF session");
+            session.close();
+        });
         test("USB brokers isolate WCIDs, equal completion tokens and reassociation",[]{
             struct Raw final:RawGipOutput{
                 uint8_t id;unsigned events=0;

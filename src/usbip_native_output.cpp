@@ -9,6 +9,7 @@
 #include "latest_snapshot.hpp"
 #include "appliance_config.hpp"
 #include "diagnostic_log.hpp"
+#include "control_media_queue.hpp"
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -49,7 +50,8 @@ struct NativeUsbOutput::Impl {
     Bytes mac;usbip::Profile profile;usbip::Core core;bool audio,automatic,diagnostics;uint16_t product;uint8_t bound_wcid=0;
     SOCKET listener=INVALID_SOCKET;WSAEVENT accept_event=WSA_INVALID_EVENT;
     HANDLE wake=nullptr,timer=nullptr;std::thread thread;std::mutex mutex;
-    bool stopping=false;std::string error;std::deque<Message> inbox;std::vector<RawGipTransmit> tx;
+    bool stopping=false;std::string error;ControlMediaQueue<Message> inbox{4096,4,4};std::vector<RawGipTransmit> tx;
+    uint64_t reported_mailbox_drops=0;usbip::Core::Clock::time_point mailbox_reported_at{};
     std::string last_usb_error;uint64_t usb_closed=0;std::atomic_uint64_t mailbox_dropped=0;
     std::vector<std::unique_ptr<Client>> clients;Client *imported=nullptr;
     std::unique_ptr<LatestSnapshot> status_writer;
@@ -84,14 +86,20 @@ struct NativeUsbOutput::Impl {
     }
     ~Impl(){ {std::lock_guard lock(mutex);stopping=true;}SetEvent(wake);if(thread.joinable())thread.join();clients.clear();release(); }
     void release(){if(listener!=INVALID_SOCKET)closesocket(listener);if(accept_event!=WSA_INVALID_EVENT)WSACloseEvent(accept_event);if(timer)CloseHandle(timer);if(wake)CloseHandle(wake);WSACleanup();}
+    void report_mailbox_drops(){
+        const auto total=inbox.dropped_media();mailbox_dropped=total;const auto now=usbip::Core::Clock::now();
+        if(total!=reported_mailbox_drops && now-mailbox_reported_at>=std::chrono::seconds(1)){
+            diagnostic("mailbox_audio_dropped",{{"association",association_id},{"count",total-reported_mailbox_drops},{"total",total},{"control_high_water",inbox.reliable_high_water()}},true);
+            reported_mailbox_drops=total;mailbox_reported_at=now;
+        }
+    }
     void post(Message m){
         std::lock_guard lock(mutex);
-        if(m.kind==1 || m.kind==3)tx.clear();
-        if(m.kind==4 && std::count_if(inbox.begin(),inbox.end(),[](const auto &v){return v.kind==4;})>=4){const auto old=std::find_if(inbox.begin(),inbox.end(),[](const auto &v){return v.kind==4;});inbox.erase(old);++mailbox_dropped;diagnostic("mailbox_audio_dropped",{{"association",association_id},{"wcid",m.wcid},{"queued",inbox.size()}},true);}
-        if(inbox.size()>=4096){
-            const auto old=std::find_if(inbox.begin(),inbox.end(),[](const auto &v){return v.kind==4;});
-            if(old!=inbox.end()){inbox.erase(old);++mailbox_dropped;diagnostic("mailbox_pressure_drop",{{"association",association_id}},true);}else throw usbip::Error("Native USB mailbox overflow");
-        }inbox.push_back(std::move(m));SetEvent(wake);
+        if(m.kind==1 || m.kind==3){tx.clear();inbox.discard_media([](const auto &){return true;});}
+        const auto media=m.kind==4;const auto wcid=m.wcid;const auto arrived=m.arrived;
+        try{inbox.push(std::move(m),media,wcid,arrived);}
+        catch(const std::overflow_error &){diagnostic("control_mailbox_overflow",{{"association",association_id},{"queued",inbox.reliable_size()}},true);throw;}
+        report_mailbox_drops();SetEvent(wake);
     }
     void publish(bool connected=true){
         if(!status_writer)return;const auto &s=core.stats();const auto now=usbip::Core::Clock::now();
@@ -131,11 +139,22 @@ struct NativeUsbOutput::Impl {
         streaming_audio=audio && core.ready() && core.stats().layout;
         if(imported && !imported->dead){for(auto &reply:core.replies())imported->send(std::move(reply));}else core.replies();
         auto requests=core.outbound();
+        std::vector<RawGipTransmit> expired;
         {std::lock_guard lock(mutex);
-            const bool reset_pending=core.stats().recovery_required || std::any_of(inbox.begin(),inbox.end(),[](const auto &m){return m.kind==1 || m.kind==3;});
+            const bool reset_pending=core.stats().recovery_required || inbox.any_reliable([](const auto &m){return m.kind==1 || m.kind==3;});
             if(reset_pending)tx.clear();
-            if(!reset_pending){if(tx.size()+requests.size()>128)throw usbip::Error("Native radio TX queue overflow");for(auto &request:requests)tx.push_back(std::move(request));}
+            if(!reset_pending){
+                size_t render=static_cast<size_t>(std::count_if(tx.begin(),tx.end(),[](const auto &r){return r.audio;})),control=tx.size()-render;
+                for(auto &request:requests){
+                    if(request.audio){
+                        if(render>=4 || usbip::Core::Clock::now()>request.media_deadline){expired.push_back(std::move(request));continue;}
+                        ++render;
+                    }else if(control++>=128){diagnostic("control_tx_queue_overflow",{{"association",association_id}},true);throw usbip::Error("Native radio control TX queue overflow");}
+                    tx.push_back(std::move(request));
+                }
+            }
         }
+        for(const auto &request:expired)core.complete(request.wcid,request.token,-18);
         const auto now=usbip::Core::Clock::now();
         // A live USB interrupt URB may wait indefinitely on an idle device.
         // Limit only incomplete imports; TCP close and RF generation own lifetime.
@@ -150,9 +169,8 @@ struct NativeUsbOutput::Impl {
             publish();
             for(;;){
                 std::deque<Message> events;
-                {std::lock_guard lock(mutex);if(stopping)break;events.swap(inbox);ResetEvent(wake);}
+                {std::lock_guard lock(mutex);if(stopping)break;events=inbox.drain();report_mailbox_drops();if(inbox.empty())ResetEvent(wake);else SetEvent(wake);}
                 for(const auto &m:events){
-                    if(m.kind==4 && usbip::Core::Clock::now()-m.arrived>std::chrono::milliseconds(32)){++mailbox_dropped;diagnostic("mailbox_audio_expired",{{"association",association_id},{"wcid",m.wcid}},true);continue;}
                     if(m.kind==1 || m.kind==3){std::lock_guard lock(mutex);tx.clear();}
                     if(m.kind==1 || m.kind==3)for(auto &client:clients)client->dead=true;
                     try{

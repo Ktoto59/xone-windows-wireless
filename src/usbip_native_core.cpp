@@ -76,7 +76,7 @@ void Core::recover_audio(){
 uint32_t Core::transmit(uint32_t seq,Bytes data,bool audio,Clock::time_point now){
     do{if(++next_token_==0)++next_token_;}while(tokens_.contains(next_token_));
     auto &p=pending_.at(seq);p.token=next_token_;p.deadline=now+std::chrono::seconds(5);tokens_[next_token_]=seq;
-    outbound_.push_back({stats_.wcid,next_token_,std::move(data),audio});return next_token_;
+    outbound_.push_back({stats_.wcid,next_token_,std::move(data),audio,audio?p.media_deadline:Clock::time_point::max()});return next_token_;
 }
 void Core::submit(Request r,Clock::time_point now){
     if(diagnostic_verbose)diagnostic("urb_submit",{{"seq",r.seq},{"ep",r.ep},{"direction",r.direction},{"length",r.length},{"pending",pending_.size()}});
@@ -186,6 +186,8 @@ void Core::complete(uint8_t wcid,uint32_t token,int32_t status,Clock::time_point
     if(status || diagnostic_verbose)diagnostic("radio_tx_complete",{{"wcid",wcid},{"token",token},{"status",status}},status!=0);
     if(wcid!=stats_.wcid)return;const auto t=tokens_.find(token);if(t==tokens_.end())return;
     const auto seq=t->second;tokens_.erase(t);auto it=pending_.find(seq);if(it==pending_.end())return;auto &p=it->second;p.token=0;
+    // A deliberately expired, unsent PCM block is media loss, not RF failure.
+    if(status==-18 && p.kind==Kind::render){expire_render(seq);pump(now);return;}
     if(status){const bool audio=p.kind==Kind::render;fail(seq,status);if(audio)recover_audio();pump(now);return;}
     if(p.kind==Kind::render){++stats_.audio_tx;p.deadline=now+std::chrono::seconds(5);}
     else {stats_.tx+=packets(p.request.data).size();Completion c;c.actual=static_cast<uint32_t>(p.request.length);finish(seq,c);}

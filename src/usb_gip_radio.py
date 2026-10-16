@@ -686,6 +686,9 @@ class RadioBackend:
                             token=token, seq=request.seq, waited_ms=waited*1000, status=status)
                 if self.generation != generation or self.audio_epoch != epoch:
                     status = -19
+                if status == -18:
+                    # Explicit unsent-media expiry is not a radio TX failure.
+                    return self.discard_render(request)
                 if status != 0:
                     if self.generation == generation and self.audio_epoch == epoch:
                         await self.recover_audio()

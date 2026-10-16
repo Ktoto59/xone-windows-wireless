@@ -34,9 +34,9 @@ async def scenario(mode):
     now=[100.0]
     backend=RadioBackend('020000000001',audio_bridge=True,clock=lambda:now[0])
     backend.wcid=1;backend.generation=1;backend.audio_layout=True
-    writer=Writer(backend,None if mode=='ack_timeout' else -5 if mode in ('error_ack','recover_ack') else 0)
+    writer=Writer(backend,None if mode=='ack_timeout' else -18 if mode=='expired_ack' else -5 if mode in ('error_ack','recover_ack') else 0)
     backend.writer=writer
-    if mode in ('error_ack','ok_ack','recover_ack','ack_timeout'):
+    if mode in ('error_ack','ok_ack','recover_ack','ack_timeout','expired_ack'):
         backend.render_credits=1;backend.render_credit_time=now[0]
         if mode=='ack_timeout':
             original=asyncio.wait_for
@@ -52,8 +52,10 @@ async def scenario(mode):
             backend.audio_layout=True;backend.render_credits=1;backend.render_credit_time=now[0]
             writer.status=0
             result=await backend.render_audio(request(20))
-        return dict(ready=backend.ready,generation=backend.generation,wcid=backend.wcid,
-                    recovery=backend.recovery_required,status=result.status)
+        state=dict(ready=backend.ready,generation=backend.generation,wcid=backend.wcid,
+                   recovery=backend.recovery_required,status=result.status)
+        if mode=='expired_ack':state.update(expired=backend.render_dropped,iso_status=result.iso[0].status)
+        return state
     if mode=='pcm_age':
         result=await backend.render_audio(request(11,4))
         assert result.status==0 and not writer.tx
@@ -97,6 +99,11 @@ class DifferentialTests(unittest.IsolatedAsyncioTestCase):
     async def test_audio_ack_timeout_uses_same_recovery(self):
         state=await self.compare('ack_timeout')
         self.assertFalse(state['ready']);self.assertEqual(state['status'],-19)
+
+    async def test_unsent_media_expiry_does_not_reset_usb_or_rf(self):
+        state=await self.compare('expired_ack')
+        self.assertTrue(state['ready']);self.assertFalse(state['recovery'])
+        self.assertEqual((state['generation'],state['expired'],state['iso_status']),(1,1,-18))
 
     async def test_usb_reimport_recovers_without_rf_reassociation(self):
         state=await self.compare('recover_ack')

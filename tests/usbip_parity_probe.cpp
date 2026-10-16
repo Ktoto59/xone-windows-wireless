@@ -20,9 +20,9 @@ int main(int argc,char **argv){
         auto p=profile(0x0b32,true);Core core(p,true);auto t=Core::Clock::time_point(100s);Bytes mac{2,0,0,0,0,1};
         core.radio(1,1,mac,t);core.imported();core.submit(control(1,{0,9,1,0,0,0,0,0}),t);core.submit(control(2,{1,11,1,0,1,0,0,0}),t);core.replies();core.radio(4,1,audio(),t);
         std::string mode=argv[1];
-        if(mode=="error_ack" || mode=="ok_ack" || mode=="recover_ack" || mode=="ack_timeout"){
+        if(mode=="error_ack" || mode=="ok_ack" || mode=="recover_ack" || mode=="ack_timeout" || mode=="expired_ack"){
             core.submit(render(10),t);auto tx=core.outbound();if(tx.size()!=1)return 3;
-            if(mode=="ack_timeout")core.tick(t+5001ms);else core.complete(1,tx[0].token,mode=="ok_ack"?0:-5,t);
+            if(mode=="ack_timeout")core.tick(t+5001ms);else core.complete(1,tx[0].token,mode=="ok_ack"?0:mode=="expired_ack"?-18:-5,t);
             auto replies=core.replies();if(replies.size()!=1)return 4;
             if(mode=="recover_ack"){
                 if(core.ready() || !core.associated() || !core.stats().recovery_required)return 11;
@@ -31,7 +31,9 @@ int main(int argc,char **argv){
                 core.complete(1,tx[0].token,0,t+1ms);core.radio(4,1,audio(),t+1ms);core.submit(render(20),t+1ms);auto next=core.outbound();if(next.size()!=1)return 12;
                 core.complete(1,next[0].token,0,t+1ms);replies=core.replies();if(replies.size()!=1)return 13;
             }
-            std::cout<<"{\"ready\":"<<(core.ready()?"true":"false")<<",\"generation\":"<<core.stats().generation<<",\"wcid\":"<<unsigned(core.stats().wcid)<<",\"recovery\":"<<(core.stats().recovery_required?"true":"false")<<",\"status\":"<<static_cast<int32_t>(be(replies[0],20))<<"}\n";
+            std::cout<<"{\"ready\":"<<(core.ready()?"true":"false")<<",\"generation\":"<<core.stats().generation<<",\"wcid\":"<<unsigned(core.stats().wcid)<<",\"recovery\":"<<(core.stats().recovery_required?"true":"false")<<",\"status\":"<<static_cast<int32_t>(be(replies[0],20));
+            if(mode=="expired_ack")std::cout<<",\"expired\":"<<core.stats().render_expired<<",\"iso_status\":"<<static_cast<int32_t>(be(replies[0],60));
+            std::cout<<"}\n";
         }else{
             // Consume the initial render credit; keep the same live RF session.
             core.submit(render(10),t);auto tx=core.outbound();if(tx.size()!=1)return 5;core.complete(1,tx[0].token,0,t);core.replies();
