@@ -9,6 +9,8 @@
 #include <array>
 #include <cwctype>
 #include <algorithm>
+#include <iomanip>
+#include <sstream>
 
 namespace xone {
 std::string utf8(const std::wstring &text) {
@@ -26,6 +28,14 @@ std::string win_error(DWORD error) {
     if (message) LocalFree(message);
     while (!result.empty() && (result.back()=='\r' || result.back()=='\n')) result.pop_back();
     return "Windows error " + std::to_string(error) + ": " + result;
+}
+static std::string transfer_error(const char *operation,uint8_t pipe,size_t requested,DWORD error) {
+    SYSTEMTIME now{};GetSystemTime(&now);
+    std::ostringstream message;
+    message<<operation<<": "<<win_error(error)<<" [endpoint=0x"<<std::hex<<std::setw(2)<<std::setfill('0')<<unsigned(pipe)<<std::dec
+           <<" requested="<<requested<<" utc="<<std::setw(4)<<now.wYear<<'-'<<std::setw(2)<<now.wMonth<<'-'<<std::setw(2)<<now.wDay
+           <<'T'<<std::setw(2)<<now.wHour<<':'<<std::setw(2)<<now.wMinute<<':'<<std::setw(2)<<now.wSecond<<'.'<<std::setw(3)<<now.wMilliseconds<<"Z]";
+    return message.str();
 }
 struct InfoSet {
     HDEVINFO value;
@@ -143,7 +153,8 @@ int WinUsbTransport::control_callback(void *context,u8 request,u8 type,u16 value
     WINUSB_SETUP_PACKET setup{type,request,value,index,size};
     ULONG transferred=0;
     if (!WinUsb_ControlTransfer(self.usb_,setup,static_cast<PUCHAR>(data),size,&transferred,nullptr)) {
-        std::cerr << "Control transfer: " << win_error(GetLastError()) << '\n'; return -EREMOTEIO;
+        const DWORD error=GetLastError();
+        std::cerr << transfer_error("Control transfer",0,size,error) << '\n'; return -EREMOTEIO;
     }
     return static_cast<int>(transferred);
 }
@@ -152,7 +163,8 @@ int WinUsbTransport::bulk_callback(void *context,u8 pipe,void *data,int size,int
     ULONG transferred=0;
     if (!self.set_timeout(pipe,timeout)) return -EREMOTEIO;
     if (!WinUsb_WritePipe(self.usb_,pipe,static_cast<PUCHAR>(data),static_cast<ULONG>(size),&transferred,nullptr)) {
-        std::cerr << "Bulk write: " << win_error(GetLastError()) << '\n'; return -EREMOTEIO;
+        const DWORD error=GetLastError();
+        std::cerr << transfer_error("Bulk write",pipe,static_cast<size_t>(size),error) << '\n'; return -EREMOTEIO;
     }
     *actual=static_cast<int>(transferred); return 0;
 }
@@ -162,7 +174,7 @@ std::vector<uint8_t> WinUsbTransport::read(uint8_t pipe) {
     if (!WinUsb_ReadPipe(usb_,pipe,data.data(),static_cast<ULONG>(data.size()),&transferred,nullptr)) {
         const DWORD error=GetLastError();
         if (error==ERROR_SEM_TIMEOUT) return {};
-        throw std::runtime_error("Bulk read: " + win_error(error));
+        throw std::runtime_error(transfer_error("Bulk read",pipe,data.size(),error));
     }
     data.resize(transferred); return data;
 }

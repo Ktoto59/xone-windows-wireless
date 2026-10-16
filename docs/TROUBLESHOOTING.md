@@ -16,6 +16,17 @@
 - **A device disappears:** report the approximate time and model. Local snapshots
   include USB closure counts, protocol errors and recent radio removal reasons.
   Do not publish the entire private `work`/`config` folders.
+- **Radio stderr reports `Bulk read: Windows error 31`:** this is a physical
+  WinUSB pipe read failure, not a GIP parser result. It does not identify whether
+  the device, endpoint, USB controller or power transition caused the failure.
+  Diagnostic radio stderr includes the endpoint (`0x84` WLAN or `0x85` MCU),
+  requested buffer size and UTC failure time. Ordinary read timeouts (`121`)
+  remain nonfatal. The normal background host does not retain radio stderr;
+  capture it explicitly during a bounded diagnostic run. For a USB ETW trace,
+  use `HeadersBusTrace` rather than data-payload keywords and correlate the
+  failure with the controller/endpoint and power events. See
+  [WinUSB read errors](https://learn.microsoft.com/en-us/windows/win32/api/winusb/nf-winusb-winusb_readpipe)
+  and [USB ETW capture filters](https://learn.microsoft.com/en-us/windows-hardware/drivers/usbcon/how-to-capture-a-usb-event-trace).
 - **Setup reports another radio session:** stop the bridge from the folder that
   owns it before retrying. Do not run two hosts against the same adapter.
 - **Setup requests reboot or adapter reconnect:** complete that step before
