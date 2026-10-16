@@ -3,6 +3,15 @@
 param([switch]$Json)
 $ErrorActionPreference='Stop'
 $taskRoot=Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'Setup-Helpers.ps1')
+if(Get-XoneMemoryHost $taskRoot){
+    $taskMemory=Get-XoneRuntimeState $taskRoot
+    if(-not $taskMemory.Runtime -or -not (Test-XoneProcess $taskMemory.Runtime.Worker)){throw 'Bridge is not running.'}
+    if($Json){$taskMemory | ConvertTo-Json -Depth 10;return}
+    Write-Output ('Phase: '+$taskMemory.Host.Phase)
+    $taskMemory.Radio.Controllers | Format-List
+    return
+}
 $taskState=$null
 $taskRawDevices=@()
 foreach($taskStateName in @('usb-gip-running.json','bridge-running.json')){

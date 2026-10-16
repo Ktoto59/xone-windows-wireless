@@ -33,7 +33,7 @@ $taskRuntimeFiles=@('LICENSE','third_party/json/LICENSE.MIT','third_party/vigem/
     'docs/LIMITATIONS.md','docs/PRIVACY.md','docs/UPSTREAM.md',
     'scripts/Setup-Action.ps1','scripts/Setup-Helpers.ps1','scripts/Device-Config.ps1',
     'scripts/Switch-WinUSB.ps1','scripts/Adapter-IdlePower.ps1','scripts/Set-AdapterIdlePower.ps1','scripts/Import-Firmware.ps1',
-    'scripts/Set-AutomaticBridge.ps1','scripts/Run-MaintainedBridge.ps1')
+    'scripts/Set-AutomaticBridge.ps1','scripts/Run-MaintainedBridge.ps1','scripts/Get-ControllerStatus.ps1','docs/RUNTIME-IO.md')
 $taskSourceExtra=@('README.md','.gitignore','.gitattributes','docs/INSTALLER.md',
     'scripts/build.cmd','scripts/Build-Appliance.cmd','scripts/Build-CppBridge.cmd','scripts/Run-Development.ps1',
     'scripts/Build-Installer.ps1','scripts/Package-Release.ps1','scripts/Test-CppBridge.cmd',
@@ -63,6 +63,7 @@ try{
         Assert-PublicReleaseBinary $taskSource
         Copy-Item -LiteralPath $taskSource -Destination $taskOutput
     }
+    if($LauncherDir -and (Test-Path -LiteralPath (Join-Path $LauncherDir 'runtime-capabilities.json'))){Copy-Item -LiteralPath (Join-Path $LauncherDir 'runtime-capabilities.json') -Destination $taskOutput}
     $taskCommit=(& git rev-parse HEAD).Trim()
     $taskDirty=[bool]@(& git status --porcelain).Count
     foreach($taskPackage in @($taskSourceStage,$taskStage)){

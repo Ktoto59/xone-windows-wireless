@@ -13,6 +13,7 @@
 #include <cstring>
 #include <algorithm>
 #include <deque>
+#include <atomic>
 using namespace xone;
 static void check(bool ok,const char *message) { if(!ok) throw std::runtime_error(message); }
 template<class F> static void rejects(F f) { bool threw=false; try{f();}catch(const std::exception &){threw=true;} check(threw,"Malformed input accepted"); }
@@ -639,6 +640,31 @@ int main() {
             e.kind=RadioEvent::Kind::gip;e.wcid=1;e.payload=encode_gip({3,32,5,0,{0,0,0,0}});session.process(e);
             check(session.status().size()==1,"Client removed during active dispatch");session.tick();check(session.status().empty(),"Status disconnect not processed on tick");
             e.kind=RadioEvent::Kind::lost;session.process(e);const auto after=mock.writes.size();session.process(e);check(mock.writes.size()==after,"Duplicate removal");session.close();
+        });
+        test("Asynchronous raw TX keeps receive responsive and rejects stale completions",[]{
+            struct Raw final:RawGipOutput{
+                unsigned received=0;std::vector<RawGipTransmit> requests;std::vector<std::pair<uint32_t,int>> results;
+                bool target(std::span<const uint8_t> m)const override{return m.size()==6;}
+                void event(uint8_t kind,uint8_t,std::span<const uint8_t>)override{if(kind==2)++received;if(kind==3)requests.clear();}
+                std::vector<RawGipTransmit> poll()override{auto out=std::move(requests);requests.clear();return out;}
+                void complete(uint8_t,uint32_t token,int status)override{results.emplace_back(token,status);}
+            } raw;
+            usb_device usb{};device dev{};xone_mt76 mt{};mt.dev=&dev;mt.udev=&usb;mt.channel=&mt.channels[0];mt.channel->index=165;
+            usb.control=[](void *,u8,u8 type,u16,u16,void *data,u16 n,unsigned)->int{if(type&128)std::memset(data,0,n);return n;};
+            usb.bulk=[](void *,u8,void *,int n,int *actual,unsigned)->int{if(actual)*actual=n;return 0;};
+            std::atomic_uint calls=0;std::atomic_bool release=false;
+            Session session(mt,nullptr,false,nullptr,&raw,[&](std::span<const uint8_t>,std::stop_token stop,RadioTxQueue::Clock::time_point){++calls;while(!release && !stop.stop_requested())std::this_thread::sleep_for(std::chrono::milliseconds(1));return stop.stop_requested()?-19:0;});
+            auto wait=[&](auto predicate){const auto until=std::chrono::steady_clock::now()+std::chrono::seconds(2);while(!predicate()){check(std::chrono::steady_clock::now()<until,"Async session wait timed out");std::this_thread::sleep_for(std::chrono::milliseconds(1));}};
+            RadioEvent e;e.kind=RadioEvent::Kind::association;e.address={1,2,3,4,5,6};session.process(e);
+            const auto data=encode_gip({4,32,1,0,{}});raw.requests={{1,1,data}};session.tick();wait([&]{return calls.load()==1;});
+            check(raw.results.empty(),"USB success returned before physical completion");
+            const auto before=std::chrono::steady_clock::now();e.kind=RadioEvent::Kind::gip;e.wcid=1;e.payload=data;session.process(e);session.tick();
+            check(raw.received==1 && std::chrono::steady_clock::now()-before<std::chrono::milliseconds(100),"Slow USB blocked radio receive/tick");
+            release=true;wait([&]{session.tick();return raw.results.size()==1;});check(raw.results[0]==std::pair<uint32_t,int>{1,0},"Async success lost");
+            release=false;raw.requests={{1,2,data}};session.tick();wait([&]{return calls.load()==2;});
+            e.kind=RadioEvent::Kind::lost;session.process(e);e.kind=RadioEvent::Kind::association;e.address={2,2,3,4,5,6};session.process(e);
+            release=true;raw.requests={{1,3,data}};wait([&]{session.tick();return raw.results.size()>=2;});
+            check(raw.results.size()==2 && raw.results.back()==std::pair<uint32_t,int>{3,0},"Old completion reached reused WCID");session.close();
         });
         std::cout<<passed<<" session tests passed\n"; return 0;
     }catch(const std::exception &e){std::cerr<<"FAIL: "<<e.what()<<"\n";return 1;}

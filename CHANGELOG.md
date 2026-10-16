@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Move installed native runtime state and stop commands to bounded shared memory
+  and Windows events; remove periodic state-file IO and file polling. Keep counters
+  in RAM and defer newly learned pairing metadata until radio shutdown.
+- Isolate native GIP transmission in a bounded executor using overlapped WinUSB
+  OUT, preserving real completion, control priority, media expiry and cancellation
+  across URB/USB/RF lifetimes. Leave startup/teardown control operations synchronous.
+  These changes need hardware validation before claiming an audio improvement.
+
 - Prepare the alpha.5.4 installer candidate from `experimental`. Installer
   builds disable C++ diagnostic journals and packet tracing at compile time;
   development builds retain diagnostics. Keep release build outputs separate

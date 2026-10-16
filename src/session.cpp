@@ -41,7 +41,7 @@ std::vector<std::string> identification_classes(std::span<const uint8_t> data) {
     return out;
 }
 struct Session::Client {
-    Session &owner; uint8_t wcid; Bytes address; bool encrypted=false;
+    Session &owner; uint8_t wcid; Bytes address; bool encrypted=false;uint64_t tx_epoch=0;
     GamepadInput input{};bool guide=false,rumble_pending=false;
     GamepadCapabilities capabilities{};
     std::optional<BatteryStatus> battery;
@@ -233,11 +233,12 @@ struct Session::Client {
         }
     };
     std::array<std::unique_ptr<Logical>,16> logical;
-    Client(Session &s,uint8_t w,Bytes mac):owner(s),wcid(w),address(std::move(mac)) {}
+    Client(Session &s,uint8_t w,Bytes mac):owner(s),wcid(w),address(std::move(mac)),tx_epoch(++s.tx_epoch_) {}
     ControllerStatus::UsbTx usb_tx;
     uint64_t malformed_gip_packets=0;
+    Bytes prepare(const GipPacket &p,bool audio=false)const{return wlan_packet(wcid,address,owner.mt_.address,encrypted,encode_gip(p),audio);}
     void transmit(const GipPacket &p,bool audio=false) {
-        const auto encoded=encode_gip(p); const auto packet=wlan_packet(wcid,address,owner.mt_.address,encrypted,encoded,audio);
+        const auto packet=prepare(p,audio);
         const auto started=std::chrono::steady_clock::now();
         owner.check(usb_bulk_msg(owner.mt_.udev,4,const_cast<uint8_t *>(packet.data()),static_cast<int>(packet.size()),nullptr,1000),"GIP transmit");
         usb_tx.last_us=std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()-started).count();
@@ -246,7 +247,7 @@ struct Session::Client {
     }
     void receive(const GipPacket &p) { const auto id=p.options&15; if(!logical[id]) logical[id]=std::make_unique<Logical>(*this,static_cast<uint8_t>(id)); logical[id]->link.receive(p); }
 };
-Session::Session(xone_mt76 &mt,InputOutput *output,bool trace,AudioOutput *audio_output,RawGipOutput *raw_output):mt_(mt),output_(output),audio_output_(audio_output),raw_output_(raw_output),trace_(trace) {}
+Session::Session(xone_mt76 &mt,InputOutput *output,bool trace,AudioOutput *audio_output,RawGipOutput *raw_output,RadioTxQueue::Sender sender):mt_(mt),output_(output),audio_output_(audio_output),raw_output_(raw_output),trace_(trace) {if(sender)tx_queue_=std::make_unique<RadioTxQueue>(std::move(sender));}
 Session::~Session()=default;
 bool Session::has_clients()const{return std::any_of(clients_.begin(),clients_.end(),[](const auto &p){return bool(p);});}
 void Session::suspend_idle_radio(){
@@ -275,7 +276,7 @@ void Session::pairing(bool enabled) {
         for(size_t i=0;i<XONE_MT_NUM_CHANNELS;++i)if(mt_.channel==&mt_.channels[i]){pair_scan_index_=i;break;}
     }
 }
-void Session::remove(uint8_t wcid,const char *reason) { if(wcid && wcid<=16 && clients_[wcid-1]) { if(removals_.size()==32)removals_.erase(removals_.begin());removals_.push_back({hex(clients_[wcid-1]->address),reason,wcid,static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count())}); if(raw_output_ && raw_output_->target(clients_[wcid-1]->address))raw_output_->event(3,wcid);if(audio_output_)audio_output_->disconnect(wcid);if(output_)output_->disconnect(wcid);clients_[wcid-1].reset();++status_revision_; check(xone_mt76_remove_client(&mt_,wcid),"Remove client"); std::cout<<"DISCONNECTED WCID="<<unsigned(wcid)<<"\n"; } }
+void Session::remove(uint8_t wcid,const char *reason) { if(wcid && wcid<=16 && clients_[wcid-1]) { if(tx_queue_)tx_queue_->cancel(wcid,clients_[wcid-1]->tx_epoch);if(removals_.size()==32)removals_.erase(removals_.begin());removals_.push_back({hex(clients_[wcid-1]->address),reason,wcid,static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count())}); if(raw_output_ && raw_output_->target(clients_[wcid-1]->address))raw_output_->event(3,wcid);if(audio_output_)audio_output_->disconnect(wcid);if(output_)output_->disconnect(wcid);clients_[wcid-1].reset();++status_revision_; check(xone_mt76_remove_client(&mt_,wcid),"Remove client"); std::cout<<"DISCONNECTED WCID="<<unsigned(wcid)<<"\n"; } }
 void Session::process(const RadioEvent &e) {
     if(e.kind!=RadioEvent::Kind::ignored)resume_idle_radio();
     if(e.kind==RadioEvent::Kind::association || e.kind==RadioEvent::Kind::gip || e.kind==RadioEvent::Kind::client_command)
@@ -337,6 +338,14 @@ void Session::process(const RadioEvent &e) {
     }
 }
 void Session::tick(std::chrono::steady_clock::time_point now) {
+    if(tx_queue_)for(const auto &result:tx_queue_->poll()){
+        if(!result.wcid || result.wcid>16 || !clients_[result.wcid-1] || clients_[result.wcid-1]->tx_epoch!=result.epoch)continue;
+        auto &stats=clients_[result.wcid-1]->usb_tx;stats.packets+=result.packets;stats.over_8ms+=result.over_8ms;
+        stats.last_us=result.last_us;stats.max_us=std::max(stats.max_us,result.max_us);
+        stats.max_queue_us=std::max(stats.max_queue_us,result.queue_us);
+        if(result.status==-18)++stats.expired;else if(result.status)++stats.failed;
+        if(raw_output_)raw_output_->complete(result.wcid,result.token,result.status);
+    }
     auto requests=raw_output_?raw_output_->poll():std::vector<RawGipTransmit>{};
     if(raw_output_)for(auto &fault:raw_output_->faults()){
         if(!fault.wcid || fault.wcid>16 || !clients_[fault.wcid-1])continue;
@@ -352,6 +361,7 @@ void Session::tick(std::chrono::steady_clock::time_point now) {
     }
     prioritize_control(requests);
     for(const auto &request:requests){
+        if(request.cancellation.stop_requested()){raw_output_->complete(request.wcid,request.token,-19);continue;}
         if(!request.wcid || request.wcid>16 || !clients_[request.wcid-1] || !clients_[request.wcid-1]->output_error.empty() || !raw_output_->target(clients_[request.wcid-1]->address)){
             raw_output_->complete(request.wcid,request.token,-19);continue;
         }
@@ -365,8 +375,15 @@ void Session::tick(std::chrono::steady_clock::time_point now) {
         if(request.audio && std::chrono::steady_clock::now()>request.media_deadline){
             raw_output_->complete(request.wcid,request.token,-18);continue;
         }
-        for(const auto &p:packets)clients_[request.wcid-1]->transmit(p,request.audio);
-        raw_output_->complete(request.wcid,request.token,0);
+        if(tx_queue_){
+            auto &client=*clients_[request.wcid-1];RadioTxQueue::Work work{request.wcid,request.token,client.tx_epoch,request.audio,request.media_deadline,{}};
+            work.cancellation=request.cancellation;
+            for(const auto &p:packets)work.packets.push_back(client.prepare(p,request.audio));
+            if(!tx_queue_->push(std::move(work)))raw_output_->complete(request.wcid,request.token,request.audio?-18:-19);
+        }else{
+            for(const auto &p:packets)clients_[request.wcid-1]->transmit(p,request.audio);
+            raw_output_->complete(request.wcid,request.token,0);
+        }
     }
     // Defer removal until dispatch/GipLink no longer owns the active client stack.
     for(uint8_t w=1;w<=16;++w)if(clients_[w-1] && !clients_[w-1]->output_error.empty() && now>=clients_[w-1]->output_retry){
@@ -420,6 +437,7 @@ bool Session::audio_active() const {
     return false;
 }
 void Session::close() {
+    if(tx_queue_)tx_queue_->stop();
     resume_idle_radio();
     pairing(false);
     for(uint8_t w=1;w<=16;++w) {

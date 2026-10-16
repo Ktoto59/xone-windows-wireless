@@ -54,5 +54,13 @@ int main(){try{
         for(unsigned i=0;i<500;++i)reconnect.radio(4,1,wire,start+std::chrono::seconds(2)+std::chrono::milliseconds(i));
         require(reconnect.stats().dropped>dropped && reconnect.stats().capture_drop_reports-reports<=1);
     }
+    {
+        Core lifetime(p,true);lifetime.radio(1,1,mac);configured(lifetime);
+        Request output;output.command=1;output.seq=100;output.ep=1;output.data=encode_gip({4,32,3,0,{}});output.length=static_cast<int32_t>(output.data.size());
+        lifetime.submit(output);auto pending=lifetime.outbound();require(pending.size()==1 && pending[0].cancellation.stop_possible() && !pending[0].cancellation.stop_requested());
+        Request cancel_output;cancel_output.command=2;cancel_output.seq=101;cancel_output.unlink_target=100;lifetime.submit(cancel_output);require(pending[0].cancellation.stop_requested());
+        output.seq=102;lifetime.submit(output);pending=lifetime.outbound();require(pending.size()==1 && !pending[0].cancellation.stop_requested());
+        lifetime.detached();require(pending[0].cancellation.stop_requested());
+    }
     std::cout<<"PASS: RF audio, real TX ACK, bounded media, generation reset, 2021 clock, isolated expiry, clean identity-only reimport and coalesced drops\n";return 0;
 }catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}}

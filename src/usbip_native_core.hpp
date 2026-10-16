@@ -23,7 +23,7 @@ public:
     };
 private:
     enum class Kind {irq_in,irq_out,capture,render};
-    struct Pending {Request request;Kind kind;bool staged=false;uint32_t token=0;Clock::time_point deadline,media_deadline;};
+    struct Pending {Request request;Kind kind;bool staged=false;uint32_t token=0;Clock::time_point deadline,media_deadline;std::stop_source cancellation{std::nostopstate};};
     const Profile &profile_;bool audio_;std::unique_ptr<Control> control_;
     DeviceConnector connector_;
     Stats stats_;std::map<uint32_t,Pending> pending_;std::map<uint32_t,uint32_t> tokens_;
@@ -53,6 +53,7 @@ private:
     void pump(Clock::time_point now);
 public:
     Core(const Profile &profile,bool audio);
+    ~Core(){for(auto &[seq,p]:pending_){(void)seq;p.cancellation.request_stop();}}
     bool associated()const{return stats_.wcid!=0;}
     bool ready()const{return associated() && !stats_.recovery_required;}
     const Stats &stats()const{return stats_;}

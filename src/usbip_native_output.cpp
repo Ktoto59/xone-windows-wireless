@@ -54,14 +54,15 @@ struct NativeUsbOutput::Impl {
     uint64_t reported_mailbox_drops=0;usbip::Core::Clock::time_point mailbox_reported_at{};
     std::string last_usb_error;uint64_t usb_closed=0;std::atomic_uint64_t mailbox_dropped=0;
     std::vector<std::unique_ptr<Client>> clients;Client *imported=nullptr;
-    std::unique_ptr<LatestSnapshot> status_writer;
+    std::unique_ptr<LatestSnapshot> status_writer;NativeUsbOutput::StateSink state_sink;
     usbip::Core::Clock::time_point last_status{};bool mmcss=false,mmcss_requested=false,peer_error=false;DWORD mmcss_error=0;
     uint64_t worker_iterations=0,max_mailbox_delay_us=0,max_radio_batch_us=0,max_socket_dispatch_us=0;
     std::atomic_uint64_t address_revision=0;
     std::atomic_bool streaming_audio=false;
     uint64_t association_id=0;
     std::optional<std::tuple<bool,uint8_t,uint64_t,bool,uint64_t,bool,uint64_t,std::string,bool>> published_life;
-    Impl(uint16_t port,Bytes address,uint16_t pid,bool with_audio,const std::wstring &status,bool auto_select,bool trace):mac(std::move(address)),profile(usbip::profile(pid,with_audio)),core(profile,with_audio),audio(with_audio),automatic(auto_select),diagnostics(trace),product(pid){
+    Impl(uint16_t port,Bytes address,uint16_t pid,bool with_audio,const std::wstring &status,bool auto_select,bool trace,NativeUsbOutput::StateSink sink):mac(std::move(address)),profile(usbip::profile(pid,with_audio)),core(profile,with_audio),audio(with_audio),automatic(auto_select),diagnostics(trace),product(pid){
+        state_sink=std::move(sink);
         if(mac.size()!=6 || port<1024)throw usbip::Error("Invalid native USB route");
         static std::atomic_uint64_t epochs{GetTickCount64()*1000};association_id=++epochs;
         if(automatic){char prefix[16]{};std::snprintf(prefix,sizeof(prefix),"XONE%04X",pid);profile.virtual_serial=prefix;constexpr char digits[]="0123456789ABCDEF";for(auto b:mac){profile.virtual_serial+=digits[b>>4];profile.virtual_serial+=digits[b&15];}}
@@ -103,7 +104,7 @@ struct NativeUsbOutput::Impl {
         report_mailbox_drops();SetEvent(wake);
     }
     void publish(bool connected=true){
-        if(!status_writer)return;const auto &s=core.stats();const auto now=usbip::Core::Clock::now();
+        if(!status_writer && !state_sink)return;const auto &s=core.stats();const auto now=usbip::Core::Clock::now();
         const auto current_life=std::tuple{connected,s.wcid,s.generation,peer_error,address_revision.load(),imported!=nullptr,usb_closed,last_usb_error,s.recovery_required};
         if(published_life==current_life && now-last_status<std::chrono::seconds(2))return;
         FILETIME created{},exited{},kernel{},user{};uint64_t cpu_100ns=0;
@@ -118,12 +119,13 @@ struct NativeUsbOutput::Impl {
             <<",\"Mmcss\":"<<mmcss<<",\"MmcssRequested\":"<<mmcss_requested<<",\"MmcssError\":"<<mmcss_error
             <<",\"WorkerCpu100ns\":"<<cpu_100ns<<",\"WorkerIterations\":"<<worker_iterations<<",\"MaxMailboxDelayUs\":"<<max_mailbox_delay_us<<",\"MaxRadioBatchUs\":"<<max_radio_batch_us<<",\"MaxSocketDispatchUs\":"<<max_socket_dispatch_us
             <<",\"UsbInitialization\":{\"Configurations\":"<<init.configurations<<",\"Interfaces\":"<<init.interfaces<<",\"InterruptIn\":"<<init.irq_in<<",\"InterruptOut\":"<<init.irq_out<<",\"InterruptDelivered\":"<<init.irq_delivered<<",\"Capture\":"<<init.capture<<",\"Render\":"<<init.render<<",\"GipCommands\":"<<init.commands<<'}';
-        if(!diagnostics){json<<'}';status_writer->publish(json.str());published_life=current_life;last_status=now;return;}
+        if(!diagnostics && !state_sink){json<<'}';if(state_sink && !state_sink(json.str(),published_life!=current_life))return;if(status_writer)status_writer->publish(json.str());published_life=current_life;last_status=now;return;}
         json
             <<",\"RxPackets\":"<<s.rx<<",\"TxPackets\":"<<s.tx<<",\"AudioBridge\":"<<audio<<",\"AudioLayoutSupported\":"<<s.layout
             <<",\"AudioRxPackets\":"<<s.audio_rx<<",\"AudioTxPackets\":"<<s.audio_tx<<",\"UsbAudioInCompletions\":"<<s.capture_slots<<",\"CaptureDroppedFrames\":"<<s.dropped
             <<",\"CaptureQueueHighWater\":"<<s.capture_high_water<<",\"RenderExpiredRequests\":"<<s.render_expired<<",\"CaptureConcealedFrames\":"<<s.concealed<<",\"UsbModeSwitchSuppressed\":"<<s.mode_suppressed<<"}";
-        status_writer->publish(json.str());published_life=current_life;last_status=now;
+        if(state_sink && !state_sink(json.str(),published_life!=current_life))return;
+        if(status_writer)status_writer->publish(json.str());published_life=current_life;last_status=now;
     }
     void parse(Client &c){
         for(;;){
@@ -223,7 +225,7 @@ struct NativeUsbOutput::Impl {
         publish(false);if(scheduling)AvRevertMmThreadCharacteristics(scheduling);
     }
 };
-NativeUsbOutput::NativeUsbOutput(uint16_t port,Bytes mac,uint16_t pid,bool audio,std::wstring status,bool automatic,bool diagnostics):impl_(std::make_unique<Impl>(port,std::move(mac),pid,audio,status,automatic,diagnostics)){}
+NativeUsbOutput::NativeUsbOutput(uint16_t port,Bytes mac,uint16_t pid,bool audio,std::wstring status,bool automatic,bool diagnostics,StateSink sink):impl_(std::make_unique<Impl>(port,std::move(mac),pid,audio,status,automatic,diagnostics,std::move(sink))){}
 NativeUsbOutput::~NativeUsbOutput()=default;
 bool NativeUsbOutput::target(std::span<const uint8_t> mac)const{std::lock_guard lock(impl_->mutex);return std::equal(mac.begin(),mac.end(),impl_->mac.begin(),impl_->mac.end());}
 bool NativeUsbOutput::automatic()const{return impl_->automatic;}

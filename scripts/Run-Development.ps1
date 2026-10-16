@@ -86,8 +86,10 @@ try{
     $env:XONE_USB_MMCSS=$taskOldUsbMmcss
     if($taskChild){
         if(-not $taskChild.HasExited){
-            [IO.File]::WriteAllText((Join-Path $taskRoot 'work/usb-gip.stop'),'development session finished')
-            if($Backend -eq 'cpp'){[IO.File]::WriteAllText((Join-Path $taskRoot 'work/maintenance.stop'),'development session finished')}
+            if($Backend -eq 'cpp' -and (Get-XoneMemoryHost $taskRoot)){& $taskHost --stop | Out-Null}else{
+                [IO.File]::WriteAllText((Join-Path $taskRoot 'work/usb-gip.stop'),'development session finished')
+                if($Backend -eq 'cpp'){[IO.File]::WriteAllText((Join-Path $taskRoot 'work/maintenance.stop'),'development session finished')}
+            }
             [void]$taskChild.WaitForExit(30000)
             $taskChild.Refresh()
         }

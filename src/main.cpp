@@ -8,6 +8,7 @@
 #include "native_device_route.hpp"
 #endif
 #include "runtime_files.hpp"
+#include "runtime_state.hpp"
 #include "status_schedule.hpp"
 #include "diagnostic_log.hpp"
 #include "radio_idle_power.hpp"
@@ -70,7 +71,7 @@ void help() {
         "radio-test does not authenticate controllers or publish input/audio devices.\n";
 }
 struct Options {
-    std::wstring firmware, instance, capture, stop_file,status_file,output=L"vigem";
+    std::wstring firmware, instance, capture, stop_file,status_file,runtime_root,output=L"vigem";
     std::wstring usb_gip_mac,usb_gip_fallback=L"none";
     uint16_t usb_gip_port=33241;
     unsigned usb_auto_slots=0;
@@ -119,6 +120,7 @@ Options options(int argc,wchar_t **argv) {
             else if (key==L"--capture") result.capture=value;
             else if (key==L"--stop-file") result.stop_file=value;
             else if (key==L"--status-file") result.status_file=value;
+            else if (key==L"--runtime-root") result.runtime_root=value;
             else if(key==L"--slot" || key==L"--large" || key==L"--small") {
                 size_t consumed=0;const auto n=std::stoul(value,&consumed);
                 if(consumed!=value.size() || n>(key==L"--slot"?3u:65535u))throw std::runtime_error("Invalid XInput rumble value");
@@ -135,6 +137,7 @@ Options options(int argc,wchar_t **argv) {
         }
     }
     if(result.usb_gip_fallback!=L"none" && result.output!=L"usb-gip")throw std::runtime_error("USB GIP fallback requires --output usb-gip");
+    if(!result.runtime_root.empty() && (!result.native_usb || !result.usb_auto_slots || !result.status_file.empty() || !result.stop_file.empty()))throw std::runtime_error("Memory runtime requires native automatic USB without state/stop files");
     if(result.usb_auto_slots && (result.output!=L"usb-gip" || !result.usb_gip_mac.empty() || !result.usb_gip_peers.empty() || result.usb_gip_fallback!=L"none" || unsigned(result.usb_gip_port)+2*result.usb_auto_slots>65535))throw std::runtime_error("Automatic USB requires an exclusive slot pool, no fixed MACs or fallback");
     if(!result.usb_gip_peers.empty()){
         if(result.output!=L"usb-gip" || result.usb_gip_mac.empty())throw std::runtime_error("Additional USB peers require --output usb-gip and --usb-gip-mac");
@@ -347,6 +350,8 @@ void check_mt76(int result,usb_device &usb,const char *operation) {
     if (result || usb.sticky_error) throw std::runtime_error(std::string(operation)+" failed: " + std::to_string(usb.sticky_error ? usb.sticky_error : result));
 }
 int radio_test(const Options &opt,bool controller=false,bool run=false) {
+    std::shared_ptr<xone::RuntimeState> memory;
+    if(!opt.runtime_root.empty())memory=std::make_shared<xone::RuntimeState>(opt.runtime_root,false);
     std::unique_ptr<xone::RawGipOutput> raw_output;
     if(opt.output==L"usb-gip"){
         if(!run || (!opt.usb_auto_slots && opt.usb_gip_mac.empty()) || opt.virtual_xinput)throw std::runtime_error("USB GIP requires run, a fixed MAC or automatic slots, and no virtual XInput flag");
@@ -354,8 +359,10 @@ int radio_test(const Options &opt,bool controller=false,bool run=false) {
 #ifdef XONE_NATIVE_USB
             if(opt.native_usb){
                 raw_output=std::make_unique<xone::AutoGipRouter>(opt.usb_auto_slots,[&](size_t slot,const xone::Bytes &mac){
-                    const auto path=std::filesystem::path(opt.status_file).parent_path()/(L"native-slot-"+std::to_wstring(slot)+L".json");
-                    return std::make_unique<xone::NativeDeviceRoute>(static_cast<uint16_t>(opt.usb_gip_port+2*slot),mac,path.wstring(),opt.verbose);
+                    const auto path=opt.status_file.empty()?std::filesystem::path{}:std::filesystem::path(opt.status_file).parent_path()/(L"native-slot-"+std::to_wstring(slot)+L".json");
+                    xone::NativeUsbOutput::StateSink sink;
+                    if(memory)sink=[memory,slot](const std::string &text,bool changed){return memory->publish(slot,text,changed);};
+                    return std::make_unique<xone::NativeDeviceRoute>(static_cast<uint16_t>(opt.usb_gip_port+2*slot),mac,path.wstring(),opt.verbose,std::move(sink));
                 });
             }else
 #else
@@ -397,7 +404,9 @@ int radio_test(const Options &opt,bool controller=false,bool run=false) {
         TickTimer tick_timer;
         std::unique_ptr<xone::AudioOutput> audio_output;
         if(run && native_output)audio_output=std::make_unique<xone::NativeAudioOutput>();
-        xone::Session session(mt,output.get(),!run || opt.verbose,audio_output.get(),raw_output.get());
+        xone::RadioTxQueue::Sender sender;
+        if(run && opt.native_usb && raw_output)sender=[&usb](std::span<const uint8_t> packet,std::stop_token stop,std::chrono::steady_clock::time_point deadline){return usb.write_async(packet,stop,deadline);};
+        xone::Session session(mt,output.get(),!run || opt.verbose,audio_output.get(),raw_output.get(),std::move(sender));
         std::unique_ptr<xone::RadioIdlePower> idle_power;
         if(run && !opt.no_idle_power && usb.prepare_idle_power(adapter)){
             idle_power=std::make_unique<xone::RadioIdlePower>(std::chrono::steady_clock::now(),[&]{
@@ -411,7 +420,8 @@ int radio_test(const Options &opt,bool controller=false,bool run=false) {
         }
         if(opt.idle_channel_scan)session.enable_idle_channel_scan();
         if(opt.pair)session.begin_pairing();
-        xone::RuntimeFiles runtime_files([&](const std::string &text){
+        std::unique_ptr<xone::RuntimeFiles> runtime_files;
+        if(!opt.status_file.empty() || !opt.stop_file.empty())runtime_files=std::make_unique<xone::RuntimeFiles>([&](const std::string &text){
             const auto destination=std::filesystem::path(opt.status_file),temporary=std::filesystem::path(opt.status_file+L".tmp");
             {std::ofstream file(temporary,std::ios::binary|std::ios::trunc);if(!file || !file.write(text.data(),static_cast<std::streamsize>(text.size())))throw std::runtime_error("Cannot write controller status");}
             if(!MoveFileExW(temporary.c_str(),destination.c_str(),MOVEFILE_REPLACE_EXISTING))throw std::runtime_error("Cannot replace controller status file");
@@ -419,11 +429,11 @@ int radio_test(const Options &opt,bool controller=false,bool run=false) {
         std::string previous_status;
         xone::StatusSchedule status_schedule(opt.verbose?std::chrono::milliseconds(100):std::chrono::milliseconds(2000));
         auto save_status=[&](bool running){
-            if(opt.status_file.empty())return;
+            if(opt.status_file.empty() && !memory)return;
             const auto now=std::chrono::steady_clock::now();
             // Publish the first writer fault promptly; repeated failures must
             // not turn retries against an unavailable file into a tight loop.
-            if(!status_schedule.ready({session.status_revision()+(idle_power?idle_power->revision():0),uint64_t(runtime_files.io_errors()!=0)},now,!running))return;
+            if(!status_schedule.ready({session.status_revision()+(idle_power?idle_power->revision():0),uint64_t(runtime_files && runtime_files->io_errors()!=0)},now,!running))return;
             std::ostringstream json;
             const auto radio_power=idle_power?(idle_power->armed()?"WakeArmed":"Active"):"Disabled";
             json<<std::boolalpha<<"{\"Running\":"<<running<<",\"Backend\":\""<<xone::utf8(opt.output)<<"\",\"FallbackOutput\":\""<<xone::utf8(opt.usb_gip_fallback)<<"\",\"Pairing\":"<<session.pairing_active()<<",\"RadioChannel\":"<<unsigned(mt.channel->index)<<",\"AutomaticSlots\":"<<opt.usb_auto_slots<<",\"ShareForwardedToWindows\":false,\"BatteryForwardedToWindows\":false,\"Controllers\":[";
@@ -442,22 +452,23 @@ int radio_test(const Options &opt,bool controller=false,bool run=false) {
                 json<<",\"MalformedGipPackets\":"<<c.malformed_gip_packets
                     <<",\"OutputRecovering\":"<<c.output_recovering<<",\"OutputRecoveryAttempt\":"<<c.output_recovery_attempt<<",\"OutputError\":"<<xone::Json(c.output_error).dump();
                 json<<",\"UsbTx\":{\"Packets\":"<<c.usb_tx.packets<<",\"Over8ms\":"<<c.usb_tx.over_8ms
-                    <<",\"MaxUs\":"<<c.usb_tx.max_us<<",\"LastUs\":"<<c.usb_tx.last_us<<"},\"Audio\":";
+                    <<",\"MaxUs\":"<<c.usb_tx.max_us<<",\"LastUs\":"<<c.usb_tx.last_us<<",\"MaxQueueWaitUs\":"<<c.usb_tx.max_queue_us<<",\"Expired\":"<<c.usb_tx.expired<<",\"Failed\":"<<c.usb_tx.failed<<"},\"Audio\":";
                 if(c.audio){json<<"{\"Stage\":\""<<c.audio->stage<<"\",\"InputRate\":"<<c.audio->input_rate<<",\"OutputRate\":"<<c.audio->output_rate<<",\"InputChannels\":"<<unsigned(c.audio->input_channels)<<",\"OutputChannels\":"<<unsigned(c.audio->output_channels)<<",\"ReceivedPackets\":"<<c.audio->received_packets<<",\"SilencePackets\":"<<c.audio->silence_packets<<",\"PlaybackPackets\":"<<c.audio->playback_packets<<",\"CapturePackets\":"<<c.audio->capture_packets<<",\"WindowsEndpoint\":"<<(!c.audio->endpoints.render.empty() && !c.audio->endpoints.capture.empty())<<",\"SyntheticGamepadParent\":"<<c.audio->synthetic_parent<<",\"RenderId\":\""<<c.audio->endpoints.render<<"\",\"CaptureId\":\""<<c.audio->endpoints.capture<<"\"}";}
                 else json<<"null";
                 json<<'}';
             }
             json<<"],\"RecentRadioRemovals\":[";bool first_removal=true;
             for(const auto &r:session.removals()){if(!first_removal)json<<',';first_removal=false;json<<"{\"Mac\":\""<<r.mac<<"\",\"Reason\":\""<<r.reason<<"\",\"Wcid\":"<<unsigned(r.wcid)<<",\"TickMs\":"<<r.tick_ms<<'}';}
-            json<<"],\"RadioPower\":\""<<radio_power<<"\",\"OutputRouteFailures\":"<<(raw_output?raw_output->failures():0)<<",\"RuntimeFileIoErrors\":"<<runtime_files.io_errors()<<"}\n";const auto text=json.str();if(text==previous_status)return;
-            runtime_files.publish(text);
+            json<<"],\"RadioPower\":\""<<radio_power<<"\",\"OutputRouteFailures\":"<<(raw_output?raw_output->failures():0)<<",\"RuntimeFileIoErrors\":"<<(runtime_files?runtime_files->io_errors():0)<<"}\n";const auto text=json.str();if(text==previous_status)return;
+            if(memory && !memory->publish(xone::RuntimeState::radio,text))return;
+            if(runtime_files && !opt.status_file.empty())runtime_files->publish(text);
             previous_status=text;
         };
         std::cout << "CONTROLLER READY: power on one controller; pair buttons only if it does not reconnect.\n" << std::flush;
         const auto end=opt.seconds?std::chrono::steady_clock::now()+std::chrono::seconds(opt.seconds):std::chrono::steady_clock::time_point::max();
         auto power_observed_at=std::chrono::steady_clock::time_point{};
         try {
-            while (!interrupted && std::chrono::steady_clock::now()<end && !runtime_files.stop_requested()) {
+            while (!interrupted && std::chrono::steady_clock::now()<end && !(memory && memory->radio_stopped()) && !(runtime_files && runtime_files->stop_requested())) {
                 receiver.check();
                 for (const auto &event:receiver.drain()){
                     if(idle_power)idle_power->wake(std::chrono::steady_clock::now(),"wireless-event");

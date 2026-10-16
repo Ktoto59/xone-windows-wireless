@@ -23,9 +23,12 @@ The 2021/2024 connectors use different audio pacing and render age limits. Radio
 blocks are adapted to Windows USB ISO fragments without lossy encoding. See
 [USBIP-LATENCY.md](USBIP-LATENCY.md) and [cpp-bridge.md](cpp-bridge.md).
 
-Status disk writes are asynchronous. The host only detaches on an explicit
-lifecycle snapshot/generation transition, never on a missing or unreadable file.
-Rare radio removals and USB closure errors are recorded locally for diagnosis.
+Installed host/radio/slot state uses bounded shared memory and Windows events,
+including shutdown. No periodic state files or stop-file polling are used by
+the C++ host. Only explicit lifecycle/generation transitions detach a USB import;
+an unavailable observation is not a disconnect. Startup configuration and the
+firmware are read before streaming. New pairing metadata is cached until shutdown.
+See [RUNTIME-IO.md](RUNTIME-IO.md) for execution and cancellation boundaries.
 
 Radio ingress and each native USB worker isolate reliable control/lifecycle/ACK
 messages from microphone PCM. Control messages keep FIFO order and a separate
@@ -43,6 +46,12 @@ to the physical TX stage: unsent stale PCM gets an explicit ISO expiry, preservi
 the RF association and USB generation. Real transport failures retain recovery.
 The legacy TCP radio broker likewise prioritizes reliable frames but always
 finishes a partially sent frame before switching traffic classes.
+
+Native outgoing GIP uses a dedicated bounded executor with one overlapped WinUSB
+OUT request in flight. The radio owner handles reception/lifecycle while the
+executor waits for USB completion. USB success is not reported at enqueue time.
+URB unlink, USB detach/reimport and RF reassociation invalidate stale work; buffers
+and OVERLAPPED remain owned until completion/cancellation has been drained.
 
 These are application queues, not additional physical USB endpoints or parallel
 writes. Reliable means no silent media-style eviction or expiry: capacity and

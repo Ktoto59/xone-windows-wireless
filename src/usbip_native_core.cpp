@@ -69,9 +69,10 @@ void Core::imported(){
     control_=std::make_unique<Control>(profile_);stats_.recovery_required=false;
     diagnostic("usb_session_initialized",{{"wcid",stats_.wcid},{"imports",stats_.usb_imports},{"announce_replays",stats_.announce_replays}});
 }
-void Core::detached(){pending_.clear();tokens_.clear();irq_wait_.clear();capture_wait_.clear();render_wait_.clear();outbound_.clear();replies_.clear();control_.reset();clear_audio();}
+void Core::detached(){for(auto &[seq,p]:pending_){(void)seq;p.cancellation.request_stop();}pending_.clear();tokens_.clear();irq_wait_.clear();capture_wait_.clear();render_wait_.clear();outbound_.clear();replies_.clear();control_.reset();clear_audio();}
 bool Core::cancel(uint32_t seq){
     const auto it=pending_.find(seq);if(it==pending_.end())return false;
+    it->second.cancellation.request_stop();
     if(it->second.token){tokens_.erase(it->second.token);std::erase_if(outbound_,[&](const auto &tx){return tx.token==it->second.token;});}
     if(it->second.kind==Kind::render && it->second.staged)pcm_.clear();
     pending_.erase(it);std::erase(irq_wait_,seq);std::erase(capture_wait_,seq);std::erase(render_wait_,seq);return true;
@@ -97,7 +98,8 @@ void Core::recover_audio(){
 uint32_t Core::transmit(uint32_t seq,Bytes data,bool audio,Clock::time_point now){
     do{if(++next_token_==0)++next_token_;}while(tokens_.contains(next_token_));
     auto &p=pending_.at(seq);p.token=next_token_;p.deadline=now+std::chrono::seconds(5);tokens_[next_token_]=seq;
-    outbound_.push_back({stats_.wcid,next_token_,std::move(data),audio,audio?p.media_deadline:Clock::time_point::max()});return next_token_;
+    p.cancellation=std::stop_source{};
+    outbound_.push_back({stats_.wcid,next_token_,std::move(data),audio,audio?p.media_deadline:Clock::time_point::max(),p.cancellation.get_token()});return next_token_;
 }
 void Core::submit(Request r,Clock::time_point now){
     if(diagnostic_verbose)diagnostic("urb_submit",{{"seq",r.seq},{"ep",r.ep},{"direction",r.direction},{"length",r.length},{"pending",pending_.size()}});

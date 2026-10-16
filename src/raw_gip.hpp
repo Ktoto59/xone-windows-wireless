@@ -4,11 +4,13 @@
 #include <memory>
 #include <chrono>
 #include <algorithm>
+#include <stop_token>
 namespace xone {
 using Bytes=std::vector<uint8_t>;
 struct RawGipTransmit {
     uint8_t wcid;uint32_t token;Bytes data;bool audio=false;
     std::chrono::steady_clock::time_point media_deadline=std::chrono::steady_clock::time_point::max();
+    std::stop_token cancellation;
 };
 struct RawGipFault {uint8_t wcid;std::string error;};
 inline void prioritize_control(std::vector<RawGipTransmit> &requests){

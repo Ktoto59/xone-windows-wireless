@@ -6,6 +6,7 @@
 #include "input_output.hpp"
 #include "audio_output.hpp"
 #include "raw_gip.hpp"
+#include "radio_tx_queue.hpp"
 #include <memory>
 #include <chrono>
 #include <map>
@@ -26,7 +27,7 @@ struct ControllerStatus {
     std::optional<Audio> audio;
     std::string authentication;
     uint8_t auth_version,peer_auth_version;
-    struct UsbTx { uint64_t packets=0,over_8ms=0; int64_t max_us=0,last_us=0; } usb_tx;
+    struct UsbTx { uint64_t packets=0,over_8ms=0,expired=0,failed=0; int64_t max_us=0,last_us=0,max_queue_us=0; } usb_tx;
     uint64_t malformed_gip_packets=0;
     bool output_recovering=false;
     unsigned output_recovery_attempt=0;
@@ -38,6 +39,8 @@ class Session {
     InputOutput *output_;
     AudioOutput *audio_output_;
     RawGipOutput *raw_output_;
+    std::unique_ptr<RadioTxQueue> tx_queue_;
+    uint64_t tx_epoch_=0;
     bool trace_;
     std::array<std::unique_ptr<Client>,16> clients_;
     bool pairing_=false;
@@ -56,7 +59,7 @@ class Session {
     void pairing(bool enabled);
     void remove(uint8_t wcid,const char *reason="session-close");
 public:
-    explicit Session(xone_mt76 &mt,InputOutput *output=nullptr,bool trace=true,AudioOutput *audio_output=nullptr,RawGipOutput *raw_output=nullptr);
+    explicit Session(xone_mt76 &mt,InputOutput *output=nullptr,bool trace=true,AudioOutput *audio_output=nullptr,RawGipOutput *raw_output=nullptr,RadioTxQueue::Sender sender={});
     ~Session();
     void process(const RadioEvent &event);
     void tick(std::chrono::steady_clock::time_point now=std::chrono::steady_clock::now());

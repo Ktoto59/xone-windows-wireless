@@ -52,4 +52,13 @@ if defined XONE_APPLIANCE_DIAGNOSTICS (
     "%XONE_APPLIANCE_OUTPUT%\diagnostics-disabled-tests.exe" work\disabled-journal-test-%RANDOM%-%RANDOM%
     if errorlevel 1 exit /b 1
 )
+cl /nologo /std:c++20 /EHsc /O2 /DNDEBUG /W4 /WX /utf-8 /I src tests\runtime_state_tests.cpp /Fobuild\appliance\runtime_state_tests.obj /Fe"%XONE_APPLIANCE_OUTPUT%\runtime-state-tests.exe"
+if errorlevel 1 exit /b 1
+"%XONE_APPLIANCE_OUTPUT%\runtime-state-tests.exe"
+if errorlevel 1 exit /b 1
+cl /nologo /std:c++20 /EHsc /O2 /DNDEBUG /W4 /WX /utf-8 /I src tests\radio_tx_queue_tests.cpp /Fobuild\appliance\radio_tx_queue_tests.obj /Fe"%XONE_APPLIANCE_OUTPUT%\radio-tx-queue-tests.exe"
+if errorlevel 1 exit /b 1
+"%XONE_APPLIANCE_OUTPUT%\radio-tx-queue-tests.exe"
+if errorlevel 1 exit /b 1
+> "%XONE_APPLIANCE_OUTPUT%\runtime-capabilities.json" echo {"RuntimeState":"memory-v1"}
 exit /b 0

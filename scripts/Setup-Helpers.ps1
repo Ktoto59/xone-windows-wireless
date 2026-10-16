@@ -4,7 +4,35 @@
 $script:XoneFirmwareHash='48084d9fa53b9bb04358f3bb127b7495dc8f7bb0b3ca1437bd24ef2b6eabdf66'
 $script:XoneFirmwareCabHash='65736a84ff4036645b8f8ec602bed91ab6353019c9cb3233decab9feec0f6f04'
 $script:XoneUsbipHash='38cad6d4432b52d5bb9409d9ad03b72fdffc4ada4cd3a48fbeca1a2752a8518a'
+function Get-XoneMemoryHost([string]$Root){
+    foreach($relative in @('outputs','outputs/appliance-candidate')){
+        $folder=Join-Path $Root $relative
+        if([IO.File]::Exists((Join-Path $folder 'runtime-capabilities.json')) -and [IO.File]::Exists((Join-Path $folder 'xone-background.exe'))){return (Join-Path $folder 'xone-background.exe')}
+    }
+    return $null
+}
+function Get-XoneRuntimeState([string]$Root){
+    $hostPath=Get-XoneMemoryHost $Root
+    if(-not $hostPath){return $null}
+    $text=(& $hostPath --status | Out-String)
+    if($LASTEXITCODE -ne 0){throw 'Cannot query the in-memory runtime state.'}
+    if($text.Trim()) {return ($text | ConvertFrom-Json)}
+    return $null
+}
 function Read-XoneJson([string]$Path){
+    $name=[IO.Path]::GetFileName($Path)
+    if($name -in @('maintenance-status.json','usb-gip-running.json','usb-gip-controller-status.json') -or $name -match '^native-slot-(\d+)\.json$'){
+        $root=Split-Path -Parent (Split-Path -Parent $Path)
+        if(Get-XoneMemoryHost $root){
+            $state=Get-XoneRuntimeState $root
+            if($name -eq 'maintenance-status.json'){return $state.Host}
+            if($name -eq 'usb-gip-running.json'){return $state.Runtime}
+            if($name -eq 'usb-gip-controller-status.json'){return $state.Radio}
+            if($name -match '^native-slot-(\d+)\.json$'){
+                $slot=[int]$Matches[1];if($state.Slots -and $slot -lt $state.Slots.Count){return $state.Slots[$slot]};return $null
+            }
+        }
+    }
     $stream=$null;$reader=$null
     try{
         $stream=[IO.FileStream]::new($Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
@@ -32,7 +60,10 @@ function Stop-XoneBridge([string]$Root){
     $path=Join-Path $Root 'work/usb-gip-running.json'
     $state=Read-XoneJson $path
     if($state -and (Test-XoneProcess $state.Worker)){
-        [IO.File]::WriteAllText((Join-Path $Root 'work/usb-gip.stop'),'stop');[IO.File]::WriteAllText((Join-Path $Root 'work/maintenance.stop'),'stop')
+        $memoryHost=Get-XoneMemoryHost $Root
+        if($memoryHost){& $memoryHost --stop | Out-Null}else{
+            [IO.File]::WriteAllText((Join-Path $Root 'work/usb-gip.stop'),'stop');[IO.File]::WriteAllText((Join-Path $Root 'work/maintenance.stop'),'stop')
+        }
         $deadline=(Get-Date).AddSeconds(20)
         while((Test-XoneProcess $state.Worker) -and (Get-Date) -lt $deadline){Start-Sleep -Milliseconds 100}
         if(Test-XoneProcess $state.Worker){throw 'The bridge did not stop. Close it before continuing.'}
@@ -250,7 +281,10 @@ function Move-XonePreviousInstallation([string]$Root){
     $oldRoot=Split-Path -Parent (Split-Path -Parent $actions[0].Execute)
     if([IO.Path]::GetFullPath($oldRoot) -eq [IO.Path]::GetFullPath($Root)){return}
     # Never execute scripts/commands from the old installation with setup rights.
-    foreach($name in @('maintenance.stop','usb-gip.stop')){[IO.File]::WriteAllText((Join-Path $oldRoot ('work/'+$name)),'stop')}
+    $oldMemoryHost=Get-XoneMemoryHost $oldRoot
+    if($oldMemoryHost){& $oldMemoryHost --stop | Out-Null}else{
+        foreach($name in @('maintenance.stop','usb-gip.stop')){[IO.File]::WriteAllText((Join-Path $oldRoot ('work/'+$name)),'stop')}
+    }
     $state=Read-XoneJson (Join-Path $oldRoot 'work/maintenance-status.json');$deadline=[datetime]::UtcNow.AddSeconds(35)
     while($state -and (Test-XoneProcess $state.Process) -and [datetime]::UtcNow -lt $deadline){Start-Sleep -Milliseconds 200}
     if($state -and (Test-XoneProcess $state.Process)){throw 'The previous installation did not stop; its recovery data is intact.'}

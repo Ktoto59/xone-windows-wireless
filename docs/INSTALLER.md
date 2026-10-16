@@ -37,7 +37,9 @@ Use Windows x64, Visual Studio C++ Build Tools, a Windows SDK and Inno Setup:
 The builder compiles release binaries into `outputs/appliance-release` with
 `XONE_DISABLE_DIAGNOSTICS`: no C++ journal writer, anomaly files, journal health
 files or packet tracing, even when diagnostic environment overrides are present.
-Maintenance results/transcripts and operational status/recovery files remain.
+Maintenance results/transcripts and persistent configuration/recovery backups
+remain. The native runtime uses shared memory and Windows events for operational
+state and stop commands; it creates no periodic state files. See [RUNTIME-IO.md](RUNTIME-IO.md).
 Use `-EnableDiagnostics` to build a diagnostic installer into
 `outputs/appliance-candidate`; ordinary `Build-Appliance.cmd` development builds
 retain diagnostics. `Build-Appliance.cmd --no-diagnostics <output-directory>`
