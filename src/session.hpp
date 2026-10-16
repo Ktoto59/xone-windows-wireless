@@ -38,6 +38,7 @@ class Session {
     std::array<std::unique_ptr<Client>,16> clients_;
     bool pairing_=false;
     bool idle_channel_scan_=false;
+    bool radio_suspended_=false;
     std::chrono::steady_clock::time_point pair_deadline_;
     std::chrono::steady_clock::time_point pair_scan_last_;
     size_t pair_scan_index_=0;
@@ -64,5 +65,8 @@ public:
     bool pairing_active() const { return pairing_; }
     void begin_pairing() { pairing(true); }
     void enable_idle_channel_scan();
+    bool has_clients() const;
+    void suspend_idle_radio();
+    void resume_idle_radio();
 };
 }

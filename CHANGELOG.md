@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add wake-capable idle power for the shared C++ radio runtime: arm firmware
+  wake-on-wireless after 30 seconds without clients/pairing, allow WinUSB selective
+  suspend, resume before dispatch, and provide a 30-second watchdog receive window.
+  Keep IN reads pending without periodic USB re-submission; cancel/drain them on
+  stop. Save/restore adapter-specific idle registry settings with driver binding.
+  WakeArmed is a requested policy, not proof of USB sleep or a temperature result.
+
 - Preserve radio retry backoff across USB disappearance/re-enumeration and
   resume. Cap repeated startup retries at one per 60 seconds and reset only
   after a continuous stable run; cover rapid USB return with regression tests.

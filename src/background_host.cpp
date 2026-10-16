@@ -120,6 +120,7 @@ class Host {
         xone::diagnostic("radio_start_requested");
         fs::remove(work/L"usb-gip.stop");for(auto &p:peers_){std::error_code e;fs::remove(peer_status(p),e);p.ready=false;p.generation=0;}
         std::wstring arguments=L"run --output usb-gip --native-usb --usb-auto-slots 8 --usb-gip-port 33400 --seconds 0 --instance "+quote(adapter_)+L" --firmware "+quote((work/L"firmware/FW_ACC_00U.bin").wstring())+L" --stop-file "+quote((work/L"usb-gip.stop").wstring())+L" --status-file "+quote((work/L"usb-gip-controller-status.json").wstring());
+        if(!config_.value("IdlePowerEnabled",true))arguments+=L" --no-idle-power";
         radio_.start(binary_dir/L"xone-probe-cpp.exe",std::move(arguments));SetPriorityClass(radio_.process.value,ABOVE_NORMAL_PRIORITY_CLASS);radio_retry_.started(Clock::now());retry_reason_.clear();state("StartingRadio");
     }
     void failed_radio(std::string reason){

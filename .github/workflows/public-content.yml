@@ -36,7 +36,7 @@ jobs:
       - name: Test native tools and maintenance bootstrap
         shell: powershell
         run: |
-          foreach ($test in @('system_tool_tests.ps1','setup_action_tests.ps1','device_config_tests.ps1','setup_helpers_tests.ps1')) {
+          foreach ($test in @('system_tool_tests.ps1','setup_action_tests.ps1','device_config_tests.ps1','setup_helpers_tests.ps1','adapter_idle_power_tests.ps1')) {
             & "$env:windir\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path tests $test)
             if ($LASTEXITCODE -ne 0) { throw ('Failed: ' + $test) }
           }

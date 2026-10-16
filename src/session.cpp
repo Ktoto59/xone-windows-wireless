@@ -244,12 +244,23 @@ struct Session::Client {
 };
 Session::Session(xone_mt76 &mt,InputOutput *output,bool trace,AudioOutput *audio_output,RawGipOutput *raw_output):mt_(mt),output_(output),audio_output_(audio_output),raw_output_(raw_output),trace_(trace) {}
 Session::~Session()=default;
+bool Session::has_clients()const{return std::any_of(clients_.begin(),clients_.end(),[](const auto &p){return bool(p);});}
+void Session::suspend_idle_radio(){
+    if(has_clients() || pairing_)throw std::runtime_error("Cannot suspend an occupied radio");
+    check(xone_mt76_suspend_radio(&mt_),"Arm radio wake");radio_suspended_=true;
+}
+void Session::resume_idle_radio(){
+    if(!radio_suspended_)return;
+    check(xone_mt76_resume_radio(&mt_),"Resume idle radio");radio_suspended_=false;
+    pair_scan_last_=std::chrono::steady_clock::now();
+}
 void Session::enable_idle_channel_scan() {
     idle_channel_scan_=true;pair_scan_last_=std::chrono::steady_clock::now();
     for(size_t i=0;i<XONE_MT_NUM_CHANNELS;++i)if(mt_.channel==&mt_.channels[i]){pair_scan_index_=i;break;}
 }
 void Session::check(int result,const char *operation) { if(result || mt_.udev->sticky_error) throw std::runtime_error(std::string(operation)+" failed: "+std::to_string(mt_.udev->sticky_error?mt_.udev->sticky_error:result)); }
 void Session::pairing(bool enabled) {
+    if(enabled)resume_idle_radio();
     if(pairing_==enabled) return;
     check(xone_mt76_set_pairing(&mt_,enabled),"Pairing beacon"); pairing_=enabled;++status_revision_;
     std::cout<<"PAIRING "<<(enabled?"ON":"OFF")<<"\n";
@@ -262,6 +273,7 @@ void Session::pairing(bool enabled) {
 }
 void Session::remove(uint8_t wcid,const char *reason) { if(wcid && wcid<=16 && clients_[wcid-1]) { if(removals_.size()==32)removals_.erase(removals_.begin());removals_.push_back({hex(clients_[wcid-1]->address),reason,wcid,static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count())}); if(raw_output_ && raw_output_->target(clients_[wcid-1]->address))raw_output_->event(3,wcid);if(audio_output_)audio_output_->disconnect(wcid);if(output_)output_->disconnect(wcid);clients_[wcid-1].reset();++status_revision_; check(xone_mt76_remove_client(&mt_,wcid),"Remove client"); std::cout<<"DISCONNECTED WCID="<<unsigned(wcid)<<"\n"; } }
 void Session::process(const RadioEvent &e) {
+    if(e.kind!=RadioEvent::Kind::ignored)resume_idle_radio();
     if(e.kind==RadioEvent::Kind::association || e.kind==RadioEvent::Kind::gip || e.kind==RadioEvent::Kind::client_command)
         pair_scan_last_=std::chrono::steady_clock::now();
     switch(e.kind) {
@@ -338,7 +350,7 @@ void Session::tick(std::chrono::steady_clock::time_point now) {
     for(uint8_t w=1;w<=16;++w)if(clients_[w-1] && clients_[w-1]->status_disconnected)remove(w,"gip-status-disconnected");
     if(pairing_ && now>=pair_deadline_)pairing(false);
     // Scan only with an empty client table: changing channel during auth/audio breaks it.
-    if((pairing_ || idle_channel_scan_) && now-pair_scan_last_>=std::chrono::seconds(2) &&
+    if(!radio_suspended_ && (pairing_ || idle_channel_scan_) && now-pair_scan_last_>=std::chrono::seconds(2) &&
        std::none_of(clients_.begin(),clients_.end(),[](const auto &c){return bool(c);})){
         const auto next=(pair_scan_index_+1)%XONE_MT_NUM_CHANNELS;
         auto &channel=mt_.channels[next];
@@ -381,6 +393,7 @@ bool Session::audio_active() const {
     return false;
 }
 void Session::close() {
+    resume_idle_radio();
     pairing(false);
     for(uint8_t w=1;w<=16;++w) {
         if(clients_[w-1] && clients_[w-1]->encrypted)try{clients_[w-1]->rumble(0,0);}catch(...){}

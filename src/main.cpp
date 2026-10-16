@@ -10,6 +10,7 @@
 #include "runtime_files.hpp"
 #include "status_schedule.hpp"
 #include "diagnostic_log.hpp"
+#include "radio_idle_power.hpp"
 extern "C" {
 #include "mt76/mt76.h"
 }
@@ -56,6 +57,7 @@ void help() {
         "                            [--virtual-xinput]\n"
         "  xone-probe virtual-test (ViGEmBus/XInput smoke test; no USB access)\n"
         "  xone-probe run --firmware FILE [--stop-file FILE] [--seconds 0] [--verbose]\n"
+        "                 [--no-idle-power]\n"
         "                 [--output vigem|native-gip|usb-gip] [--status-file FILE.json]\n"
         "                 [--usb-gip-mac HEX12 --usb-gip-port 33241]\n"
         "                 [--usb-gip-fallback none|native-gip|vigem]\n"
@@ -74,7 +76,7 @@ struct Options {
     std::vector<std::pair<std::wstring,uint16_t>> usb_gip_peers;
     unsigned seconds=30;
     unsigned slot=0,large=16000,small_motor=0;
-    bool verbose=false,pair=false,virtual_xinput=false,idle_channel_scan=false,native_usb=false;
+    bool verbose=false,pair=false,virtual_xinput=false,idle_channel_scan=false,native_usb=false,no_idle_power=false;
 };
 Options options(int argc,wchar_t **argv) {
     Options result;
@@ -86,6 +88,7 @@ Options options(int argc,wchar_t **argv) {
         else if (key==L"--pair-beacon") result.pair=true;
         else if (key==L"--idle-channel-scan") result.idle_channel_scan=true;
         else if (key==L"--native-usb") result.native_usb=true;
+        else if (key==L"--no-idle-power") result.no_idle_power=true;
         else if (key==L"--virtual-xinput") result.virtual_xinput=true;
         else {
             if (i+1>=argc) throw std::runtime_error("Missing value for " + xone::utf8(key));
@@ -302,7 +305,7 @@ public:
             threads_.emplace_back([this,pipe](std::stop_token token) {
                 try {
                     while (!token.stop_requested() && !interrupted) {
-                        auto bytes=usb_.read(pipe);
+                        auto bytes=usb_.read(pipe,token);
                         if (bytes.empty()) continue;
                         const auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-start_).count();
                         std::lock_guard lock(mutex_);
@@ -392,6 +395,17 @@ int radio_test(const Options &opt,bool controller=false,bool run=false) {
         std::unique_ptr<xone::AudioOutput> audio_output;
         if(run && native_output)audio_output=std::make_unique<xone::NativeAudioOutput>();
         xone::Session session(mt,output.get(),!run || opt.verbose,audio_output.get(),raw_output.get());
+        std::unique_ptr<xone::RadioIdlePower> idle_power;
+        if(run && !opt.no_idle_power && usb.prepare_idle_power(adapter)){
+            idle_power=std::make_unique<xone::RadioIdlePower>(std::chrono::steady_clock::now(),[&]{
+                session.suspend_idle_radio();
+                try{usb.auto_suspend(true);}catch(...){session.resume_idle_radio();throw;}
+                xone::diagnostic("radio_idle_armed",{{"watchdog_seconds",30}});
+            },[&](const char *reason){
+                usb.auto_suspend(false);session.resume_idle_radio();
+                xone::diagnostic("radio_idle_resumed",{{"reason",reason}});
+            });
+        }
         if(opt.idle_channel_scan)session.enable_idle_channel_scan();
         if(opt.pair)session.begin_pairing();
         xone::RuntimeFiles runtime_files([&](const std::string &text){
@@ -406,9 +420,11 @@ int radio_test(const Options &opt,bool controller=false,bool run=false) {
             const auto now=std::chrono::steady_clock::now();
             // Publish the first writer fault promptly; repeated failures must
             // not turn retries against an unavailable file into a tight loop.
-            if(!status_schedule.ready({session.status_revision(),uint64_t(runtime_files.io_errors()!=0)},now,!running))return;
+            if(!status_schedule.ready({session.status_revision()+(idle_power?idle_power->revision():0),uint64_t(runtime_files.io_errors()!=0)},now,!running))return;
             std::ostringstream json;
+            const auto radio_power=idle_power?(idle_power->armed()?"WakeArmed":"Active"):"Disabled";
             json<<std::boolalpha<<"{\"Running\":"<<running<<",\"Backend\":\""<<xone::utf8(opt.output)<<"\",\"FallbackOutput\":\""<<xone::utf8(opt.usb_gip_fallback)<<"\",\"Pairing\":"<<session.pairing_active()<<",\"RadioChannel\":"<<unsigned(mt.channel->index)<<",\"AutomaticSlots\":"<<opt.usb_auto_slots<<",\"ShareForwardedToWindows\":false,\"BatteryForwardedToWindows\":false,\"Controllers\":[";
+            // WakeArmed reports requested firmware/USB policy, not measured D-state.
             bool first=true;
             for(const auto &c:session.status()){
                 if(!first)json<<',';first=false;
@@ -429,19 +445,34 @@ int radio_test(const Options &opt,bool controller=false,bool run=false) {
             }
             json<<"],\"RecentRadioRemovals\":[";bool first_removal=true;
             for(const auto &r:session.removals()){if(!first_removal)json<<',';first_removal=false;json<<"{\"Mac\":\""<<r.mac<<"\",\"Reason\":\""<<r.reason<<"\",\"Wcid\":"<<unsigned(r.wcid)<<",\"TickMs\":"<<r.tick_ms<<'}';}
-            json<<"],\"RuntimeFileIoErrors\":"<<runtime_files.io_errors()<<"}\n";const auto text=json.str();if(text==previous_status)return;
+            json<<"],\"RadioPower\":\""<<radio_power<<"\",\"RuntimeFileIoErrors\":"<<runtime_files.io_errors()<<"}\n";const auto text=json.str();if(text==previous_status)return;
             runtime_files.publish(text);
             previous_status=text;
         };
         std::cout << "CONTROLLER READY: power on one controller; pair buttons only if it does not reconnect.\n" << std::flush;
         const auto end=opt.seconds?std::chrono::steady_clock::now()+std::chrono::seconds(opt.seconds):std::chrono::steady_clock::time_point::max();
+        auto power_observed_at=std::chrono::steady_clock::time_point{};
         try {
             while (!interrupted && std::chrono::steady_clock::now()<end && !runtime_files.stop_requested()) {
-                receiver.check(); for (const auto &event:receiver.drain()) session.process(event); session.tick();save_status(true);
-                std::cout.flush();tick_timer.wait(session.audio_active() || opt.output==L"usb-gip"?1:5);
+                receiver.check();
+                for (const auto &event:receiver.drain()){
+                    if(idle_power)idle_power->wake(std::chrono::steady_clock::now(),"wireless-event");
+                    session.process(event);
+                }
+                const auto now=std::chrono::steady_clock::now();
+                if(idle_power && idle_power->armed() && now-power_observed_at>=std::chrono::milliseconds(250)){
+                    power_observed_at=now;
+                    if(usb.idle_wake_observed())idle_power->wake(now,"usb-remote-wake");
+                }
+                session.tick();
+                if(idle_power)idle_power->update(std::chrono::steady_clock::now(),session.has_clients() || session.pairing_active());
+                save_status(true);
+                std::cout.flush();tick_timer.wait(idle_power && idle_power->armed()?100:session.audio_active() || opt.output==L"usb-gip"?1:5);
             }
+            if(idle_power)idle_power->wake(std::chrono::steady_clock::now(),"shutdown");
             session.close();save_status(false);
         } catch (...) {
+            if(idle_power)try{idle_power->wake(std::chrono::steady_clock::now(),"error-cleanup");}catch(...){}
             try { session.close(); } catch (...) {}
             // A latched USB error can also prevent cleanup; still mark the snapshot stopped.
             try { save_status(false); } catch (...) {}

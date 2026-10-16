@@ -120,6 +120,55 @@ do not publish raw diagnostics with the code.
 
 ## Build and check
 
+### Wake-capable radio idle (experimental)
+
+The shared C++ radio runtime (`run`, including the Python supervisor's radio
+child) can arm firmware wake-on-wireless after 30 seconds with no RF clients and
+no pairing session. A connecting or not-yet-identified client prevents sleep.
+Persistent overlapped IN requests have no USB timeout; waiting on their Windows
+events does not re-submit USB reads. Stop cancels and drains the pending reads.
+The session loop uses a slower timer while standby is armed.
+
+Firmware wake is armed before enabling WinUSB `AUTO_SUSPEND`. On a meaningful
+radio event, USB autosuspend is disabled and firmware resumed before dispatch.
+While armed, a cached PnP power-property check also detects a low-power-to-D0
+transition, because firmware can wake USB before delivering an association packet.
+This property check does not issue USB control/read requests.
+An empty radio gets a two-second recovery window every 30 seconds as a fallback
+for a missed wake; this is not a guarantee of immediate reconnect on every model.
+Active audio/input and pairing keep autosuspend disabled. The default remains
+active when no bridge owns the device, to avoid USB sleep without firmware wake
+being prepared. This does not implement waking the entire PC from system sleep.
+
+Existing inbox-WinUSB bindings need one adapter-specific configuration step.
+Stop installed/development bridges first, then in an administrator PowerShell:
+
+```powershell
+.\scripts\Set-AdapterIdlePower.ps1 -Mode Enable
+# Unplug/replug the adapter, then launch the development session normally.
+```
+
+This requires the matching saved stock binding. It saves original DWORD values
+in ignored `work/binding-state.json`, requires remote wake support, and changes
+only the selected adapter's hardware key. It does not set `SystemWakeEnabled`,
+force suspend without remote wake, or change hubs/global power plans. New WinUSB
+bindings do this as part of `Switch-WinUSB.ps1`; stock restoration restores the
+original idle settings. Use `-Mode Restore` while bridges are stopped to undo
+only the power configuration, then replug. The placeholder unsigned INF is not
+used for this experiment.
+
+For diagnosis, `--no-idle-power` disables the feature on a direct radio command;
+`"IdlePowerEnabled": false` in private `config/devices.local.json` disables it in
+the C++ host. `RadioPower: WakeArmed` in the controller status reports a requested
+policy, not an observed D-state or temperature. Journal entries
+`idle_power_ready`, `radio_idle_armed`, and `radio_idle_resumed` describe lifecycle;
+unsupported wake/configuration and power-policy failures enter the anomaly log.
+Validate actual USB suspension and reconnect with each headset/controller model;
+synthetic tests cannot establish energy savings or hardware compatibility.
+
+References: [WinUSB power management](https://learn.microsoft.com/en-us/windows-hardware/drivers/usbcon/winusb-power-management),
+[WinUsb_SetPowerPolicy](https://learn.microsoft.com/en-us/windows/win32/api/winusb/nf-winusb-winusb_setpowerpolicy).
+
 Use Windows x64, Visual Studio C++ Build Tools and a Windows SDK. Python 3.11+
 is needed for reference/loopback tests, not for the installed runtime.
 

@@ -4,10 +4,12 @@
 #define NOMINMAX
 #include <windows.h>
 #include <winusb.h>
+#include <setupapi.h>
 #include <string>
 #include <vector>
 #include <cstdint>
 #include <span>
+#include <stop_token>
 #include "platform/xone_compat.h"
 #include "pipe_timeouts.hpp"
 
@@ -23,6 +25,11 @@ std::string win_error(DWORD error);
 class WinUsbTransport {
     HANDLE file_ = INVALID_HANDLE_VALUE;
     WINUSB_INTERFACE_HANDLE usb_ = nullptr;
+    bool idle_power_ready_=false;
+    HDEVINFO power_devices_=INVALID_HANDLE_VALUE;
+    SP_DEVINFO_DATA power_info_{};
+    bool idle_seen_low_power_=false;
+    bool power_observation_failed_=false;
     PipeTimeouts timeouts_;
     bool set_timeout(uint8_t pipe,unsigned timeout);
     static int control_callback(void *, u8, u8, u16, u16, void *, u16, unsigned);
@@ -33,7 +40,10 @@ public:
     ~WinUsbTransport();
     WinUsbTransport(const WinUsbTransport &) = delete;
     WinUsbTransport &operator=(const WinUsbTransport &) = delete;
-    std::vector<uint8_t> read(uint8_t pipe);
+    std::vector<uint8_t> read(uint8_t pipe,std::stop_token stop={});
+    bool prepare_idle_power(const DeviceInfo &device);
+    void auto_suspend(bool enabled);
+    bool idle_wake_observed();
     void describe() const;
 };
 }

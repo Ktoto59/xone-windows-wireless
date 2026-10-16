@@ -520,6 +520,23 @@ int main() {
             e.kind=RadioEvent::Kind::lost;session.process(e);check(session.status().size()==1 && session.status()[0].wcid==2 && session.audio_active(),"Raw disconnect removed fallback audio");
             session.close();
         });
+        test("Idle radio refuses clients and resumes before association/pairing",[]{
+            usb_device usb{};device dev{};xone_mt76 mt{};mt.dev=&dev;mt.udev=&usb;mt.channel=&mt.channels[0];mt.channel->index=165;
+            usb.control=[](void *,u8,u8 type,u16,u16,void *data,u16 n,unsigned)->int{if(type&128)std::memset(data,0,n);return n;};
+            unsigned writes=0;usb.context=&writes;
+            usb.bulk=[](void *ctx,u8,void *,int n,int *actual,unsigned)->int{++*static_cast<unsigned *>(ctx);if(actual)*actual=n;return 0;};
+            Session session(mt,nullptr,false);session.enable_idle_channel_scan();
+            session.suspend_idle_radio();const auto idle_writes=writes;
+            session.tick(std::chrono::steady_clock::now()+std::chrono::seconds(5));
+            check(writes==idle_writes,"Channel scan woke an idle radio");
+            RadioEvent e;e.kind=RadioEvent::Kind::association;e.address={1,2,3,4,5,6};session.process(e);
+            check(session.has_clients() && writes>idle_writes,"Association was not resumed");
+            rejects([&]{session.suspend_idle_radio();});
+            e.kind=RadioEvent::Kind::lost;e.wcid=1;session.process(e);check(!session.has_clients(),"Lost client blocked standby");
+            session.suspend_idle_radio();const auto before_pair=writes;session.begin_pairing();
+            check(session.pairing_active() && writes>before_pair,"Pairing did not wake the radio");
+            rejects([&]{session.suspend_idle_radio();});session.close();
+        });
         test("Client association, identification, auth start and disconnect",[]{
             struct Mock {
                 std::vector<Bytes> writes;

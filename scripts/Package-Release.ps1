@@ -32,7 +32,7 @@ $taskRuntimeFiles=@('LICENSE','third_party/json/LICENSE.MIT','third_party/vigem/
     'docs/INSTALL.md','docs/TROUBLESHOOTING.md','docs/cpp-bridge.md',
     'docs/LIMITATIONS.md','docs/PRIVACY.md','docs/UPSTREAM.md',
     'scripts/Setup-Action.ps1','scripts/Setup-Helpers.ps1','scripts/Device-Config.ps1',
-    'scripts/Switch-WinUSB.ps1','scripts/Import-Firmware.ps1',
+    'scripts/Switch-WinUSB.ps1','scripts/Adapter-IdlePower.ps1','scripts/Set-AdapterIdlePower.ps1','scripts/Import-Firmware.ps1',
     'scripts/Set-AutomaticBridge.ps1','scripts/Run-MaintainedBridge.ps1')
 $taskSourceExtra=@('README.md','.gitignore','.gitattributes','docs/INSTALLER.md',
     'scripts/build.cmd','scripts/Build-Appliance.cmd','scripts/Build-CppBridge.cmd','scripts/Run-Development.ps1',
