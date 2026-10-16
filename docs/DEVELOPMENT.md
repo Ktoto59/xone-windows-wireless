@@ -1,5 +1,103 @@
 # Development
 
+## Branches and release path
+
+`main` is the stable/release channel. Develop and diagnose on `experimental`;
+promote reviewed changes to `main` after synthetic checks and explicit hardware
+validation. A channel name is not evidence of hardware stability: the existing
+alpha.5.3 headset disconnect remains under investigation.
+
+The development runtime is Python for supervision, USBIP URBs, GIP routing,
+model connectors and PCM conversion. It shares the C/C++ MT76/WinUSB radio
+executable with the production implementation. Python is not automatically
+translated to C++: behavior changes must be ported and validated against the
+C++ transport/protocol tests before release. A clean Python run cannot establish
+that a failure in the C++ native USBIP path has been fixed.
+
+The installed runtime remains C++ (`Build-Appliance.cmd` / `Build-Installer.ps1`).
+The runtime package uses an explicit allowlist; Python and development tracing
+are only included in the separate source archive.
+
+## Development session
+
+Install Python 3.11+, build `outputs/xone-probe.exe` with `scripts/build.cmd`,
+prepare the verified firmware under `work/firmware` using the existing import
+script, and install USBip. The adapter must already use WinUSB. This launcher
+does not change bindings, power policy, pairing, or installed binaries.
+
+```powershell
+# Five-minute foreground-controlled session; restores a running installation.
+.\scripts\Run-Development.ps1 -TakeOverInstalled -Seconds 300
+
+# Also trace each executed Python line (much higher overhead).
+.\scripts\Run-Development.ps1 -TakeOverInstalled -TraceLevel lines -Seconds 300
+```
+
+`-TakeOverInstalled` stops the owned installed host for the session and requests
+its restart during cleanup. Without it, an active installed host is a conflict.
+The development supervisor only imports/detaches its own virtual USB ports.
+`-Seconds 0` runs until stopped; Ctrl+C requests cleanup. If cleanup cannot finish
+within 30 seconds, the launcher reports it and does not start a competing host.
+Do not unplug the adapter or stop the host during an unplanned-drop capture:
+those deliberate actions would also appear as disconnects in the logs.
+
+Each invocation creates an ignored `work/development/<UTC-session>/` directory:
+
+| File | Contents |
+| --- | --- |
+| `session.json` | Branch/commit/dirty state, radio binary hash, duration and cleanup result |
+| `supervisor-<pid>.jsonl`, `worker-<association>-<pid>.jsonl` | Full Python trace and semantic events |
+| `anomalies-<role>-<pid>.jsonl` | Exceptions, protocol/USB failures, unexpected RF EOF/removal, failed imports, loss/expiry/overflow and scheduling warnings |
+| `<role>-<pid>-health.json` | Attempted/written/dropped events, anomaly loss, I/O errors, observed functions |
+| `supervisor-stdout.log`, `supervisor-stderr.log` | Supervisor console and uncaught traceback |
+
+Radio stdout/stderr and worker console logs remain under `work/auto-usb`; their
+paths and child identities are recorded in the trace/state. A radio exit event
+also copies the last eight stderr lines into the anomaly journal. WinUSB fatal
+errors include endpoint, requested length and UTC, preserving the original
+Windows error before formatting/cleanup.
+
+Tracing covers calls/resumes, returns/yields and exceptions in **every Python
+runtime module under `src/`**, including connectors and telemetry. `lines` adds
+executed source lines. The trace writer itself and third-party/standard-library
+internals are excluded to avoid recursive logging. Values of function arguments,
+return values, locals, PCM, authentication and key buffers are not recorded.
+Every file identifies the session, process, thread, asyncio task where available,
+UTC, monotonic timestamp and process-local sequence. `resumable=true` means a
+coroutine/generator call/return can be a resume/suspension, not a new invocation
+or final return. The source manifest includes hashes; the health file lists the
+functions actually executed, not a claim that every branch was exercised.
+
+Semantic events record USB submit/complete/unlink headers, endpoint, request
+sequence, status, pending URBs, IPC kind/WCID/token/length, command queue waits,
+backend duration, status transitions and audio counters. Development events
+continue after the legacy 1000-event console cap. Repeated caught exceptions
+are useful during diagnosis; normal StopIteration/GeneratorExit/cancellation
+control flow does not enter the anomaly journal merely for its exception type.
+An unexpected socket EOF is also reported by its owning component.
+
+Audio drops/expiry, concealment and queue overflow are logged at their source;
+they do not wait for the next status snapshot. Anomalies share the exact sequence
+number with the full trace. Scheduling lag
+over 20 ms, a new radio audio gap maximum over 32 ms, a new ACK maximum over
+20 ms, and a render wait exceeding the model's configured render budget are
+diagnostic thresholds, not established end-to-end latency measurements. Loss,
+concealment, expiration and overflow counters generate anomalies on increases.
+
+Each process has independent bounded queues for full trace and anomalies (8192
+records each), with a dedicated writer thread. Saturation drops new records
+instead of blocking radio/audio; `trace_loss` and health counters disclose losses
+in both queues. Storage failures are counted rather than raised into transport
+code. Each journal rotates at 16 MiB with seven backups (128 MiB per journal per
+process); rotation evicts the oldest events. Console/radio companion logs and
+previous sessions are not covered by those JSONL limits. A permanently blocked
+writer has a bounded shutdown wait; its health may then be stale. Detailed
+tracing adds overhead, especially `lines`: use loop-lag/loss counters and repeat
+important results on C++ before drawing performance conclusions.
+
+Logs contain local process/device metadata. Keep them under ignored `work/`;
+do not publish raw diagnostics with the code.
+
 ## Build and check
 
 Use Windows x64, Visual Studio C++ Build Tools and a Windows SDK. Python 3.11+

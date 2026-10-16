@@ -16,6 +16,7 @@ import sys
 import time
 import uuid
 from bridge_telemetry import BridgeTelemetry
+import development_trace as trace
 from usbip_auto_worker import PROFILES, model, serial_for, worker_main
 
 
@@ -24,6 +25,16 @@ def read_json(path):
         return json.loads(path.read_text(encoding='utf-8-sig'))
     except (OSError,ValueError):
         return None
+
+
+def read_error_tail(path):
+    try:
+        with path.open('rb') as stream:
+            stream.seek(0, 2)
+            stream.seek(max(0, stream.tell()-4096))
+            return stream.read().decode('utf-8', errors='replace').splitlines()[-8:]
+    except OSError as error:
+        return [type(error).__name__]
 
 
 def process_identity(pid):
@@ -119,11 +130,19 @@ class Supervisor:
         self.stopping = False
 
     async def usbip_command(self,*arguments):
+        started = time.perf_counter_ns()
+        trace.event('usbip_command_queued', arguments=arguments)
         async with self.usbip_lock:
+            trace.event('usbip_command_started', arguments=arguments,
+                        queue_wait_us=(time.perf_counter_ns()-started)/1000)
             if self.stopping and 'attach' in arguments:
                 raise RuntimeError('Automatic bridge is stopping')
             result = await asyncio.to_thread(subprocess.run,[self.usbip,*arguments],capture_output=True,
                                              timeout=20,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+        trace.event('usbip_command_finished', suspicious=result.returncode != 0,
+                    arguments=arguments, returncode=result.returncode,
+                    elapsed_us=(time.perf_counter_ns()-started)/1000,
+                    stdout_bytes=len(result.stdout), stderr_bytes=len(result.stderr))
         if result.returncode:
             raise RuntimeError('USBIP '+arguments[0]+': '+result.stderr.decode(errors='replace').strip()[:240])
         return result.stdout.decode(errors='replace').strip()
@@ -240,6 +259,7 @@ class Supervisor:
 
     async def run(self):
         log = error = None
+        monitor = asyncio.create_task(trace.monitor_loop(), name='development-loop-monitor') if trace.active() else None
         try:
             for slot in self.slots:
                 listener = socket.socket()
@@ -261,11 +281,16 @@ class Supervisor:
                 args.append('--idle-channel-scan')
             self.radio = self.radio_factory(args,stdout=log,stderr=error,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
             self.radio_identity = process_identity(self.radio.pid)
+            trace.event('radio_process_started', identity=self.radio_identity,
+                        stdout=str(self.radio_log), stderr=str(self.radio_error))
             while not await asyncio.to_thread(self.radio_stop.exists):
                 observed = await asyncio.to_thread(read_json,self.radio_status)
                 if observed is not None:
                     self.radio_observed = observed
                 if self.radio.poll() is not None:
+                    tail = await asyncio.to_thread(read_error_tail, self.radio_error)
+                    trace.event('radio_process_exited', suspicious=True, returncode=self.radio.returncode,
+                                stderr=str(self.radio_error), error_tail=tail)
                     raise RuntimeError(f'Radio bridge exited with code {self.radio.returncode}; see {self.radio_error}')
                 for task in self.accept_tasks:
                     if task.done():
@@ -283,6 +308,7 @@ class Supervisor:
             self.failure = str(exception)
             self.state_io.event({'operation':'automatic_stopped','detail':self.failure})
         finally:
+            trace.event('supervisor_stopping', suspicious=self.failure is not None, failure=self.failure)
             self.stopping = True
             for task in self.accept_tasks:
                 task.cancel()
@@ -319,6 +345,9 @@ class Supervisor:
             self.state_io.publish(self.state(False))
             await asyncio.to_thread(self.registry_io.close)
             await asyncio.to_thread(self.state_io.close)
+            if monitor is not None:
+                monitor.cancel()
+                await asyncio.gather(monitor, return_exceptions=True)
         return 1 if self.failure else 0
 
 
@@ -344,4 +373,8 @@ def main():
 
 if __name__=='__main__':
     multiprocessing.freeze_support()
-    sys.exit(main())
+    try:
+        trace.start_from_environment('supervisor')
+        sys.exit(main())
+    finally:
+        trace.stop()

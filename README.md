@@ -66,8 +66,11 @@ difference between adapter RAM firmware and updating a headset.
 
 ## Development and privacy
 
-The runtime path and background manager are C++. Python sources remain as a test
-reference and development tools. [Build instructions](docs/INSTALLER.md),
+`main` is the stable/release channel; `experimental` holds development work.
+The installed runtime and background manager are C++. Development uses the
+Python reference with complete source call tracing and a separate anomaly log;
+see [development sessions](docs/DEVELOPMENT.md#development-session).
+[Build instructions](docs/INSTALLER.md),
 [architecture](docs/ARCHITECTURE.md), [development checks](docs/DEVELOPMENT.md),
 [changelog](CHANGELOG.md) and [upstream attribution](docs/UPSTREAM.md).
 

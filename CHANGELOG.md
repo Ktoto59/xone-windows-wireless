@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Separate the stable `main` channel from `experimental` development. Add a
+  Python development launcher with source-wide call/exception tracing, optional
+  line tracing, process/task/URB correlation and independent rotating anomaly
+  journals. Record audio loss, queue pressure, scheduling lag, child exits and
+  trace losses; keep the installed/release runtime C++.
+- Include endpoint, requested byte count and UTC in fatal WinUSB transfer errors
+  so physical read failures can be distinguished from shutdown write failures.
 - Publish fallback GIP status immediately on state transitions rather than on
   every control packet; repeated battery/audio-control and ignored messages no
   longer bypass the normal status-write interval.
