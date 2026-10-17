@@ -1,7 +1,10 @@
-# Install and use the alpha.5.2 candidate
+# Install, upgrade and remove
 
-Download the [alpha.5.2 prerelease](https://github.com/Ktoto59/xone-windows-wireless/releases/tag/v0.1.0-alpha.5.2).
-Use its Setup-x64.exe; extracting the
+This guide describes the alpha.6 source and installer candidate.
+Download installers from [published releases](https://github.com/Ktoto59/xone-windows-wireless/releases)
+or build the [current candidate](INSTALLER.md). Alpha.5.2 is the latest published
+installer until alpha.6 is published; its startup behavior differs as noted below.
+Use the Setup-x64.exe; extracting the
 runtime ZIP does not register the application or prepare the adapter.
 
 **Do not update firmware through the bridge, including OTA headset updates.**
@@ -26,7 +29,7 @@ to WinUSB; its stock wireless driver does not run alongside it.
 ## Installation and pairing
 
 1. Connect the adapter and stop a development bridge running from another folder.
-2. Run `xone-windows-wireless-0.1.0-alpha.5.2-Setup-x64.exe` as your normal Windows
+2. Run `xone-windows-wireless-<version>-Setup-x64.exe` as your normal Windows
    user. Approve the separate administrator prompt for setup.
 3. Allow dependency preparation to finish. Setup downloads and installs missing
    Microsoft adapter drivers, verified RAM firmware and signed USBip automatically.
@@ -44,7 +47,13 @@ Series controller have been tested together on one PC. Both headsets are separat
 audio devices; playing one application in both requires audio routing by the
 application/Windows tools and is not automatic duplication by this bridge.
 
-The invisible C++ host starts immediately and at the installing user's sign-ins.
+Alpha.6 offers separate start-now and sign-in startup choices and remembers them
+on upgrade. Start-now is skipped if Windows requires a reboot; when sign-in
+startup is off, use **Start xone Wireless** from the Start menu after restart.
+**Stop xone Wireless** stops the owned bridge without changing adapter drivers.
+The older alpha.5.2 installer enables immediate and sign-in startup automatically.
+
+The invisible C++ host runs in the installing user's session.
 It does not run before sign-in. No Python, persistent PowerShell, control panel,
 tray icon or overlay is installed. Firmware is loaded into adapter RAM, not
 flashed as a persistent adapter update.
@@ -55,7 +64,8 @@ Run the newer Setup as the same Windows user. Setup stops its owned host and kee
 private configuration/recovery metadata. A recognized earlier installation's
 startup task can be migrated; an unrelated active radio session blocks setup.
 
-Keep the adapter in its original USB port and remove **xone-windows-wireless**
+Keep the adapter in its original USB port and remove **xone Wireless** (or the
+older **xone-windows-wireless** entry)
 through Windows **Installed apps**. The uninstaller stops its host, unregisters
 its sign-in task and restores the stock binding only if this installation owns
 the recovery metadata. Reconnect the adapter afterwards. If restoration cannot
@@ -66,9 +76,14 @@ or adopted by this installation is left as it was.
 ## Files and validation
 
 Default directory: `%LOCALAPPDATA%\Programs\xone-windows-wireless`.
-Private settings are under `config/*.local.json`; lifecycle/error snapshots and
-recovery data are under `work/`. Do not publish those directories: they can contain
-addresses, instance IDs and local paths. Normal operation records no audio.
+Private settings are under `config/*.local.json`; setup results and driver recovery
+data remain under `work/`. Current native runtime status/counters use shared memory
+and events, with no periodic state-file writes. Query the running installation with
+`scripts/Get-ControllerStatus.ps1 -Json`. Normal installer builds disable runtime
+diagnostic journals; explicit development sessions can capture diagnostics. Older
+releases retain file-based snapshots. Do not publish complete `work/` or `config/`
+directories: they can contain addresses, instance IDs and local paths. Normal
+operation records no audio.
 
 This candidate is tested on one development PC. Compilation and runtime tests do
 not establish fresh-PC installation, hardware restoration on every PC, long-term

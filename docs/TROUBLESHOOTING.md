@@ -8,8 +8,10 @@
   details. Share only the relevant error after removing local paths and instance
   IDs. For alpha.5 first-install download failures, use alpha.5.1 or newer; it
   corrects the Microsoft firmware HTTPS host without bypassing certificate checks.
-- **A device is missing:** check that the adapter is connected and the background
-  host's `work/maintenance-status.json` has no error. Turn on the device normally;
+- **A device is missing:** check that the adapter is connected and query the
+  running installation with `scripts/Get-ControllerStatus.ps1 -Json`. Alpha.6
+  reads live status from memory; older releases use `work/maintenance-status.json`.
+  Turn on the device normally;
   pair with both pairing buttons only if its saved association does not return.
 - **One headset is silent:** choose its playback endpoint explicitly in Windows
   or the application. Connecting a second headset no longer changes defaults.
@@ -21,7 +23,7 @@
   the device, endpoint, USB controller or power transition caused the failure.
   Diagnostic radio stderr includes the endpoint (`0x84` WLAN or `0x85` MCU),
   requested buffer size and UTC failure time. Ordinary read timeouts (`121`)
-  remain nonfatal. The experimental C++ runtime also records these errors in
+  remain nonfatal. Diagnostic C++ builds also record these errors in
   `work/diagnostics/cpp/anomalies-radio-<pid>.jsonl`, including the numeric
   Windows error and endpoint. Older installed builds require an explicit stderr
   capture. For a USB ETW trace,
@@ -41,7 +43,9 @@ The adapter belongs to WinUSB while this bridge runs. Old devices cannot bypass
 it through the stock wireless driver on the same physical adapter. USBip remains
 in the virtual USB transport; replacing Python with C++ does not remove USBip.
 
-Experimental C++ builds retain bounded JSONL lifecycle/error journals under
+Normal alpha.6 installer builds compile out runtime journals; use an explicit
+development build/session to collect them. Diagnostic C++ builds retain bounded
+JSONL lifecycle/error journals under
 `work/diagnostics/cpp`. `anomalies-*.jsonl` contains errors, audio loss, stalled
 writes and recovery requests; `cpp-*.jsonl` also contains ordinary lifecycle
 events. Records share process-local sequence numbers, UTC/monotonic time, process,

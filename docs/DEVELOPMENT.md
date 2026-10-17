@@ -4,8 +4,8 @@
 
 `main` is the stable/release channel. Develop and diagnose on `experimental`;
 promote reviewed changes to `main` after synthetic checks and explicit hardware
-validation. A channel name is not evidence of hardware stability: the existing
-alpha.5.3 headset disconnect remains under investigation.
+validation. A channel name is not evidence of hardware stability: occasional audio
+micro interruptions and physical USB failures still need hardware investigation.
 
 The development runtime is Python for supervision, USBIP URBs, GIP routing,
 model connectors and PCM conversion. It shares the C/C++ MT76/WinUSB radio
@@ -255,6 +255,14 @@ to the current Setup. Research tools can change hardware state: use the normal
 installer unless you are deliberately investigating those paths.
 
 ## Publication hygiene
+
+Check `git var GIT_AUTHOR_IDENT` before committing. Maintainer commits from this
+checkout use the `ktoto59` GitHub identity and its noreply email; use repository-local
+Git identity instead of inheriting an unrelated work profile. Other contributors
+should use their own verified identities. [`.mailmap`](../.mailmap) provides
+canonical names for Git reports without rewriting published commit objects.
+See [Git mailmap](https://git-scm.com/docs/gitmailmap) and
+[GitHub commit email](https://docs.github.com/en/account-and-profile/how-tos/email-preferences/setting-your-commit-email-address).
 
 Keep private data under ignored `work/`, `config/*.local.*` or `runtime/` paths.
 Never commit firmware, captures, certificates, local bindings or real instance

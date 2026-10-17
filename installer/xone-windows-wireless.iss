@@ -1,6 +1,6 @@
 ; SPDX-License-Identifier: GPL-2.0-or-later
 #ifndef AppVersion
-  #define AppVersion "0.1.0-alpha.5.7"
+  #define AppVersion "0.1.0-alpha.6"
 #endif
 #ifndef StageDir
   #error StageDir must point to a verified public release stage

@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-alpha.6 candidate - 2026-10-17
+
+Promote the tested experimental changes below to the main release channel.
+Alpha.5.3-alpha.5.7 were local test candidates; the latest published release remains
+alpha.5.2 until a separate alpha.6 release is published. Software validation does
+not establish that the remaining audio/reconnect issues are resolved.
 
 - Integrate independent sign-in startup and start-now choices into Setup, remember
   them on upgrade and preserve opt-out during elevated adapter preparation. Add

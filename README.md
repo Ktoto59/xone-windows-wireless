@@ -8,12 +8,56 @@ An experimental C++ bridge for the Xbox Wireless Adapter on Windows 11.
 Connect supported Xbox Wireless Headsets and Series controllers through the
 adapter while Windows uses its existing Xbox GIP and audio drivers.
 
-**[Download the alpha.5.2 installer](https://github.com/Ktoto59/xone-windows-wireless/releases/tag/v0.1.0-alpha.5.2)**
+**Current source: `0.1.0-alpha.6`** — see the [candidate notes](docs/releases/RELEASE-alpha.6.md).
+**[Download published installers](https://github.com/Ktoto59/xone-windows-wireless/releases)**
 | [Installation and removal](docs/INSTALL.md)
 | [Known limitations](docs/LIMITATIONS.md)
 | [Troubleshooting](docs/TROUBLESHOOTING.md)
 | [Architecture diagrams](docs/ARCHITECTURE.md)
 | [Documentation index](docs/README.md)
+
+The latest published installer is alpha.5.2; alpha.6 source and local candidates
+include the changes below. Updating `main` does not publish a new installer.
+
+## How it works
+
+```mermaid
+flowchart TB
+    device["Wireless headset / controller"]
+    adapter["Physical Xbox Wireless Adapter"]
+    bridge["C++ radio and per-device GIP / PCM bridge"]
+    virtualUsb["usbip-win2 virtual USB bus"]
+    drivers["Windows Xbox GIP and audio drivers"]
+    apps["Games, voice apps and input APIs"]
+    host["Background host"]
+
+    device <-->|"Xbox wireless radio"| adapter
+    adapter <-->|"Physical USB via WinUSB"| bridge
+    bridge <-->|"USB/IP over TCP loopback"| virtualUsb
+    virtualUsb <-->|"Virtual USB requests"| drivers
+    drivers <-->|"Audio, microphone and input"| apps
+    host -.->|"Owns radio process"| bridge
+    host -.->|"Imports / detaches owned devices"| virtualUsb
+```
+
+Playback, microphone and service messages share the physical adapter. The bridge
+uses separate bounded control/media queues and prioritizes waiting service data;
+expired audio can be discarded without treating it as a lost radio connection.
+The host manages device lifecycle through shared memory and Windows events.
+See [component, thread and connection diagrams](docs/ARCHITECTURE.md) for details.
+
+## Changes in alpha.6 source
+
+- Asynchronous physical USB transmission, bounded control/media queues and USB
+  session recovery; wake-capable adapter idle policy with reconnect fallback.
+- Runtime status/counters in memory; normal installer builds compile out runtime
+  diagnostic journals. Detailed tracing stays available for development.
+- Radio Wave branding, integrated startup choices and Start menu start/stop
+  shortcuts. Setup remembers startup choices when upgrading.
+
+This remains an alpha. Occasional audio micro interruptions and some cold/warm
+reconnect cases still need validation; these changes do not establish a measured
+latency improvement or stock-driver reliability.
 
 ## Supported hardware
 
@@ -35,7 +79,7 @@ simultaneous audio streams.
 
 1. On Windows 11 x64, connect the adapter and stop any bridge running from a
    development checkout or a different installation.
-2. Download and run `xone-windows-wireless-0.1.0-alpha.5.2-Setup-x64.exe` as your
+2. Download and run `xone-windows-wireless-<version>-Setup-x64.exe` as your
    normal Windows user. Approve the separate administrator prompt for setup.
 3. Let Setup prepare WinUSB, verified adapter RAM firmware and the signed USBip
    dependency. Restart Windows or reconnect the adapter if requested.
@@ -44,7 +88,12 @@ simultaneous audio streams.
 5. Choose the desired headset playback/microphone endpoint in Windows or your app.
    A newly connected headset does not change your default audio selection.
 
-The invisible host starts at the installing user's sign-in. No Python installation,
+Alpha.6 installers offer separate options to start now and at Windows sign-in;
+the published alpha.5.2 installer enables both automatically. Newer Setup can
+replace an older version as the same Windows user, retaining private configuration
+and recovery data. No prior uninstall is required.
+
+The invisible host runs in the installing user's session. No Python installation,
 resident PowerShell, tray application or test-signing mode is required. Remove it
 through Windows **Installed apps**, keeping the adapter connected. Read the
 [full guide](docs/INSTALL.md) before installing or migrating an existing setup.

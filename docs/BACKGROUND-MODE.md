@@ -24,7 +24,7 @@ The installation waits for a missing adapter/device and retries radio startup
 with bounded backoff. Lifecycle recovery and sleep handling exist, but broad
 sleep/resume and fresh-PC reliability are not fully verified.
 
-Experimental radio retries share one host-lifetime backoff across child exits,
+Native radio retries share one host-lifetime backoff across child exits,
 USB disappear/reappear notifications and startup errors: 4, 8, 16, 30, then
 60 seconds (capped). Re-enumeration and system resume cannot erase an existing
 retry deadline. Only 60 seconds of uninterrupted child runtime resets the
@@ -33,7 +33,7 @@ record recovery attempts; this is not a temperature measurement or a fix for
 the initiating USB disconnect. The Python development supervisor exits on a
 fatal radio failure rather than entering this automatic restart loop.
 
-On experimental builds, an explicit `UsbImported=false` snapshot after the
+In the current native runtime, an explicit `UsbImported=false` snapshot after the
 two-second attach grace detaches only that slot's owned port and schedules a
 retry. Missing/unreadable snapshots do not detach devices. A failed audio TX or
 ACK timeout marks `RecoveryRequired=true`, increments the generation and makes

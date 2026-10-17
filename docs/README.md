@@ -41,3 +41,4 @@ state handling; they are not instructions for the latest checkout.
 - [alpha.5.1](releases/RELEASE-alpha.5.1.md)
 - [alpha.5.2](releases/RELEASE-alpha.5.2.md)
 - [alpha.5.4 test candidate](releases/RELEASE-alpha.5.4.md)
+- [alpha.6 candidate](releases/RELEASE-alpha.6.md)

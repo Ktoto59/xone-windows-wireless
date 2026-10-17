@@ -1,7 +1,7 @@
 # Architecture
 
-These diagrams describe the native C++ path in the current `experimental`
-checkout. Older releases can differ, particularly in file-based status handling.
+These diagrams describe the native C++ path in the alpha.6 source. Older releases
+can differ, particularly in file-based status handling.
 Python remains a separate development/reference implementation; it is not part of
 the installed audio path. Solid arrows show data exchange; dotted arrows show
 ownership, state notifications or lifecycle management.
