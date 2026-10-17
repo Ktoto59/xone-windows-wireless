@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Integrate independent sign-in startup and start-now choices into Setup, remember
+  them on upgrade and preserve opt-out during elevated adapter preparation. Add
+  Start menu start/stop shortcuts and visible maintenance stages; defer start-now
+  when Windows requests a reboot. Test registration without launch and installer
+  choice persistence without executing hardware hooks.
+
 - Add the Radio Wave project logo and multi-resolution Windows icon to native
   executables, Setup, Installed apps and the uninstall shortcut. Build all three
   installed EXEs together and include branding source assets in the source archive.

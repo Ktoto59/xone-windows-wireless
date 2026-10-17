@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 [CmdletBinding()]
-param([ValidateSet('Enable','Disable','Start','Stop','Status')][string]$Mode='Status')
+param([ValidateSet('Enable','Disable','Start','Stop','Status')][string]$Mode='Status',
+      [switch]$NoStart)
 $ErrorActionPreference='Stop'
+if($NoStart -and $Mode -ne 'Enable'){throw '-NoStart is only supported with -Mode Enable.'}
 $taskRoot=Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'Setup-Helpers.ps1')
 $taskSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -52,6 +54,7 @@ if($Mode -eq 'Enable' -or -not $taskExisting -or $taskExisting.Actions[0].Execut
     elseif($taskExisting -and $taskExisting.Triggers){$taskParameters.Trigger=@($taskExisting.Triggers)}
     Register-ScheduledTask @taskParameters -Force | Out-Null
 }
+if($NoStart){Write-Output 'Automatic startup registered. The bridge has not been started.';return}
 if(Test-Path -LiteralPath (Join-Path $taskRoot 'work/maintenance.stop')){Remove-Item -LiteralPath (Join-Path $taskRoot 'work/maintenance.stop')}
 Start-ScheduledTask -TaskName $taskName
 Write-Output 'Background bridge requested. No UAC or driver changes.'

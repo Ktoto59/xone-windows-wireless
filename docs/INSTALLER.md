@@ -19,10 +19,28 @@ Internet access and UAC approval are required for missing downloaded components.
 A Windows-requested reboot is reported by Setup; the registered host starts at
 sign-in after reboot, without requiring manual dependency commands.
 
-Setup runs adapter/dependency preparation with UAC, then registers a limited
-interactive-user sign-in task for the C++ host. Its radio child is owned through
-a Windows job. Runtime USBip ports and process identities belong to that host;
-removal does not kill arbitrary Python processes or detach unrelated USB devices.
+Setup runs adapter/dependency preparation with UAC, then applies two independent
+startup choices: **Start automatically when I sign in to Windows** and **Start
+xone Wireless after installation**. Both default to enabled on a fresh install;
+upgrades remember the previous selections. A requested Windows reboot skips
+start-now: after restart, the selected sign-in task can start the bridge, or the
+user can start it from the Start menu when autostart is off. Autostart is a limited
+interactive-user
+Task Scheduler entry targeting the C++ host, with no stored password. Registering
+that entry does not itself launch the bridge. Start-now without autostart creates
+an on-demand task without a sign-in trigger.
+
+The shipped setup scripts run automatically inside the installation workflow;
+users do not have to execute them separately. Progress text identifies saving
+preferences, preparing the adapter, applying startup settings and starting the
+bridge. The Start menu includes native-host start, stop and uninstall shortcuts.
+Only adapter/dependency preparation and owned stock-driver restoration need UAC.
+
+The radio child is owned through a Windows job. Runtime USBip ports and process
+identities belong to that host; removal does not kill arbitrary Python processes
+or detach unrelated USB devices. Installer choices use Inno Setup's
+[tasks](https://jrsoftware.org/ishelp/topic_taskssection.htm) and
+[remembered task settings](https://jrsoftware.org/ishelp/topic_setup_useprevioustasks.htm).
 
 ## Build
 

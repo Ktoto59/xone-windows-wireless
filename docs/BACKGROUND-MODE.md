@@ -1,9 +1,18 @@
 # Background operation
 
-Setup enables an invisible C++ host at the installing user's Windows sign-in.
+Setup offers independent sign-in startup and start-now options, both enabled by
+default on a fresh installation. Upgrades remember the selected options. Sign-in
+startup runs an invisible C++ host at the installing user's Windows sign-in.
 It runs with limited user privileges and no stored password. It is not a system
 service and is unavailable before sign-in. Setup/removal uses UAC when system
 driver work is required; ordinary startup and pairing do not.
+
+Start menu shortcuts can start or stop the installed bridge without opening a
+console or running scripts manually. If both startup options are disabled, no
+host is launched by Setup. A Windows-requested reboot skips start-now; after
+restart, use the Start shortcut if sign-in startup was not selected. Manual start
+does not add a sign-in
+trigger when autostart is off.
 
 The host waits for adapter, power, process and local state notifications. Its
 radio child is owned by a Windows job. USBip client commands run briefly to

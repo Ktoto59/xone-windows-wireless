@@ -31,16 +31,40 @@ if($taskProcess.ExitCode -ne 0){throw 'Smoke installation failed'}
 $taskRegistered=Get-ItemProperty -LiteralPath $taskKey
 if([IO.Path]::GetFullPath($taskRegistered.InstallLocation).TrimEnd('\') -ne [IO.Path]::GetFullPath($taskInstall).TrimEnd('\')){throw 'Unexpected smoke uninstall registration'}
 if(-not $taskRegistered.DisplayIcon -or [IO.Path]::GetFullPath($taskRegistered.DisplayIcon.Trim('"')) -ne [IO.Path]::GetFullPath((Join-Path $taskInstall 'outputs/xone-background.exe'))){throw 'Installed apps icon does not reference the branded host'}
+$taskStartMenu=Join-Path ([Environment]::GetFolderPath('Programs')) 'xone-windows-wireless-smoke'
+$taskStartShortcut=Join-Path $taskStartMenu 'Start xone Wireless.lnk'
+$taskStopShortcut=Join-Path $taskStartMenu 'Stop xone Wireless.lnk'
+if(-not (Test-Path -LiteralPath $taskStartShortcut) -or -not (Test-Path -LiteralPath $taskStopShortcut)){throw 'Start/stop shortcuts are missing'}
+$taskShell=New-Object -ComObject WScript.Shell
+try{
+    $taskLink=$taskShell.CreateShortcut($taskStartShortcut)
+    if([IO.Path]::GetFullPath($taskLink.TargetPath) -ne [IO.Path]::GetFullPath((Join-Path $taskInstall 'outputs/xone-background.exe'))){throw 'Start shortcut targets another installation'}
+    $taskLink=$taskShell.CreateShortcut($taskStopShortcut)
+    if(-not $taskLink.Arguments.Contains((Join-Path $taskInstall 'scripts\Setup-Action.ps1')) -or -not $taskLink.Arguments.Contains('-Action Stop') -or -not $taskLink.Arguments.Contains('-WindowStyle Hidden')){throw 'Stop shortcut does not invoke owned hidden maintenance'}
+}finally{[void][Runtime.InteropServices.Marshal]::ReleaseComObject($taskLink);[void][Runtime.InteropServices.Marshal]::ReleaseComObject($taskShell)}
 foreach($taskFile in $taskManifest.Files){
     if((Get-FileHash -LiteralPath (Join-Path $taskInstall $taskFile.Path) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $taskFile.SHA256){throw ('Installed payload differs: '+$taskFile.Path)}
 }
 if(Test-Path -LiteralPath (Join-Path $taskInstall 'work')){throw 'Smoke test executed runtime/driver hooks'}
+if($taskRegistered.SmokeStartup -ne 'on' -or $taskRegistered.SmokeStartRequested -ne 1){throw 'Default startup/start-now selections were not applied'}
+$taskCases=@(@{Options='/TASKS="startnow"';Startup='off';StartNow=1},
+    @{Options='/TASKS="autostart"';Startup='on';StartNow=0},
+    @{Options='/TASKS=""';Startup='off';StartNow=0},
+    @{Options='';Startup='off';StartNow=0})
+foreach($taskCase in $taskCases){
+    $taskProcess=Start-Process -FilePath $taskInstaller -ArgumentList ('/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /DIR="'+$taskInstall+'" '+$taskCase.Options) -WindowStyle Hidden -PassThru -Wait
+    if($taskProcess.ExitCode -ne 0){throw 'Smoke upgrade failed'}
+    $taskRegistered=Get-ItemProperty -LiteralPath $taskKey
+    if($taskRegistered.SmokeStartup -ne $taskCase.Startup -or $taskRegistered.SmokeStartRequested -ne $taskCase.StartNow){throw 'Independent startup options were ignored or lost on upgrade'}
+    if(Test-Path -LiteralPath (Join-Path $taskInstall 'work')){throw 'Smoke upgrade executed runtime/driver hooks'}
+}
 $taskUninstaller=Join-Path $taskInstall 'unins000.exe'
 $taskProcess=Start-Process -FilePath $taskUninstaller -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -WindowStyle Hidden -PassThru -Wait
 if($taskProcess.ExitCode -ne 0){throw 'Smoke uninstallation failed'}
 $taskDeadline=[datetime]::UtcNow.AddSeconds(10)
 while((Test-Path -LiteralPath (Join-Path $taskInstall 'outputs/xone-background.exe')) -and [datetime]::UtcNow -lt $taskDeadline){Start-Sleep -Milliseconds 100}
 if((Test-Path $taskKey) -or (Test-Path -LiteralPath (Join-Path $taskInstall 'outputs/xone-background.exe'))){throw 'Smoke registration or payload survived removal'}
+if((Test-Path -LiteralPath $taskStartShortcut) -or (Test-Path -LiteralPath $taskStopShortcut)){throw 'Smoke start/stop shortcuts survived removal'}
 $taskResult=@{Passed=$true;HardwareHooksExecuted=$false;Version=$taskManifest.Version;PayloadHashesChecked=$taskManifest.Files.Count;InstallPath=$taskInstall;CheckedUtc=[datetime]::UtcNow.ToString('o')}
 $taskResult | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $taskOutput 'result.json')
-Write-Output 'PASS payload hashes/privacy, Windows Installed apps registration and removal; hardware hooks intentionally not executed'
+Write-Output 'PASS payload hashes/privacy, Installed apps icon, startup/start-now opt-out and remembered upgrade choices, removal; hardware hooks intentionally not executed'

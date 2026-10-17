@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 [CmdletBinding()]
-param([Parameter(Mandatory=$true)][ValidateSet('Prepare','Bind','Restore','Remove','Upgrade','Start','Stop','Discover','AutomaticEnable','AutomaticDisable','AutomaticSetup','UseCpp','UsePython','Configure','Enroll','InitializePreferences')][string]$Action,
+param([Parameter(Mandatory=$true)][ValidateSet('Prepare','Bind','Restore','Remove','Upgrade','Start','Stop','Discover','AutomaticEnable','AutomaticDisable','AutomaticSetup','UseCpp','UsePython','Configure','Enroll','InitializePreferences','ConfigureStartup')][string]$Action,
       [string]$InstanceId='',[string]$ResultPath='',[string]$DiscoveryPath='',[string]$Profile='',
       [ValidateSet('on','off')][string]$Startup='on')
 if([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess){
@@ -47,7 +47,14 @@ try{
             $config | Add-Member -NotePropertyName AutoDetect -NotePropertyValue $true -Force
             $config | Add-Member -NotePropertyName BridgeBackend -NotePropertyValue cpp -Force
             Write-XoneJson $path $config
-            $preferences=Read-XoneJson (Join-Path $taskRoot 'config/app.local.json');if(-not $preferences){$preferences=[pscustomobject]@{Version=1;AutoStart=$true;OwnerSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value}};$preferences.AutoStart=$true;Write-XoneJson (Join-Path $taskRoot 'config/app.local.json') $preferences
+            $preferences=Read-XoneJson (Join-Path $taskRoot 'config/app.local.json');if(-not $preferences){$preferences=[pscustomobject]@{Version=1;AutoStart=$true;OwnerSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value}};Write-XoneJson (Join-Path $taskRoot 'config/app.local.json') $preferences
+        }
+        ConfigureStartup {
+            $script:XoneSetupStage='StartupRegistration'
+            $preferences=Read-XoneJson (Join-Path $taskRoot 'config/app.local.json')
+            if(-not $preferences -or $preferences.AutoStart -isnot [bool]){throw 'Installation startup preferences are missing or invalid.'}
+            if($preferences.AutoStart){& (Join-Path $PSScriptRoot 'Set-AutomaticBridge.ps1') -Mode Enable -NoStart}
+            else{& (Join-Path $PSScriptRoot 'Set-AutomaticBridge.ps1') -Mode Disable}
         }
         Enroll {Add-XoneApplicationDevice $taskRoot $InstanceId $Profile}
         Bind {

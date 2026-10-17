@@ -27,6 +27,10 @@ directly. None of these tools belongs in the per-packet audio path.
 
 See [installer build](../docs/INSTALLER.md), [installation](../docs/INSTALL.md)
 and [background operation](../docs/BACKGROUND-MODE.md).
+Setup invokes these scripts itself. `Setup-Action.ps1 -Action ConfigureStartup`
+applies the saved checkbox choice; `Set-AutomaticBridge.ps1 -Mode Enable -NoStart`
+registers sign-in startup without launching the host. The independent start-now
+step uses `-Mode Start` after successful preparation and when no reboot is pending.
 
 ## Development and checks
 

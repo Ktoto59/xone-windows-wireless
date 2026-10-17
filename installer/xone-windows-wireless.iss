@@ -1,6 +1,6 @@
 ; SPDX-License-Identifier: GPL-2.0-or-later
 #ifndef AppVersion
-  #define AppVersion "0.1.0-alpha.5.6"
+  #define AppVersion "0.1.0-alpha.5.7"
 #endif
 #ifndef StageDir
   #error StageDir must point to a verified public release stage
@@ -14,13 +14,13 @@ DefaultGroupName=xone-windows-wireless-smoke
 OutputBaseFilename=xone-installer-smoke
 #else
 AppId={{40E8C37A-1A80-41D6-A4BB-0578AD2B7A18}
-AppName=xone-windows-wireless
+AppName=xone Wireless
 DefaultDirName={localappdata}\Programs\xone-windows-wireless
 DefaultGroupName=xone-windows-wireless
 OutputBaseFilename=xone-windows-wireless-{#AppVersion}-Setup-x64
 #endif
 AppVersion={#AppVersion}
-AppVerName=xone-windows-wireless {#AppVersion}
+AppVerName=xone Wireless {#AppVersion}
 AppPublisher=Ktoto59
 AppPublisherURL=https://github.com/Ktoto59/xone-windows-wireless
 AppSupportURL=https://github.com/Ktoto59/xone-windows-wireless/issues
@@ -42,11 +42,18 @@ UninstallDisplayIcon={app}\outputs\xone-background.exe
 CloseApplications=no
 RestartApplications=no
 SetupLogging=no
+UsePreviousTasks=yes
+
+[Tasks]
+Name: "autostart"; Description: "Start automatically when I sign in to Windows"; GroupDescription: "Startup:"
+Name: "startnow"; Description: "Start xone Wireless after installation"; GroupDescription: "Startup:"
 
 [Files]
 Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
+Name: "{group}\Start xone Wireless"; Filename: "{app}\outputs\xone-background.exe"; WorkingDir: "{app}"
+Name: "{group}\Stop xone Wireless"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File ""{app}\scripts\Setup-Action.ps1"" -Action Stop"; WorkingDir: "{app}"; IconFilename: "{app}\outputs\xone-background.exe"
 Name: "{group}\Uninstall xone-windows-wireless"; Filename: "{uninstallexe}"; IconFilename: "{app}\outputs\xone-background.exe"; IconIndex: 0
 
 [Code]
@@ -58,10 +65,15 @@ function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo,
   MemoTypeInfo, MemoComponentsInfo, MemoGroupInfo, MemoTasksInfo: String): String;
 begin
   Result := 'Keep the Xbox Wireless Adapter connected.' + NewLine + NewLine +
-    'Setup prepares WinUSB, verified firmware and the signed USBip dependency, then enables an invisible C++ host at sign-in.' + NewLine +
-    'Windows asks for administrator approval. USB hubs may briefly restart during the first USBip installation.' + NewLine + NewLine +
+    'Setup prepares the adapter and required Windows components, then applies the startup options below.' + NewLine +
+    'Windows asks for administrator approval for adapter setup. The first USBip installation can briefly restart USB hubs.' + NewLine + NewLine +
+    MemoTasksInfo + NewLine + NewLine +
     'Do not update headset/controller firmware through this bridge. Stop it and use a physical USB data cable.' + NewLine + NewLine +
-    'No control window, device-selection dialog, overlay or Python runtime is installed.';
+    'Use the Start menu shortcuts to start or stop the bridge later. No control window or tray icon is required.';
+end;
+function StartupChoice: String;
+begin
+  if WizardIsTaskSelected('autostart') then Result := 'on' else Result := 'off';
 end;
 function MaintenanceResultPath(Action: String): String;
 begin
@@ -89,6 +101,12 @@ var
 begin
 #ifdef InstallerSmokeTest
   { Separate compiled test product: never executes setup/driver/startup hooks. }
+  if Action = 'InitializePreferences' then begin
+    RegWriteStringValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{40E8C37A-1A80-41D6-A4BB-0578AD2B7A19}_is1', 'SmokeStartup', StartupChoice);
+    RegWriteDWordValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{40E8C37A-1A80-41D6-A4BB-0578AD2B7A19}_is1', 'SmokeStartRequested', 0);
+  end;
+  if Action = 'Start' then
+    RegWriteDWordValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{40E8C37A-1A80-41D6-A4BB-0578AD2B7A19}_is1', 'SmokeStartRequested', 1);
   ResultCode := 0;
   Result := True;
   Exit;
@@ -96,30 +114,45 @@ begin
   ResultCode := 0;
   ProgramPath := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
   DeleteFile(MaintenanceResultPath(Action) + '.error.txt');
-  Parameters := '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\scripts\Setup-Action.ps1') + '" -Action ' + Action + ' -ResultPath "' + MaintenanceResultPath(Action) + '"';
+  Parameters := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\scripts\Setup-Action.ps1') + '" -Action ' + Action + ' -ResultPath "' + MaintenanceResultPath(Action) + '"';
+  if Action = 'InitializePreferences' then Parameters := Parameters + ' -Startup ' + StartupChoice;
   if Elevated then
     Result := ShellExec('runas', ProgramPath, Parameters, ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode)
   else
     Result := Exec(ProgramPath, Parameters, ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
-
-procedure CurStepChanged(CurStep: TSetupStep);
+procedure ApplyMaintenance(Action, Status, Failure: String; Elevated: Boolean);
 var
   ResultCode: Integer;
 begin
+  WizardForm.StatusLabel.Caption := Status;
+  WizardForm.FilenameLabel.Caption := '';
+  if not RunMaintenance(Action, Elevated, ResultCode) then begin
+    if Elevated then
+      RaiseException(Failure + #13#10 + 'Windows approval may have been cancelled. Run Setup again to retry.')
+    else RaiseException(MaintenanceFailure(Action, Failure, ResultCode));
+  end;
+  if ResultCode <> 0 then RaiseException(MaintenanceFailure(Action, Failure, ResultCode));
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
   if CurStep = ssPostInstall then begin
-    if not RunMaintenance('InitializePreferences', False, ResultCode) then
-      RaiseException(MaintenanceFailure('InitializePreferences', 'Could not save installation preferences.', ResultCode));
-    if ResultCode <> 0 then
-      RaiseException(MaintenanceFailure('InitializePreferences', 'Could not save installation preferences.', ResultCode));
-    if not RunMaintenance('AutomaticSetup', True, ResultCode) then
-      RaiseException('Windows did not approve adapter setup. Run Setup again with the adapter connected.');
-    if ResultCode <> 0 then
-      RaiseException(MaintenanceFailure('AutomaticSetup', 'Adapter setup did not complete.', ResultCode));
-    if not RunMaintenance('AutomaticEnable', False, ResultCode) then
-      RaiseException('Could not enable the background host. Run Setup again.');
-    if ResultCode <> 0 then
-      RaiseException(MaintenanceFailure('AutomaticEnable', 'Background startup did not complete.', ResultCode));
+    ApplyMaintenance('InitializePreferences', 'Saving installation preferences...', 'Could not save installation preferences.', False);
+    ApplyMaintenance('AutomaticSetup', 'Preparing adapter and Windows components...', 'Adapter setup did not complete.', True);
+    ApplyMaintenance('ConfigureStartup', 'Applying Windows sign-in settings...', 'Could not apply startup settings.', False);
+    if WizardIsTaskSelected('startnow') and not NeedRestart then
+      ApplyMaintenance('Start', 'Starting xone Wireless...', 'Could not start the bridge.', False);
+  end;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if CurPageID = wpFinished then begin
+    if NeedRestart and not WizardIsTaskSelected('autostart') then
+      WizardForm.FinishedLabel.Caption := 'Restart Windows to complete adapter setup. Then use Start xone Wireless from the Start menu. Automatic startup is off.'
+    else if not NeedRestart and not WizardIsTaskSelected('startnow') then
+      WizardForm.FinishedLabel.Caption := 'Setup is complete. Use Start xone Wireless from the Start menu when you are ready to connect your devices.';
   end;
 end;
 
