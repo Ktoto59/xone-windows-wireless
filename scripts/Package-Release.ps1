@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 [CmdletBinding()]
-param([ValidatePattern('^\d+\.\d+\.\d+(?:-[a-z0-9.]+)?$')][string]$Version='0.1.0-alpha.5.4',
+param([ValidatePattern('^\d+\.\d+\.\d+(?:-[a-z0-9.]+)?$')][string]$Version='0.1.0-alpha.5.6',
       [string]$LauncherDir='')
 $ErrorActionPreference='Stop'
 $taskRoot=Split-Path -Parent $PSScriptRoot
@@ -44,7 +44,7 @@ try{
     if($LASTEXITCODE -ne 0 -or -not $taskFiles.Count){throw 'Package from a Git source checkout.'}
     foreach($taskFile in $taskFiles){
         if($taskFile -match '^(work|outputs|build|dist|runtime|\.git|\.agents|\.codex)/' -or $taskFile -match '\.local\.' -or $taskFile -match '(^|/)(__pycache__|\.pytest_cache)/' -or $taskFile -match '\.(pyc|log|bin|pdb)$'){continue}
-        if($taskFile -match '^(src|tests|driver|third_party|installer|config|scripts|docs)/' -or $taskFile -in $taskRuntimeFiles -or $taskFile -in $taskSourceExtra){
+        if($taskFile -match '^(src|tests|driver|third_party|installer|config|scripts|docs|assets)/' -or $taskFile -in $taskRuntimeFiles -or $taskFile -in $taskSourceExtra){
             Copy-PackageFile $taskFile $taskSourceStage
         }
     }
@@ -53,7 +53,7 @@ try{
     [void][IO.Directory]::CreateDirectory($taskOutput)
     foreach($taskBinary in @('xone-probe-cpp.exe','xone-background.exe','xone-bind.exe')){
         $taskSource=Join-Path $taskRoot ('outputs/'+$taskBinary)
-        if($LauncherDir -and $taskBinary -in @('xone-probe-cpp.exe','xone-background.exe')){$taskSource=Join-Path $LauncherDir $taskBinary}
+        if($LauncherDir){$taskSource=Join-Path $LauncherDir $taskBinary}
         if(-not (Test-Path -LiteralPath $taskSource)){throw ('Missing release binary: '+$taskBinary)}
         Assert-PublicReleaseBinary $taskSource
         Copy-Item -LiteralPath $taskSource -Destination $taskOutput

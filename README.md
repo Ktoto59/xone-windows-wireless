@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/branding/logo.png" width="160" alt="xone Wireless logo">
+</p>
+
 # xone Windows Wireless
 
 An experimental C++ bridge for the Xbox Wireless Adapter on Windows 11.

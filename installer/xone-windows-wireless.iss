@@ -1,6 +1,6 @@
 ; SPDX-License-Identifier: GPL-2.0-or-later
 #ifndef AppVersion
-  #define AppVersion "0.1.0-alpha.5.4"
+  #define AppVersion "0.1.0-alpha.5.6"
 #endif
 #ifndef StageDir
   #error StageDir must point to a verified public release stage
@@ -37,6 +37,7 @@ OutputDir=..\dist
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=..\assets\branding\app.ico
 UninstallDisplayIcon={app}\outputs\xone-background.exe
 CloseApplications=no
 RestartApplications=no
@@ -46,7 +47,7 @@ SetupLogging=no
 Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\Uninstall xone-windows-wireless"; Filename: "{uninstallexe}"
+Name: "{group}\Uninstall xone-windows-wireless"; Filename: "{uninstallexe}"; IconFilename: "{app}\outputs\xone-background.exe"; IconIndex: 0
 
 [Code]
 function NeedRestart(): Boolean;

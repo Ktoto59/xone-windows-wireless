@@ -29,8 +29,6 @@ removal does not kill arbitrary Python processes or detach unrelated USB devices
 Use Windows x64, Visual Studio C++ Build Tools, a Windows SDK and Inno Setup:
 
 ```powershell
-# Build the installation/removal helper if outputs/xone-bind.exe is absent.
-.\scripts\build.cmd
 .\scripts\Build-Installer.ps1 -IsccPath 'C:\path\to\ISCC.exe'
 ```
 
@@ -44,6 +42,8 @@ Use `-EnableDiagnostics` to build a diagnostic installer into
 `outputs/appliance-candidate`; ordinary `Build-Appliance.cmd` development builds
 retain diagnostics. `Build-Appliance.cmd --no-diagnostics <output-directory>`
 can also build a separate release candidate without replacing a running copy.
+The appliance builder also builds the binding helper into that same directory.
+All three runtime EXEs and Setup embed the shared [application icon](../assets/branding/README.md).
 `-SkipBuild -LauncherDir <directory>` packages
 explicit, already tested binaries. Use a fresh version/staging directory; the
 builder refuses to overwrite an existing package stage.

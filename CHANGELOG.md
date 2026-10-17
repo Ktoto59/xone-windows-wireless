@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add the Radio Wave project logo and multi-resolution Windows icon to native
+  executables, Setup, Installed apps and the uninstall shortcut. Build all three
+  installed EXEs together and include branding source assets in the source archive.
+
 - Remove obsolete PowerShell control panels and C# launchers; keep Python and
   hardware research entry points. Add documentation/script indexes and group
   historical release notes under `docs/releases/`. Include all public developer

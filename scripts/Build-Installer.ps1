@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 [CmdletBinding()]
 param([Parameter(Mandatory=$true)][string]$IsccPath,
-      [ValidatePattern('^\d+\.\d+\.\d+(?:-[a-z0-9.]+)?$')][string]$Version='0.1.0-alpha.5.4',[switch]$SkipBuild,[string]$LauncherDir='',
+      [ValidatePattern('^\d+\.\d+\.\d+(?:-[a-z0-9.]+)?$')][string]$Version='0.1.0-alpha.5.6',[switch]$SkipBuild,[string]$LauncherDir='',
       [switch]$EnableDiagnostics)
 $ErrorActionPreference='Stop'
 $taskRoot=Split-Path -Parent $PSScriptRoot

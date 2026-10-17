@@ -30,6 +30,7 @@ $taskProcess=Start-Process -FilePath $taskInstaller -ArgumentList ('/VERYSILENT 
 if($taskProcess.ExitCode -ne 0){throw 'Smoke installation failed'}
 $taskRegistered=Get-ItemProperty -LiteralPath $taskKey
 if([IO.Path]::GetFullPath($taskRegistered.InstallLocation).TrimEnd('\') -ne [IO.Path]::GetFullPath($taskInstall).TrimEnd('\')){throw 'Unexpected smoke uninstall registration'}
+if(-not $taskRegistered.DisplayIcon -or [IO.Path]::GetFullPath($taskRegistered.DisplayIcon.Trim('"')) -ne [IO.Path]::GetFullPath((Join-Path $taskInstall 'outputs/xone-background.exe'))){throw 'Installed apps icon does not reference the branded host'}
 foreach($taskFile in $taskManifest.Files){
     if((Get-FileHash -LiteralPath (Join-Path $taskInstall $taskFile.Path) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $taskFile.SHA256){throw ('Installed payload differs: '+$taskFile.Path)}
 }
