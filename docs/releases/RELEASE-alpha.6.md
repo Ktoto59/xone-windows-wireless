@@ -1,9 +1,10 @@
-# 0.1.0-alpha.6 candidate
+# 0.1.0-alpha.6
 
-This candidate brings the experimental runtime, recovery, diagnostics and Setup
+This alpha brings the experimental runtime, recovery, diagnostics and Setup
 work into the main release channel. Alpha.5.3-alpha.5.7 were local test candidates.
-Merging the source does not publish release assets; alpha.5.2 remains the latest
-published installer until a separate alpha.6 release is created.
+The [published pre-release](https://github.com/Ktoto59/xone-windows-wireless/releases/tag/v0.1.0-alpha.6)
+includes Setup, runtime/source archives and SHA256 checksums. Use Setup-x64.exe
+for installation or upgrade; the runtime ZIP is intended for manual use.
 
 ## Changes since alpha.5.2
 

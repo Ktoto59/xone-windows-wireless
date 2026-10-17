@@ -1,9 +1,9 @@
 # Install, upgrade and remove
 
-This guide describes the alpha.6 source and installer candidate.
-Download installers from [published releases](https://github.com/Ktoto59/xone-windows-wireless/releases)
-or build the [current candidate](INSTALLER.md). Alpha.5.2 is the latest published
-installer until alpha.6 is published; its startup behavior differs as noted below.
+This guide describes the alpha.6 installer.
+Download Setup from the [alpha.6 release](https://github.com/Ktoto59/xone-windows-wireless/releases/tag/v0.1.0-alpha.6)
+or [build an installer](INSTALLER.md) from source. Older alpha.5.2 startup
+behavior differs as noted below.
 Use the Setup-x64.exe; extracting the
 runtime ZIP does not register the application or prepare the adapter.
 
@@ -85,7 +85,7 @@ releases retain file-based snapshots. Do not publish complete `work/` or `config
 directories: they can contain addresses, instance IDs and local paths. Normal
 operation records no audio.
 
-This candidate is tested on one development PC. Compilation and runtime tests do
+Hardware validation is limited to one development PC. Compilation and runtime tests do
 not establish fresh-PC installation, hardware restoration on every PC, long-term
 reliability or broad sleep/resume support. See [cpp-bridge.md](cpp-bridge.md) and
 [TROUBLESHOOTING.md](TROUBLESHOOTING.md).

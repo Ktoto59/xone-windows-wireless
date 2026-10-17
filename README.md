@@ -8,16 +8,16 @@ An experimental C++ bridge for the Xbox Wireless Adapter on Windows 11.
 Connect supported Xbox Wireless Headsets and Series controllers through the
 adapter while Windows uses its existing Xbox GIP and audio drivers.
 
-**Current source: `0.1.0-alpha.6`** — see the [candidate notes](docs/releases/RELEASE-alpha.6.md).
-**[Download published installers](https://github.com/Ktoto59/xone-windows-wireless/releases)**
+**Current release: `0.1.0-alpha.6` (pre-release)** — see the [release notes](docs/releases/RELEASE-alpha.6.md).
+**[Download alpha.6 installer for Windows x64](https://github.com/Ktoto59/xone-windows-wireless/releases/download/v0.1.0-alpha.6/xone-windows-wireless-0.1.0-alpha.6-Setup-x64.exe)**
 | [Installation and removal](docs/INSTALL.md)
 | [Known limitations](docs/LIMITATIONS.md)
 | [Troubleshooting](docs/TROUBLESHOOTING.md)
 | [Architecture diagrams](docs/ARCHITECTURE.md)
 | [Documentation index](docs/README.md)
 
-The latest published installer is alpha.5.2; alpha.6 source and local candidates
-include the changes below. Updating `main` does not publish a new installer.
+The [alpha.6 release](https://github.com/Ktoto59/xone-windows-wireless/releases/tag/v0.1.0-alpha.6)
+includes Setup, runtime/source archives and SHA256 checksums.
 
 ## How it works
 
@@ -46,7 +46,7 @@ expired audio can be discarded without treating it as a lost radio connection.
 The host manages device lifecycle through shared memory and Windows events.
 See [component, thread and connection diagrams](docs/ARCHITECTURE.md) for details.
 
-## Changes in alpha.6 source
+## Changes in alpha.6
 
 - Asynchronous physical USB transmission, bounded control/media queues and USB
   session recovery; wake-capable adapter idle policy with reconnect fallback.
@@ -89,7 +89,7 @@ simultaneous audio streams.
    A newly connected headset does not change your default audio selection.
 
 Alpha.6 installers offer separate options to start now and at Windows sign-in;
-the published alpha.5.2 installer enables both automatically. Newer Setup can
+the older alpha.5.2 installer enables both automatically. Newer Setup can
 replace an older version as the same Windows user, retaining private configuration
 and recovery data. No prior uninstall is required.
 
