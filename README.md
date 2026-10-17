@@ -8,6 +8,7 @@ adapter while Windows uses its existing Xbox GIP and audio drivers.
 | [Installation and removal](docs/INSTALL.md)
 | [Known limitations](docs/LIMITATIONS.md)
 | [Troubleshooting](docs/TROUBLESHOOTING.md)
+| [Architecture diagrams](docs/ARCHITECTURE.md)
 | [Documentation index](docs/README.md)
 
 ## Supported hardware

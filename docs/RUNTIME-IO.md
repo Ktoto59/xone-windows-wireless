@@ -1,5 +1,8 @@
 # Runtime IO isolation
 
+See the [architecture diagrams](ARCHITECTURE.md#threads-and-traffic) for the
+component map, thread/queue flow and connection sequence.
+
 The experimental C++ host keeps runtime state in session-local, pagefile-backed
 Windows shared memory. No application state file is created for this mapping.
 Windows may page memory according to its own policy; this is not a promise that

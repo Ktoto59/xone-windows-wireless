@@ -24,7 +24,7 @@ that its installer has been published.
 | [Development](DEVELOPMENT.md) | Branches, sessions, checks and repository map |
 | [Scripts](../scripts/README.md) | Production entry points and research tools |
 | [Installer build](INSTALLER.md) | Runtime/source packaging and isolated smoke test |
-| [Architecture](ARCHITECTURE.md) | Physical radio, USB/IP and Windows driver layers |
+| [Architecture diagrams](ARCHITECTURE.md) | Component map, traffic/threads and connection sequence |
 | [Runtime IO](RUNTIME-IO.md) | Threads, memory IPC, USB completion and cancellation |
 | [C++ bridge](cpp-bridge.md) | Implementation details and validation boundaries |
 | [USB/IP latency](USBIP-LATENCY.md) | Scheduling, buffering and expiry |
