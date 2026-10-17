@@ -99,8 +99,11 @@ class ReferenceServer:
             elif operation == 0x8003:
                 busid = await asyncio.wait_for(reader.readexactly(32), self.timeout)
                 # Import only with an explicit diagnostic mode or a live RF peer.
-                available = self.profile is not None and (self.enumeration_probe or (self.backend is not None and self.backend.ready))
+                available = self.profile is not None and (self.enumeration_probe or (self.backend is not None and getattr(self.backend,'importable',self.backend.ready)))
                 if available and not self.imported and busid == b'1-1'.ljust(32, b'\0'):
+                    imported_hook = getattr(self.backend, 'imported', None)
+                    if imported_hook is not None:
+                        imported_hook()
                     self.imported = owns_import = True
                     writer.write(struct.pack('!HHI', 0x0111, 3, 0) + self.profile.usbip_device())
                     await asyncio.wait_for(writer.drain(), self.timeout)

@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #pragma once
 #include "raw_gip.hpp"
+#include <functional>
 namespace xone {
 // Direct in-process RF <-> USB/IP route, one USB/audio thread per device.
 class NativeUsbOutput final:public RawGipOutput {
     struct Impl;std::unique_ptr<Impl> impl_;
 public:
-    NativeUsbOutput(uint16_t port,Bytes mac,uint16_t pid,bool audio,std::wstring status,bool automatic=false,bool diagnostics=false);
+    using StateSink=std::function<bool(const std::string &,bool)>;
+    NativeUsbOutput(uint16_t port,Bytes mac,uint16_t pid,bool audio,std::wstring status,bool automatic=false,bool diagnostics=false,StateSink sink={});
     ~NativeUsbOutput()override;
     bool target(std::span<const uint8_t> mac)const override;
     bool automatic()const;

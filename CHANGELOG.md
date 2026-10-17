@@ -1,7 +1,94 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-alpha.6 candidate - 2026-10-17
 
+Promote the tested experimental changes below to the main release channel.
+Alpha.5.3-alpha.5.7 were local test candidates; the latest published release remains
+alpha.5.2 until a separate alpha.6 release is published. Software validation does
+not establish that the remaining audio/reconnect issues are resolved.
+
+- Integrate independent sign-in startup and start-now choices into Setup, remember
+  them on upgrade and preserve opt-out during elevated adapter preparation. Add
+  Start menu start/stop shortcuts and visible maintenance stages; defer start-now
+  when Windows requests a reboot. Test registration without launch and installer
+  choice persistence without executing hardware hooks.
+
+- Add the Radio Wave project logo and multi-resolution Windows icon to native
+  executables, Setup, Installed apps and the uninstall shortcut. Build all three
+  installed EXEs together and include branding source assets in the source archive.
+
+- Remove obsolete PowerShell control panels and C# launchers; keep Python and
+  hardware research entry points. Add documentation/script indexes and group
+  historical release notes under `docs/releases/`. Include all public developer
+  scripts and documentation in the source archive, retaining the separate
+  installed-runtime allowlist.
+
+- Move installed native runtime state and stop commands to bounded shared memory
+  and Windows events; remove periodic state-file IO and file polling. Keep counters
+  in RAM and defer newly learned pairing metadata until radio shutdown.
+- Isolate native GIP transmission in a bounded executor using overlapped WinUSB
+  OUT, preserving real completion, control priority, media expiry and cancellation
+  across URB/USB/RF lifetimes. Leave startup/teardown control operations synchronous.
+  These changes need hardware validation before claiming an audio improvement.
+
+- Prepare the alpha.5.4 installer candidate from `experimental`. Installer
+  builds disable C++ diagnostic journals and packet tracing at compile time;
+  development builds retain diagnostics. Keep release build outputs separate
+  from the running development candidate and test that environment overrides
+  cannot activate a release journal. Operational recovery/status files remain.
+
+- Add a process-local native USB/IP MMCSS override for controlled development
+  comparisons (`Run-Development.ps1 -NoUsbMmcss`). Expose sparse initialization
+  progress and aggregate worker scheduling counters without packet logging.
+  Default scheduling and protocol behavior remain unchanged.
+
+- Recover failed automatic USB routes through their owning RF session instead
+  of leaving an associated peer without a working Windows route. Expose failures
+  and per-device recovery state; retry with a 1-to-30-second backoff, preserving
+  other devices. Include native protocol-worker failures in the same recovery.
+- Seed repeated USB imports with a validated, bounded identity announcement;
+  discard stale service replies from the preceding USB consumer. Preserve the
+  identity across audio recovery, and clear it on a new radio association.
+  Apply the import lifecycle to both the C++ runtime and Python reference server.
+- Coalesce capture/render loss reports once per second. Count microphone frames
+  received without a USB consumer separately instead of flooding anomaly logs.
+  These lifecycle fixes do not establish that keyboard stalls or physical
+  adapter removal have been resolved; hardware checks remain necessary.
+- Isolate reliable radio/control traffic from microphone media in separate
+  bounded queues, prioritize controls before unsent audio, and retain lifecycle
+  and per-class ordering. Media pressure/age cannot consume control capacity.
+  Check render deadlines again before physical USB TX; deliberately expired PCM
+  completes with ISO expiry without resetting the USB/RF session in C++/Python.
+  Log control saturation explicitly and aggregate microphone queue-drop reports.
+
+- Add wake-capable idle power for the shared C++ radio runtime: arm firmware
+  wake-on-wireless after 30 seconds without clients/pairing, allow WinUSB selective
+  suspend, resume before dispatch, and provide a 30-second watchdog receive window.
+  Keep IN reads pending without periodic USB re-submission; cancel/drain them on
+  stop. Save/restore adapter-specific idle registry settings with driver binding.
+  WakeArmed is a requested policy, not proof of USB sleep or a temperature result.
+
+- Preserve radio retry backoff across USB disappearance/re-enumeration and
+  resume. Cap repeated startup retries at one per 60 seconds and reset only
+  after a continuous stable run; cover rapid USB return with regression tests.
+- Default development C++ diagnostics to errors/anomalies and sparse lifecycle
+  context; require `-CppPacketTrace` for per-transfer logs.
+
+- Restore a closed USBIP import per slot while retaining a live RF association.
+  Audio TX failures/ACK timeouts now invalidate the USB session explicitly and
+  allow re-import without a new RF announcement, in both Python and C++.
+- Align C++ render expiry with Python per-ISO errors and frame numbers. Preserve
+  the oldest accumulated PCM deadline and report staged media loss explicitly.
+- Add bounded asynchronous C++ lifecycle/anomaly journals, opt-in USB/URB timing
+  metadata and a C++ candidate mode in the development launcher. Cover recovery,
+  audio parity, actual loopback re-import and journal faults with regression tests.
+- Separate the stable `main` channel from `experimental` development. Add a
+  Python development launcher with source-wide call/exception tracing, optional
+  line tracing, process/task/URB correlation and independent rotating anomaly
+  journals. Record audio loss, queue pressure, scheduling lag, child exits and
+  trace losses; keep the installed/release runtime C++.
+- Include endpoint, requested byte count and UTC in fatal WinUSB transfer errors
+  so physical read failures can be distinguished from shutdown write failures.
 - Publish fallback GIP status immediately on state transitions rather than on
   every control packet; repeated battery/audio-control and ignored messages no
   longer bypass the normal status-write interval.

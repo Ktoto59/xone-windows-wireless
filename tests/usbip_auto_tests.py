@@ -12,6 +12,7 @@ import tempfile
 import time
 import unittest
 import uuid
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'src'))
@@ -136,6 +137,27 @@ class SpawnedWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(status['Pid'])
         self.assertIn('Unsupported radio model',status['RejectedReason'])
 
+    async def test_development_trace_survives_spawn_and_records_usb_and_rf_disconnect(self):
+        logs=self.work/'development'
+        with patch.dict(os.environ, {'XONE_DEVELOPMENT_LOG_DIR':str(logs), 'XONE_DEVELOPMENT_TRACE':'calls'}):
+            node=await self.start('020000000009',0x0b32)
+        await self.until_status(node,lambda s:s.get('Ready'))
+        await self.usb_serial(node)
+        node['writer'].close()
+        await node['writer'].wait_closed()
+        await asyncio.to_thread(node['process'].join,8)
+        self.assertFalse(node['process'].is_alive())
+        rows=[json.loads(line) for path in logs.glob('worker-*.jsonl')
+              for line in path.read_text(encoding='utf-8').splitlines()]
+        events=[r['fields']['event']['operation'] for r in rows if r['operation']=='bridge_event']
+        self.assertIn('submit',events)
+        self.assertIn('complete',events)
+        self.assertTrue(any(r['operation']=='python_exception' for r in rows))
+        anomalies=[json.loads(line) for path in logs.glob('anomalies-*.jsonl')
+                   for line in path.read_text(encoding='utf-8').splitlines()]
+        self.assertTrue(any(r['operation']=='bridge_event' and
+                            r['fields']['event']['operation']=='radio_closed' for r in anomalies))
+
     async def test_experimental_usb_mode_adaptation_is_scoped_to_old_headset(self):
         for n,pid in enumerate((0x0b17,0x0b32,0x0b12),1):
             node=await self.start(f'0200000000{n:02x}',pid,n,preserve=True)
@@ -148,6 +170,23 @@ class SpawnedWorkerTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SupervisorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_audio_recovery_generation_invalidates_old_import_immediately(self):
+        with tempfile.TemporaryDirectory() as directory:
+            supervisor=object.__new__(Supervisor)
+            slot=Slot(0,44000,Path(directory))
+            class Alive:
+                def is_alive(self):return True
+            slot.process=Alive();slot.run_id='synthetic-recovery';slot.remembered=True
+            slot.port=7;slot.imported_generation=1;slot.attached_at=time.monotonic();slot.retry_at=time.monotonic()+2
+            slot.status.write_text(json.dumps(dict(RunId=slot.run_id,Generation=2,Ready=False,
+                RecoveryRequired=True,RadioAssociated=True,UsbImported=True)),encoding='utf-8')
+            commands=[]
+            async def usbip(*arguments):commands.append(arguments);return ''
+            supervisor.usbip_command=usbip
+            await supervisor.maintain(slot)
+            self.assertEqual(commands,[('detach','-p','7')])
+            self.assertEqual(slot.port,0)
+
     async def test_next_association_replaces_stalled_worker_without_touching_sibling(self):
         with tempfile.TemporaryDirectory() as directory:
             supervisor=object.__new__(Supervisor)

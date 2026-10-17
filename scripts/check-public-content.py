@@ -10,6 +10,10 @@ ROOT = Path(__file__).resolve().parents[1]
 IGNORED = {'.git', 'work', 'outputs', 'build', 'dist', 'runtime', '__pycache__', '.venv'}
 FORBIDDEN_SUFFIXES = {'.pfx', '.p12', '.key', '.pem', '.bin', '.sys', '.exe', '.dll',
                       '.pdb', '.dmp', '.etl', '.evtx', '.pcap', '.pcapng', '.pyc', '.log'}
+# Only these reviewed branding files may be binary; arbitrary captures/images
+# elsewhere still fail the UTF-8 source check.
+PUBLIC_ARTWORK = {'assets/branding/logo.png': b'\x89PNG\r\n\x1a\n',
+                  'assets/branding/app.ico': b'\x00\x00\x01\x00'}
 
 
 def files():
@@ -54,6 +58,10 @@ def main():
         parts = set(Path(name).parts)
         if parts & IGNORED or '.local.' in path.name or path.suffix.lower() in FORBIDDEN_SUFFIXES:
             problems.append(f'{name}: private/generated/binary file in public source')
+            continue
+        if name in PUBLIC_ARTWORK:
+            if not path.read_bytes().startswith(PUBLIC_ARTWORK[name]):
+                problems.append(f'{name}: invalid public artwork signature')
             continue
         try:
             text = path.read_text(encoding='utf-8-sig')

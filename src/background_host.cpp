@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// Invisible, limited user-session host. No Python, PowerShell, UI, or log files.
+// Invisible user-session host with bounded asynchronous diagnostic journals.
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
@@ -15,6 +15,11 @@
 #include "appliance_audio.hpp"
 #include "winusb_transport.hpp"
 #include "adapter_catalog.hpp"
+#include "usb_import_recovery.hpp"
+#include "radio_restart_backoff.hpp"
+#include "diagnostic_log.hpp"
+#include "runtime_state.hpp"
+#include <iostream>
 namespace {
 using xone::Json;namespace fs=std::filesystem;using Clock=std::chrono::steady_clock;
 struct Handle {HANDLE value=nullptr;~Handle(){if(value && value!=INVALID_HANDLE_VALUE)CloseHandle(value);}Handle()=default;explicit Handle(HANDLE h):value(h){};Handle(const Handle &)=delete;Handle &operator=(const Handle &)=delete;};
@@ -75,18 +80,22 @@ struct Window {
     void pump(){MSG message{};while(PeekMessageW(&message,nullptr,0,0,PM_REMOVE)){TranslateMessage(&message);DispatchMessageW(&message);}}
 };
 bool healthy(const std::wstring &id){DEVINST node=0;ULONG status=0,problem=0;return CM_Locate_DevNodeW(&node,const_cast<PWSTR>(id.c_str()),CM_LOCATE_DEVNODE_NORMAL)==CR_SUCCESS && CM_Get_DevNode_Status(&status,&problem,node,0)==CR_SUCCESS && (status&DN_STARTED) && !(status&DN_HAS_PROBLEM);}
-struct Peer {xone::ApplianceDevice model;int port=0;uint64_t generation=0;bool ready=false;fs::file_time_type connected{};Clock::time_point retry_at{};};
+struct Peer {xone::ApplianceDevice model;int port=0;uint64_t generation=0;bool ready=false;Clock::time_point attached_at{},retry_at{};};
 class Host {
     std::array<Peer,8> peers_;Json config_,previous_state_;Child radio_;std::wstring adapter_;Window window_;
-    Clock::time_point retry_at_=Clock::now(),started_{},adapter_check_{};unsigned retries_=0;
+    xone::RuntimeState memory_{root,true};Json registry_;bool registry_dirty_=false;
+    Clock::time_point adapter_check_{};xone::RadioRestartBackoff radio_retry_;std::string retry_reason_;
     DWORD last_radio_exit_=0;
     fs::path work=root/L"work";Json me_=identity(GetCurrentProcess(),GetCurrentProcessId());
     fs::path peer_status(const Peer &peer)const{return work/xone::wide("native-"+peer.model.name+".json");}
     void state(std::string phase,std::string error={}){
         Json ready=Json::array(),devices=Json::array();for(const auto &p:peers_){if(p.ready && p.port)ready.push_back(p.model.name);devices.push_back({{"Name",p.model.name},{"Mac",p.model.mac},{"Audio",p.model.audio},{"Port",p.port},{"Generation",p.generation},{"Status",xone::narrow(peer_status(p).wstring())},{"UsbPort",p.model.port}});}
-        Json status={{"Phase",phase},{"Error",error.empty()?Json(nullptr):Json(error)},{"Process",me_},{"WorkerActive",radio_.alive()},{"RadioActive",radio_.alive()},{"DevicesReady",ready},{"Devices",devices},{"AudioSelected",false},{"RetryCount",retries_},{"LastRadioExit",last_radio_exit_},{"Backend","cpp-headless"}};
-        if(status==previous_state_)return;write(work/L"maintenance-status.json",status);
-        write(work/L"usb-gip-running.json",{{"Running",radio_.alive()},{"FallbackOutput","none"},{"NativeController",true},{"NewHeadsetOnly",false},{"BridgeBackend","cpp"},{"Worker",me_},{"Radio",radio_.process.value?identity(radio_.process.value,radio_.pid):Json(nullptr)},{"Devices",devices},{"Error",status["Error"]}});
+        Json status={{"Phase",phase},{"Error",error.empty()?Json(nullptr):Json(error)},{"Process",me_},{"WorkerActive",radio_.alive()},{"RadioActive",radio_.alive()},{"DevicesReady",ready},{"Devices",devices},{"AudioSelected",false},{"RetryCount",radio_retry_.failures()},{"RetryDelaySeconds",radio_retry_.delay().count()},{"LastRadioExit",last_radio_exit_},{"Backend","cpp-headless"}};
+        if(status==previous_state_)return;
+        xone::diagnostic("host_state",{{"phase",phase},{"error",error},{"ready",ready},{"last_radio_exit",last_radio_exit_}},!error.empty());
+        if(!memory_.publish(xone::RuntimeState::host,status.dump()))return;
+        const Json running={{"Running",radio_.alive()},{"FallbackOutput","none"},{"NativeController",true},{"NewHeadsetOnly",false},{"BridgeBackend","cpp"},{"Worker",me_},{"Radio",radio_.process.value?identity(radio_.process.value,radio_.pid):Json(nullptr)},{"Devices",devices},{"Error",status["Error"]}};
+        if(!memory_.publish(xone::RuntimeState::running,running.dump()))return;
         previous_state_=status;
     }
     void detach(Peer &peer){
@@ -96,33 +105,39 @@ class Host {
         }peer.port=0;}peer.ready=false;
     }
     void stop_radio(){
+        radio_retry_.stopped();
+        xone::diagnostic("radio_stop_requested");
         for(auto &p:peers_)detach(p);
-        if(radio_.alive()){std::ofstream stop(work/L"usb-gip.stop");stop<<"stop";stop.close();WaitForSingleObject(radio_.process.value,8000);}radio_.close();
-        std::error_code ignored;fs::remove(work/L"usb-gip.stop",ignored);
+        if(radio_.alive()){memory_.request_radio_stop();WaitForSingleObject(radio_.process.value,8000);}radio_.close();
     }
     void save_devices(){
-        auto registry=read(root/L"config/paired-devices.local.json");if(!registry.contains("Devices"))registry={{"Version",1},{"Devices",Json::array()}};
+        auto &registry=registry_;
         bool changed=false;
         for(const auto &p:peers_)if(p.ready && p.model.pid && p.model.mac!="000000000000"){
             const auto existing=std::find_if(registry["Devices"].begin(),registry["Devices"].end(),[&](const auto &d){return d.value("Mac",std::string{})==p.model.mac;});
-            if(existing==registry["Devices"].end() && registry["Devices"].size()<256){const auto status=read(peer_status(p));registry["Devices"].push_back({{"Mac",p.model.mac},{"Pid",p.model.pid},{"RadioPid",p.model.pid},{"Profile",p.model.profile},{"VirtualSerial",status.value("VirtualSerial",std::string{})}});changed=true;}
+            if(existing==registry["Devices"].end() && registry["Devices"].size()<256){const auto status=memory_.read(static_cast<size_t>(&p-peers_.data()));registry["Devices"].push_back({{"Mac",p.model.mac},{"Pid",p.model.pid},{"RadioPid",p.model.pid},{"Profile",p.model.profile},{"VirtualSerial",status.value("VirtualSerial",std::string{})}});changed=true;}
         }
-        if(changed)write(root/L"config/paired-devices.local.json",registry);
+        registry_dirty_|=changed;
     }
     void start_radio(){
-        fs::remove(work/L"usb-gip.stop");for(auto &p:peers_){std::error_code e;fs::remove(peer_status(p),e);p.ready=false;p.generation=0;}
-        std::wstring arguments=L"run --output usb-gip --native-usb --usb-auto-slots 8 --usb-gip-port 33400 --seconds 0 --instance "+quote(adapter_)+L" --firmware "+quote((work/L"firmware/FW_ACC_00U.bin").wstring())+L" --stop-file "+quote((work/L"usb-gip.stop").wstring())+L" --status-file "+quote((work/L"usb-gip-controller-status.json").wstring());
-        radio_.start(binary_dir/L"xone-probe-cpp.exe",std::move(arguments));SetPriorityClass(radio_.process.value,ABOVE_NORMAL_PRIORITY_CLASS);started_=Clock::now();state("StartingRadio");
+        xone::diagnostic("radio_start_requested");
+        memory_.clear_radio();for(auto &p:peers_){p.ready=false;p.generation=0;}
+        std::wstring arguments=L"run --output usb-gip --native-usb --usb-auto-slots 8 --usb-gip-port 33400 --seconds 0 --instance "+quote(adapter_)+L" --firmware "+quote((work/L"firmware/FW_ACC_00U.bin").wstring())+L" --runtime-root "+quote(root.wstring());
+        if(!config_.value("IdlePowerEnabled",true))arguments+=L" --no-idle-power";
+        radio_.start(binary_dir/L"xone-probe-cpp.exe",std::move(arguments));SetPriorityClass(radio_.process.value,ABOVE_NORMAL_PRIORITY_CLASS);radio_retry_.started(Clock::now());retry_reason_.clear();state("StartingRadio");
+    }
+    void failed_radio(std::string reason){
+        retry_reason_=std::move(reason);radio_retry_.failed(Clock::now());
+        xone::diagnostic("radio_retry_scheduled",{{"reason",retry_reason_},{"failures",radio_retry_.failures()},{"delay_seconds",radio_retry_.delay().count()}},true);
     }
 public:
-    Host(){config_=read(root/L"config/devices.local.json");for(size_t n=0;n<peers_.size();++n)peers_[n].model={"slot-"+std::to_string(n),"","000000000000",0,static_cast<uint16_t>(33400+2*n),false};}
+    explicit Host(const std::wstring &selected={}){config_=read(root/L"config/devices.local.json");registry_=read(root/L"config/paired-devices.local.json");if(!registry_.contains("Devices"))registry_={{"Version",1},{"Devices",Json::array()}};if(!selected.empty())config_["AdapterInstanceId"]=xone::utf8(selected);for(size_t n=0;n<peers_.size();++n)peers_[n].model={"slot-"+std::to_string(n),"","000000000000",0,static_cast<uint16_t>(33400+2*n),false};}
     void run(){
-        fs::create_directories(work);fs::remove(work/L"maintenance.stop");fs::remove(work/L"usb-gip.stop");
-        Handle directory(FindFirstChangeNotificationW(work.c_str(),FALSE,FILE_NOTIFY_CHANGE_FILE_NAME|FILE_NOTIFY_CHANGE_LAST_WRITE));
+
         // Change notifications own the idle wait. No console or UI is shown.
-        while(!fs::exists(work/L"maintenance.stop") && !fs::exists(work/L"usb-gip.stop")){
+        while(!memory_.stopped()){
             window_.pump();try{
-                if(resumed){stop_radio();resumed=false;retry_at_=Clock::now();}
+                if(resumed){xone::diagnostic("power_resume");stop_radio();resumed=false;}
                 if(hardware_changed || (!radio_.alive() && Clock::now()>=adapter_check_)){
                     hardware_changed=false;adapter_check_=Clock::now()+std::chrono::seconds(30);
                     const auto devices=xone::adapters();
@@ -134,43 +149,67 @@ public:
                         else {if(found!=devices.end()){found=devices.end();break;}found=d;}
                     }
                     if(found!=devices.end() && healthy(found->instance))adapter_=found->instance;else adapter_.clear();
-                    if(adapter_.empty() && radio_.alive())stop_radio();
+                    if(adapter_.empty() && radio_.alive()){xone::diagnostic("adapter_unavailable",{},true);failed_radio("Adapter disconnected; waiting before radio restart");stop_radio();}
                 }
                 if(!radio_.alive()){
-                    if(radio_.process.value){GetExitCodeProcess(radio_.process.value,&last_radio_exit_);stop_radio();++retries_;retry_at_=Clock::now()+std::chrono::seconds(std::min(30u,2u<<std::min(retries_,3u)));state("Retrying","Radio exited with code "+std::to_string(last_radio_exit_));}
-                    if(adapter_.empty())state("WaitingForAdapter");else if(Clock::now()>=retry_at_){if(!fs::exists(work/L"firmware/FW_ACC_00U.bin"))state("SetupRequired","Adapter firmware is missing");else start_radio();}
+                    if(radio_.process.value){GetExitCodeProcess(radio_.process.value,&last_radio_exit_);failed_radio("Radio exited with code "+std::to_string(last_radio_exit_));stop_radio();}
+                    if(adapter_.empty())state("WaitingForAdapter",retry_reason_);
+                    else if(!radio_retry_.ready(Clock::now()))state("Retrying",retry_reason_);
+                    else if(!fs::exists(work/L"firmware/FW_ACC_00U.bin"))state("SetupRequired","Adapter firmware is missing");else start_radio();
                 }else{
-                    if(Clock::now()-started_>std::chrono::seconds(30))retries_=0;
-                    for(auto &p:peers_){const auto s=read(peer_status(p));
+                    if(radio_retry_.observe_running(Clock::now()))xone::diagnostic("radio_recovery_stable");
+                    for(auto &p:peers_){const auto s=memory_.read(static_cast<size_t>(&p-peers_.data()));
                         // An unavailable/partially observed status file is not
                         // a radio disconnect. Only an explicit snapshot may
                         // detach this slot's imported USB device.
                         if(!s.is_object() || !s.contains("Generation") || !s["Generation"].is_number_unsigned() || !s.contains("Ready") || !s["Ready"].is_boolean())continue;
                         const auto generation=s.value("Generation",uint64_t(0));const bool ready=s.value("Ready",false);
-                        if(p.port && (!ready || generation!=p.generation))detach(p);
-                        p.ready=ready;if(ready){const auto pid=s.value("Pid",uint16_t(0));if(pid!=0x0b17 && pid!=0x0b32 && pid!=0x0b12)throw std::runtime_error("Unknown native slot model");p.model.pid=pid;p.model.audio=pid!=0x0b12;p.model.profile=pid==0x0b17?"headset-0b17-usb.json":pid==0x0b32?"headset-0b32-usb.json":"controller-0b12-usb.json";}
-                        if(ready && !p.port && Clock::now()>=p.retry_at){p.retry_at=Clock::now()+std::chrono::seconds(10);p.port=usbip(L"-t "+std::to_wstring(p.model.port)+L" attach -r 127.0.0.1 -b 1-1 --once --terse",true);p.generation=generation;p.connected=fs::last_write_time(peer_status(p));const auto mac=s.value("Mac",p.model.mac);if(mac.size()==12 && std::all_of(mac.begin(),mac.end(),[](char c){return (c>='0'&&c<='9')||(c>='a'&&c<='f');}))p.model.mac=mac;save_devices();}
+                        const bool recovery=s.value("RecoveryRequired",false),associated=s.value("RadioAssociated",ready);
+                        const bool known_import=s.contains("UsbImported") && s["UsbImported"].is_boolean();
+                        if(p.port && xone::UsbImportRecovery::detach(ready,recovery,generation,p.generation,s.value("UsbImported",false),known_import,p.attached_at,Clock::now())){
+                            xone::diagnostic("usb_reimport_required",{{"slot",p.model.name},{"port",p.port},{"generation",generation},{"previous_generation",p.generation},{"ready",ready},{"recovery",recovery},{"imported",s.value("UsbImported",false)}},true);
+                            detach(p);p.retry_at=Clock::now()+std::chrono::seconds(1);
+                        }
+                        p.ready=ready;if(xone::UsbImportRecovery::attach(ready,recovery,associated)){const auto pid=s.value("Pid",uint16_t(0));if(pid!=0x0b17 && pid!=0x0b32 && pid!=0x0b12)throw std::runtime_error("Unknown native slot model");p.model.pid=pid;p.model.audio=pid!=0x0b12;p.model.profile=pid==0x0b17?"headset-0b17-usb.json":pid==0x0b32?"headset-0b32-usb.json":"controller-0b12-usb.json";}
+                        if(xone::UsbImportRecovery::attach(ready,recovery,associated) && !p.port && Clock::now()>=p.retry_at){p.retry_at=Clock::now()+std::chrono::seconds(10);p.port=usbip(L"-t "+std::to_wstring(p.model.port)+L" attach -r 127.0.0.1 -b 1-1 --once --terse",true);p.generation=generation;p.attached_at=Clock::now();const auto mac=s.value("Mac",p.model.mac);if(mac.size()==12 && std::all_of(mac.begin(),mac.end(),[](char c){return (c>='0'&&c<='9')||(c>='a'&&c<='f');}))p.model.mac=mac;save_devices();}
                     }
                     // Audio endpoint choice belongs to Windows and the user.
                     // Connecting another peer must not change global defaults.
-                    state(std::any_of(peers_.begin(),peers_.end(),[](const auto &p){return p.port!=0;})?"DevicesReady":"WaitingForDevices");
+                    state(std::any_of(peers_.begin(),peers_.end(),[](const auto &p){return p.ready && p.port!=0;})?"DevicesReady":"WaitingForDevices");
                 }
-            }catch(const std::exception &e){state("Retrying",e.what());retry_at_=Clock::now()+std::chrono::seconds(10);}
-            HANDLE waits[2]{};DWORD count=0;if(directory.value && directory.value!=INVALID_HANDLE_VALUE)waits[count++]=directory.value;if(radio_.alive())waits[count++]=radio_.process.value;
-            const auto event=MsgWaitForMultipleObjects(count,waits,FALSE,2000,QS_ALLINPUT);if(count && event==WAIT_OBJECT_0 && waits[0]==directory.value)FindNextChangeNotification(directory.value);
+            }catch(const std::exception &e){xone::diagnostic("host_retry",{{"error",e.what()}},true);if(!radio_.alive())failed_radio(e.what());state("Retrying",e.what());}
+            HANDLE waits[3]{memory_.stop_event(),memory_.changed_event(),nullptr};DWORD count=2;if(radio_.alive())waits[count++]=radio_.process.value;
+            (void)MsgWaitForMultipleObjects(count,waits,FALSE,2000,QS_ALLINPUT);
         }
         stop_radio();state("Stopped");
+        if(registry_dirty_)try{write(root/L"config/paired-devices.local.json",registry_);}catch(const std::exception &e){xone::diagnostic("pairing_metadata_save_failed",{{"error",e.what()}},true);}
     }
 };
 int main_host(std::wstring_view argument){
     wchar_t executable[32768]{};GetModuleFileNameW(nullptr,executable,32768);binary_dir=fs::path(executable).parent_path();root=binary_dir.parent_path();if(root.filename()==L"outputs")root=root.parent_path();
-    fs::create_directories(root/L"work");
-    if(argument==L"--stop"){std::ofstream stop(root/L"work/maintenance.stop");stop<<"stop";return 0;}
+    if(argument==L"--stop" || argument==L"--status"){
+        try{
+            xone::RuntimeState memory(root,false);
+            if(argument==L"--stop"){
+                const auto host=memory.read(xone::RuntimeState::host,100);memory.request_stop();
+                if(host.contains("Process")){
+                    Handle process(OpenProcess(SYNCHRONIZE,FALSE,host["Process"].value("Pid",DWORD(0))));
+                    if(process.value && WaitForSingleObject(process.value,35000)!=WAIT_OBJECT_0)return 2;
+                }
+                return 0;
+            }
+            Json slots=Json::array();for(size_t n=0;n<16;++n)slots.push_back(memory.read(n,100));
+            std::cout<<Json({{"Host",memory.read(xone::RuntimeState::host,100)},{"Runtime",memory.read(xone::RuntimeState::running,100)},{"Radio",memory.read(xone::RuntimeState::radio,100)},{"Slots",slots}}).dump()<<std::endl;
+            return 0;
+        }catch(const std::exception &){if(argument==L"--status"){std::cout<<"{}"<<std::endl;return 0;}return 3;}
+    }
+    xone::initialize_diagnostics("host",root/L"work/diagnostics/cpp");
     if(argument==L"--validate-config"){xone::appliance_devices(read(root/L"config/devices.local.json"));return 0;}
+    const auto selected=xone::background_adapter_option(argument);
     uint64_t hash=1469598103934665603ULL;for(auto c:root.wstring()){hash^=static_cast<uint64_t>(std::towlower(c));hash*=1099511628211ULL;}
     const auto name=L"Local\\xone-headless-"+std::to_wstring(hash);Handle mutex(CreateMutexW(nullptr,TRUE,name.c_str()));if(!mutex.value)throw std::runtime_error("Cannot own background session");if(GetLastError()==ERROR_ALREADY_EXISTS)return 0;
     const auto hr=CoInitializeEx(nullptr,COINIT_MULTITHREADED);if(FAILED(hr))throw std::runtime_error("Cannot initialize Windows audio");
-    struct Com{~Com(){CoUninitialize();}} com;Host host;host.run();ReleaseMutex(mutex.value);return 0;
+    struct Com{~Com(){CoUninitialize();}} com;Host host(selected);host.run();ReleaseMutex(mutex.value);return 0;
 }
 }
-int WINAPI wWinMain(HINSTANCE,HINSTANCE,LPWSTR arguments,int){try{return main_host(arguments?arguments:L"");}catch(const std::exception &e){try{write(root/L"work/application-status.json",{{"Phase","Failed"},{"Error",e.what()}});}catch(...){}return 1;}}
+int WINAPI wWinMain(HINSTANCE,HINSTANCE,LPWSTR arguments,int){try{return main_host(arguments?arguments:L"");}catch(const std::exception &e){xone::diagnostic("host_failed",{{"error",e.what()}},true);return 1;}}

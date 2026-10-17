@@ -38,11 +38,15 @@ public:
                 if(!drop_audio()){++dropped_;return;}
             }
         }
-        if(queue_.size()>=128 && !drop_audio()){
-            if(audio){++dropped_;return;}
+        if(!audio && std::count_if(queue_.begin(),queue_.end(),[](const auto &e){return !e.audio;})>=128){
             throw std::runtime_error("USB GIP reliable queue limit");
         }
-        queue_.push_back({std::move(bytes),audio,now});
+        auto at=queue_.end();
+        if(!audio){
+            at=queue_.begin();if(sent_)++at;
+            while(at!=queue_.end() && !at->audio)++at;
+        }
+        queue_.insert(at,{std::move(bytes),audio,now});
     }
     std::span<const uint8_t> next(Clock::time_point now=Clock::now()){
         expire(now);

@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 import re
 import sys
+import development_trace as trace
 from bridge_telemetry import BridgeTelemetry
 from usb_gip_radio import RadioBackend, read_frame
 from usbip_reference_server import ReferenceServer
@@ -36,7 +37,7 @@ async def serve(sock, root, usb_port, status_file, run_id, preserve_old_wireless
             raise ValueError('Invalid automatic RF handshake')
         mac = mac_bytes.hex()
         identity['Mac'] = mac
-        reference = ReferenceServer(None)
+        reference = ReferenceServer(None, on_event=telemetry.event if trace.active() else None)
 
         def announce(vendor, radio_product):
             try:
@@ -102,6 +103,19 @@ def worker_main(sock, root, usb_port, status_file, run_id, log_path, error_path,
     if sys.platform=='win32':
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     try:
-        asyncio.run(serve(sock,Path(root),usb_port,Path(status_file),run_id,preserve_old_wireless_mode))
+        trace.start_from_environment('worker-'+run_id)
+        trace.event('worker_started', run_id=run_id, usb_port=usb_port)
+        asyncio.run(serve_traced(sock,Path(root),usb_port,Path(status_file),run_id,preserve_old_wireless_mode))
     finally:
         sock.close()
+        trace.stop()
+
+
+async def serve_traced(*args):
+    monitor = asyncio.create_task(trace.monitor_loop(), name='development-loop-monitor') if trace.active() else None
+    try:
+        return await serve(*args)
+    finally:
+        if monitor is not None:
+            monitor.cancel()
+            await asyncio.gather(monitor, return_exceptions=True)

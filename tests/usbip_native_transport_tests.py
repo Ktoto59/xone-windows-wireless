@@ -9,6 +9,8 @@ import unittest
 import json
 import tempfile
 import time
+import os
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
@@ -111,6 +113,40 @@ class NativeTransportTests(unittest.TestCase):
         self.assertEqual(payload[:8], bytes((0x60, 32, 1, 50, 192, 0, 2, 3)))
         self.assertEqual([struct.unpack_from('!IIII', slots, n*16)[2] for n in range(8)], [54]*8)
 
+    def test_mmcss_can_be_disabled_without_disabling_usb(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        status = Path(directory.name)/'status.json'
+        with patch.dict(os.environ, {'XONE_USB_MMCSS': '0'}):
+            self.start('0b32', status)
+        owner = self.connect(0x8003)
+        exact(owner, 320)
+        owner.sendall(submit(1, 0, 0, setup=bytes.fromhex('0009010000000000')))
+        self.assertEqual(struct.unpack_from('!i', exact(owner, 48), 20)[0], 0)
+        owner.sendall(submit(2, 1, 1, length=64))
+        self.process.stdin.write('input\n')
+        self.process.stdin.flush()
+        self.assertEqual(struct.unpack_from('!ii', exact(owner, 48), 20), (0, 8))
+        self.assertEqual(exact(owner, 8), bytes((3, 32, 1, 4, 0, 0, 0, 0)))
+        deadline = time.monotonic()+4
+        while time.monotonic() < deadline:
+            try:
+                state = json.loads(status.read_text(encoding='utf-8'))
+                if state['UsbInitialization']['InterruptDelivered'] == 1:
+                    break
+            except (OSError, ValueError):
+                pass
+            time.sleep(.02)
+        else:
+            self.fail('Initialization snapshot timeout')
+        self.assertFalse(state['MmcssRequested'])
+        self.assertFalse(state['Mmcss'])
+        self.assertEqual(state['MmcssError'], 0)
+        self.assertEqual(state['UsbInitialization']['Configurations'], 1)
+        self.assertEqual(state['UsbInitialization']['InterruptIn'], 1)
+        self.assertGreater(state['WorkerIterations'], 0)
+        self.assertGreaterEqual(state['WorkerCpu100ns'], 0)
+
     def test_import_and_close_status_bypass_counter_cadence(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -138,6 +174,55 @@ class NativeTransportTests(unittest.TestCase):
         owner.close()
         wait_for(lambda value: not value['UsbImported'] and value['UsbClosed'] == 1)
         self.stop()
+
+    def test_audio_error_reimports_without_new_rf_and_is_journaled(self):
+        directory=tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        directory=directory.name
+        status=Path(directory)/'status.json'
+        with patch.dict(os.environ,{'XONE_CPP_LOG_DIR':directory}):
+            self.start('0b32',status)
+        def wait_for(predicate):
+            deadline=time.monotonic()+4
+            while time.monotonic()<deadline:
+                try:
+                    state=json.loads(status.read_text(encoding='utf-8'))
+                    if predicate(state):return state
+                except (OSError,ValueError):pass
+                time.sleep(.01)
+            self.fail('Recovery snapshot timeout')
+        def configure(sock):
+            for seq,setup in ((1,'0009010000000000'),(2,'010b010001000000')):
+                sock.sendall(submit(seq,0,0,setup=bytes.fromhex(setup)))
+                self.assertEqual(struct.unpack_from('!i',exact(sock,48),20)[0],0)
+        def audio():
+            self.process.stdin.write('audio\n');self.process.stdin.flush()
+            wait_for(lambda s:s.get('AudioLayoutSupported'))
+            self.process.stdin.write('audio\n');self.process.stdin.flush()
+        def render(sock,seq):
+            block=bytes((0x60,32,1,0xc0,0x81,0))+bytes((77,))*192
+            sock.sendall(submit(seq,0,2,data=block*8,iso=tuple((n*198,198) for n in range(8))))
+            header=exact(sock,48);exact(sock,128)
+            return struct.unpack_from('!ii',header,20)
+        owner=self.connect(0x8003);exact(owner,320);configure(owner)
+        initial=wait_for(lambda s:s['Ready'] and s['UsbImported'])
+        self.process.stdin.write('fail-next\n');self.process.stdin.flush()
+        self.assertEqual(self.process.stdout.readline().strip(),'ARMED')
+        audio()
+        self.assertEqual(render(owner,10),(-5,0))
+        failed=wait_for(lambda s:s.get('RecoveryRequired') and not s['Ready'])
+        self.assertTrue(failed['RadioAssociated']);self.assertNotEqual(initial['Generation'],failed['Generation'])
+        owner.close();wait_for(lambda s:not s['UsbImported'])
+        restored=self.connect(0x8003)
+        self.assertEqual(exact(restored,320)[:8],bytes.fromhex('0111000300000000'))
+        configure(restored);audio()
+        self.assertEqual(render(restored,11),(0,1584))
+        wait_for(lambda s:s['Ready'] and s['UsbImported'] and not s['RecoveryRequired'])
+        restored.close();self.stop()
+        rows=[json.loads(line) for path in Path(directory).glob('anomalies-*.jsonl')
+              for line in path.read_text(encoding='utf-8').splitlines()]
+        self.assertTrue(any(r['operation']=='audio_recovery_required' for r in rows))
+        self.assertTrue(any(r['operation']=='radio_tx_complete' and r['fields']['status']==-5 for r in rows))
 
 
 if __name__ == '__main__':

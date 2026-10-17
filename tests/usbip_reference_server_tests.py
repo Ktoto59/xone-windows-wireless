@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT / 'src'))
 from usb_headset_profile import HeadsetProfile
 from usbip_reference_server import ReferenceServer, transport_profile, main, render_budget
 from bridge_telemetry import BridgeTelemetry
+from usb_gip_radio import RadioBackend
 
 
 class LifetimeTests(unittest.IsolatedAsyncioTestCase):
@@ -100,6 +101,39 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await reader.read(), bytes.fromhex('0111000300000001'))
         writer.close()
         await writer.wait_closed()
+
+    async def test_recovery_import_preserves_rf_identity_without_new_association(self):
+        backend=RadioBackend('020000000001',audio_bridge=True)
+        backend.writer=object();backend.wcid=1;backend.generation=1
+        await backend.recover_audio()
+        self.assertFalse(backend.ready);self.assertTrue(backend.importable)
+        self.handler.backend=backend
+        reader,writer=await asyncio.open_connection('127.0.0.1',self.port)
+        try:
+            writer.write(struct.pack('!HHI32s',0x0111,0x8003,0,b'1-1'));await writer.drain()
+            self.assertEqual((await asyncio.wait_for(reader.readexactly(320),1))[:8],bytes.fromhex('0111000300000000'))
+            self.assertTrue(backend.ready);self.assertFalse(backend.recovery_required)
+            self.assertEqual((backend.wcid,backend.generation),(1,2))
+        finally:
+            writer.close();await writer.wait_closed()
+            await self.handler.close_clients()
+
+    async def test_every_usb_import_starts_identity_session_without_replaying_old_replies(self):
+        backend=RadioBackend('020000000001')
+        backend.writer=object();backend.wcid=1;backend.generation=1
+        announce=bytes((2,32,7,28))+bytes(28)
+        stale=bytes((3,32,9,4,1,2,3,4))
+        backend.announce=announce;backend.queue.append(announce);self.handler.backend=backend
+        for index in range(2):
+            reader,writer=await asyncio.open_connection('127.0.0.1',self.port)
+            try:
+                writer.write(struct.pack('!HHI32s',0x0111,0x8003,0,b'1-1'));await writer.drain()
+                self.assertEqual((await asyncio.wait_for(reader.readexactly(320),1))[:8],bytes.fromhex('0111000300000000'))
+                self.assertEqual(backend.usb_imports,index+1)
+                self.assertEqual(tuple(backend.queue),(announce,))
+                backend.queue.popleft();backend.queue.append(stale)
+            finally:
+                writer.close();await writer.wait_closed();await self.handler.close_clients()
 
     async def test_invalid_protocol_is_closed(self):
         for version, operation, status in [(0, 0x8005, 0), (0x0111, 0x8005, 1), (0x0111, 0x8004, 0)]:

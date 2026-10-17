@@ -11,7 +11,7 @@ if exist "%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" (
 if not defined XONE_VS exit /b 1
 call "%XONE_VS%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
 if errorlevel 1 exit /b 1
-cl /nologo /std:c++20 /EHsc /O2 /W4 /WX /utf-8 /I src /c tests\usbip_native_codec_tests.cpp tests\usbip_native_core_tests.cpp tests\usbip_native_server_probe.cpp tests\native_multi_route_probe.cpp tests\latest_snapshot_tests.cpp /Fobuild\
+cl /nologo /std:c++20 /EHsc /O2 /W4 /WX /utf-8 /I src /c tests\usbip_native_codec_tests.cpp tests\usbip_native_core_tests.cpp tests\usbip_native_server_probe.cpp tests\native_multi_route_probe.cpp tests\latest_snapshot_tests.cpp tests\usbip_parity_probe.cpp tests\usb_import_recovery_tests.cpp tests\diagnostic_log_tests.cpp /Fobuild\
 if errorlevel 1 exit /b 1
 link /nologo build\usbip_native_codec_tests.obj build\usbip_native_codec.obj build\protocol.obj /out:outputs\usbip-native-codec-tests.exe
 if errorlevel 1 exit /b 1
@@ -28,6 +28,18 @@ if errorlevel 1 exit /b 1
 outputs\usbip-native-core-tests.exe
 if errorlevel 1 exit /b 1
 outputs\latest-snapshot-tests.exe
+if errorlevel 1 exit /b 1
+link /nologo build\usbip_parity_probe.obj build\usbip_native_core.obj build\usbip_native_codec.obj build\gip_link.obj build\protocol.obj /out:outputs\usbip-parity-probe.exe
+if errorlevel 1 exit /b 1
+link /nologo build\usb_import_recovery_tests.obj /out:outputs\usb-import-recovery-tests.exe
+if errorlevel 1 exit /b 1
+link /nologo build\diagnostic_log_tests.obj /out:outputs\diagnostic-log-tests.exe
+if errorlevel 1 exit /b 1
+outputs\usb-import-recovery-tests.exe
+if errorlevel 1 exit /b 1
+outputs\diagnostic-log-tests.exe work\journal-test-%RANDOM%-%RANDOM%
+if errorlevel 1 exit /b 1
+python -m unittest discover -s tests -p usbip_cpp_parity_tests.py
 if errorlevel 1 exit /b 1
 python -m unittest discover -s tests -p usbip_native_*tests.py
 if errorlevel 1 exit /b 1

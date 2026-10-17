@@ -6,7 +6,10 @@ $taskRoot=Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'Setup-Helpers.ps1')
 if($Stop){
     [void][IO.Directory]::CreateDirectory((Join-Path $taskRoot 'work'))
-    foreach($taskMarker in @('maintenance.stop','usb-gip.stop')){[IO.File]::WriteAllText((Join-Path $taskRoot ('work/'+$taskMarker)),'stop')}
+    $taskMemoryHost=Get-XoneMemoryHost $taskRoot
+    if($taskMemoryHost){& $taskMemoryHost --stop | Out-Null}else{
+        foreach($taskMarker in @('maintenance.stop','usb-gip.stop')){[IO.File]::WriteAllText((Join-Path $taskRoot ('work/'+$taskMarker)),'stop')}
+    }
     $taskState=Read-XoneJson (Join-Path $taskRoot 'work/maintenance-status.json')
     $taskDeadline=[datetime]::UtcNow.AddSeconds(35)
     while($taskState -and (Test-XoneProcess $taskState.Process) -and [datetime]::UtcNow -lt $taskDeadline){Start-Sleep -Milliseconds 100}

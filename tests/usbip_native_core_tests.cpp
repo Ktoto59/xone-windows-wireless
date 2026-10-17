@@ -27,5 +27,40 @@ int main(){try{
     Request mode;mode.command=1;mode.seq=50;mode.ep=10;mode.data={5,32,2,15,6,0,0,0,0,0,0,0x55,0x53,0,0,0,0,0,0};mode.length=static_cast<int32_t>(mode.data.size());old.submit(mode,start+std::chrono::milliseconds(17));require(old.stats().mode_suppressed==1 && old.outbound().empty());old.replies();
     old.tick(start+std::chrono::milliseconds(500));old.submit(iso_request(51,true),start+std::chrono::milliseconds(500));require(old.replies().empty());
     auto fresh=profile(0x0b32,true);Core stalled(fresh,true);stalled.radio(1,1,mac,start);configured(stalled);stalled.radio(4,1,wire,start);auto r=iso_request(60,false);stalled.submit(r,start);auto out=stalled.outbound();require(out.size()==1);stalled.complete(1,out[0].token,0,start);stalled.replies();r.seq=61;stalled.submit(r,start+std::chrono::milliseconds(40));require(stalled.outbound().empty());stalled.tick(start+std::chrono::milliseconds(105));require(stalled.stats().render_expired==1 && stalled.outbound().empty());
-    std::cout<<"PASS: RF audio, real TX ACK, 32-ms FIFO, UNLINK, generation reset, independent 2021 clock/holdover, USB-mode adaptation and render expiry\n";return 0;
+    Core late(fresh,true);late.radio(1,1,mac,start);configured(late);late.radio(4,1,wire,start);late.submit(iso_request(70,false),start);out=late.outbound();
+    require(out.size()==1 && out[0].media_deadline==start+std::chrono::milliseconds(64));const auto generation=late.stats().generation;
+    late.complete(1,out[0].token,-18,start+std::chrono::milliseconds(65));
+    require(late.ready() && !late.stats().recovery_required && late.stats().generation==generation && late.stats().render_expired==1 && late.replies().size()==1);
+    late.radio(4,1,wire,start+std::chrono::milliseconds(66));late.submit(iso_request(71,false),start+std::chrono::milliseconds(66));out=late.outbound();require(out.size()==1);
+    late.complete(1,out[0].token,0,start+std::chrono::milliseconds(66));require(late.stats().audio_tx==1 && late.ready());
+    for(const auto pid:{uint16_t(0x0b17),uint16_t(0x0b32)}){
+        const auto prof=profile(pid,true);Core reconnect(prof,true);Bytes body(28);body[8]=0x5e;body[9]=4;body[10]=static_cast<uint8_t>(pid);body[11]=static_cast<uint8_t>(pid>>8);
+        const auto announce=encode_gip({2,32,7,0,body});const auto stale=encode_gip({3,32,9,0,{1,2,3,4}});
+        reconnect.radio(1,1,mac,start);reconnect.radio(2,1,announce,start);configured(reconnect);
+        Request input;input.command=1;input.direction=1;input.ep=pid==0x0b17?6:1;input.length=64;input.seq=80;reconnect.submit(input,start);
+        auto read=reconnect.replies();require(read.size()==1 && Bytes(read[0].begin()+48,read[0].end())==announce);
+        require(reconnect.initialization().configurations==1 && reconnect.initialization().interfaces==1 && reconnect.initialization().irq_in==1 && reconnect.initialization().irq_delivered==1);
+        reconnect.radio(2,1,stale,start);reconnect.detached();
+        require(reconnect.initialization().irq_delivered==1);
+        const auto dropped=reconnect.stats().dropped;
+        for(unsigned i=0;i<500;++i)reconnect.radio(4,1,wire,start+std::chrono::milliseconds(i));
+        require(reconnect.stats().dropped==dropped && reconnect.stats().capture_without_usb==4000);
+        configured(reconnect);require(reconnect.initialization().irq_in==0 && reconnect.initialization().irq_delivered==0);
+        input.seq=81;reconnect.submit(input,start+std::chrono::seconds(1));read=reconnect.replies();
+        require(read.size()==1 && Bytes(read[0].begin()+48,read[0].end())==announce && reconnect.stats().announce_replays==1);
+        input.seq=82;reconnect.submit(input,start+std::chrono::seconds(1));require(reconnect.replies().empty());
+        reconnect.radio(2,1,stale,start+std::chrono::seconds(1));read=reconnect.replies();require(read.size()==1 && Bytes(read[0].begin()+48,read[0].end())==stale);
+        const auto reports=reconnect.stats().capture_drop_reports;
+        for(unsigned i=0;i<500;++i)reconnect.radio(4,1,wire,start+std::chrono::seconds(2)+std::chrono::milliseconds(i));
+        require(reconnect.stats().dropped>dropped && reconnect.stats().capture_drop_reports-reports<=1);
+    }
+    {
+        Core lifetime(p,true);lifetime.radio(1,1,mac);configured(lifetime);
+        Request output;output.command=1;output.seq=100;output.ep=1;output.data=encode_gip({4,32,3,0,{}});output.length=static_cast<int32_t>(output.data.size());
+        lifetime.submit(output);auto pending=lifetime.outbound();require(pending.size()==1 && pending[0].cancellation.stop_possible() && !pending[0].cancellation.stop_requested());
+        Request cancel_output;cancel_output.command=2;cancel_output.seq=101;cancel_output.unlink_target=100;lifetime.submit(cancel_output);require(pending[0].cancellation.stop_requested());
+        output.seq=102;lifetime.submit(output);pending=lifetime.outbound();require(pending.size()==1 && !pending[0].cancellation.stop_requested());
+        lifetime.detached();require(pending[0].cancellation.stop_requested());
+    }
+    std::cout<<"PASS: RF audio, real TX ACK, bounded media, generation reset, 2021 clock, isolated expiry, clean identity-only reimport and coalesced drops\n";return 0;
 }catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}}

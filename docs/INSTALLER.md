@@ -19,29 +19,58 @@ Internet access and UAC approval are required for missing downloaded components.
 A Windows-requested reboot is reported by Setup; the registered host starts at
 sign-in after reboot, without requiring manual dependency commands.
 
-Setup runs adapter/dependency preparation with UAC, then registers a limited
-interactive-user sign-in task for the C++ host. Its radio child is owned through
-a Windows job. Runtime USBip ports and process identities belong to that host;
-removal does not kill arbitrary Python processes or detach unrelated USB devices.
+Setup runs adapter/dependency preparation with UAC, then applies two independent
+startup choices: **Start automatically when I sign in to Windows** and **Start
+xone Wireless after installation**. Both default to enabled on a fresh install;
+upgrades remember the previous selections. A requested Windows reboot skips
+start-now: after restart, the selected sign-in task can start the bridge, or the
+user can start it from the Start menu when autostart is off. Autostart is a limited
+interactive-user
+Task Scheduler entry targeting the C++ host, with no stored password. Registering
+that entry does not itself launch the bridge. Start-now without autostart creates
+an on-demand task without a sign-in trigger.
+
+The shipped setup scripts run automatically inside the installation workflow;
+users do not have to execute them separately. Progress text identifies saving
+preferences, preparing the adapter, applying startup settings and starting the
+bridge. The Start menu includes native-host start, stop and uninstall shortcuts.
+Only adapter/dependency preparation and owned stock-driver restoration need UAC.
+
+The radio child is owned through a Windows job. Runtime USBip ports and process
+identities belong to that host; removal does not kill arbitrary Python processes
+or detach unrelated USB devices. Installer choices use Inno Setup's
+[tasks](https://jrsoftware.org/ishelp/topic_taskssection.htm) and
+[remembered task settings](https://jrsoftware.org/ishelp/topic_setup_useprevioustasks.htm).
 
 ## Build
 
 Use Windows x64, Visual Studio C++ Build Tools, a Windows SDK and Inno Setup:
 
 ```powershell
-# Build the installation/removal helper if outputs/xone-bind.exe is absent.
-.\scripts\build.cmd
 .\scripts\Build-Installer.ps1 -IsccPath 'C:\path\to\ISCC.exe'
 ```
 
-The builder compiles candidate binaries into `outputs/appliance-candidate` and
-leaves a running copy untouched. `-SkipBuild -LauncherDir <directory>` packages
+The builder compiles release binaries into `outputs/appliance-release` with
+`XONE_DISABLE_DIAGNOSTICS`: no C++ journal writer, anomaly files, journal health
+files or packet tracing, even when diagnostic environment overrides are present.
+Maintenance results/transcripts and persistent configuration/recovery backups
+remain. The native runtime uses shared memory and Windows events for operational
+state and stop commands; it creates no periodic state files. See [RUNTIME-IO.md](RUNTIME-IO.md).
+Use `-EnableDiagnostics` to build a diagnostic installer into
+`outputs/appliance-candidate`; ordinary `Build-Appliance.cmd` development builds
+retain diagnostics. `Build-Appliance.cmd --no-diagnostics <output-directory>`
+can also build a separate release candidate without replacing a running copy.
+The appliance builder also builds the binding helper into that same directory.
+All three runtime EXEs and Setup embed the shared [application icon](../assets/branding/README.md).
+`-SkipBuild -LauncherDir <directory>` packages
 explicit, already tested binaries. Use a fresh version/staging directory; the
 builder refuses to overwrite an existing package stage.
 
 Artifacts in `dist/` are Setup EXE, minimal runtime ZIP and corresponding source
-ZIP. Source packaging includes tracked and new non-ignored source files, including
-C++ connector headers. Each ZIP has a hash manifest with base commit and whether
+ZIP. Source packaging includes tracked and new non-ignored source files, all
+developer scripts and documentation, including historical release notes. The
+installed payload still uses its separate explicit allowlist. Each ZIP has a hash
+manifest with base commit and whether
 the working tree was modified; a modified checkout is not represented as an exact
 build of its base commit. The source ZIP must accompany distribution of this GPL
 candidate. No firmware or Microsoft driver binaries are redistributed.

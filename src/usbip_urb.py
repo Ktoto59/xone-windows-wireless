@@ -6,6 +6,8 @@ Wire format: kernel.org/doc/html/latest/usb/usbip_protocol.html.
 import asyncio
 from dataclasses import dataclass
 import struct
+import time
+import development_trace as trace
 from usb_headset_profile import ControlState, Stall
 
 MAX_TRANSFER = 65536
@@ -153,6 +155,8 @@ class UrbSession:
                        status=result.status, actual=result.actual, iso=len(result.iso))
 
     async def execute(self, request, endpoint):
+        started = time.perf_counter_ns()
+        trace.event('urb_backend_started', seq=request.seq, ep=endpoint.address, pending=len(self.pending))
         try:
             result = await self.backend.submit(request, endpoint)
             # Claim completion and write without an await: UNLINK cannot race in
@@ -168,9 +172,15 @@ class UrbSession:
             raise
         except (ConnectionError, TimeoutError):
             self.writer.close()
-        except Exception:
+        except Exception as error:
+            trace.event('urb_backend_exception', suspicious=True, seq=request.seq,
+                        exception=type(error).__name__, pending=len(self.pending))
             if self.pending.pop(request.seq, None) is not None:
                 self.send_completion(request, failed_completion(request, -5))
+        finally:
+            elapsed_us = (time.perf_counter_ns()-started)/1000
+            trace.event('urb_backend_finished', seq=request.seq, ep=endpoint.address,
+                        elapsed_us=elapsed_us, pending=len(self.pending))
 
     def cancel_disabled(self, reset=False):
         active = {e.address for e in self.control.active_endpoints()}
@@ -224,6 +234,8 @@ class UrbSession:
                     elif bool(request.iso) != (endpoint.transfer_type == 1):
                         self.send_completion(request, failed_completion(request, -22))
                     elif len(self.pending) >= MAX_PENDING:
+                        trace.event('urb_queue_full', suspicious=True, seq=request.seq,
+                                    ep=address, pending=len(self.pending), capacity=MAX_PENDING)
                         self.send_completion(request, failed_completion(request, -12))
                     else:
                         task = asyncio.create_task(self.execute(request, endpoint))

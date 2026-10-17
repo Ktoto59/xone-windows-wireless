@@ -8,15 +8,16 @@ namespace xone {
 class NativeDeviceRoute final:public RawGipOutput {
     uint16_t port_;Bytes mac_;std::wstring status_;bool diagnostics_;uint8_t wcid_=0;
     std::unique_ptr<NativeUsbOutput> peer_;
+    NativeUsbOutput::StateSink sink_;
 public:
-    NativeDeviceRoute(uint16_t port,Bytes mac,std::wstring status,bool diagnostics):port_(port),mac_(std::move(mac)),status_(std::move(status)),diagnostics_(diagnostics){}
+    NativeDeviceRoute(uint16_t port,Bytes mac,std::wstring status,bool diagnostics,NativeUsbOutput::StateSink sink={}):port_(port),mac_(std::move(mac)),status_(std::move(status)),diagnostics_(diagnostics),sink_(std::move(sink)){}
     bool target(std::span<const uint8_t> mac)const override{return std::equal(mac.begin(),mac.end(),mac_.begin(),mac_.end());}
     void event(uint8_t kind,uint8_t wcid,std::span<const uint8_t> data={})override{
         if(kind==1){wcid_=wcid;return;}
         if(!peer_ && kind==2)for(const auto &p:parse_gip(data))if(p.command==2 && (p.options&63)==32 && p.payload.size()>=28){
             const auto vendor=p.payload[8]|(unsigned(p.payload[9])<<8),product=p.payload[10]|(unsigned(p.payload[11])<<8);
             if(vendor!=0x045e)throw std::runtime_error("Unsupported radio vendor");const auto config=device_connector(static_cast<uint16_t>(product));
-            peer_=std::make_unique<NativeUsbOutput>(port_,mac_,config.pid,config.audio,status_,true,diagnostics_);peer_->event(1,wcid_,mac_);break;
+            peer_=std::make_unique<NativeUsbOutput>(port_,mac_,config.pid,config.audio,status_,true,diagnostics_,sink_);peer_->event(1,wcid_,mac_);break;
         }
         if(peer_)peer_->event(kind,wcid,data);
     }

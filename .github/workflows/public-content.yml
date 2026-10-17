@@ -3,6 +3,27 @@ on: [push, pull_request]
 permissions:
   contents: read
 jobs:
+  windows-bridge:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Build C++ bridge
+        shell: cmd
+        run: scripts\Build-CppBridge.cmd
+      - name: Build C++ host and production candidate
+        shell: cmd
+        run: scripts\Build-Appliance.cmd
+      - name: Test C++ recovery, journals and Python parity
+        shell: cmd
+        run: scripts\Test-CppBridge.cmd
+      - name: Test Python reference and loopback faults
+        run: python -m unittest discover -s tests -p '*tests.py'
+      - name: Build and check runtime without diagnostics
+        shell: cmd
+        run: scripts\Build-Appliance.cmd --no-diagnostics outputs\appliance-release
   public-content:
     runs-on: ubuntu-latest
     steps:
@@ -18,7 +39,7 @@ jobs:
       - name: Test native tools and maintenance bootstrap
         shell: powershell
         run: |
-          foreach ($test in @('system_tool_tests.ps1','setup_action_tests.ps1','device_config_tests.ps1','setup_helpers_tests.ps1')) {
+          foreach ($test in @('system_tool_tests.ps1','setup_action_tests.ps1','automatic_bridge_tests.ps1','device_config_tests.ps1','setup_helpers_tests.ps1','adapter_idle_power_tests.ps1')) {
             & "$env:windir\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path tests $test)
             if ($LASTEXITCODE -ne 0) { throw ('Failed: ' + $test) }
           }

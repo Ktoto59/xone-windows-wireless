@@ -7,6 +7,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $taskRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'Device-Config.ps1')
+. (Join-Path $PSScriptRoot 'Adapter-IdlePower.ps1')
 $InstanceId=Resolve-XoneAdapterInstance $InstanceId
 $taskPackage=Get-XoneAdapterPackage $InstanceId
 $taskBinder = Join-Path $taskRoot 'outputs\xone-bind.exe'
@@ -48,6 +49,7 @@ function Restore-TaskRegistryProperty([string]$Path,[string]$Name,$Saved) {
 function Restore-TaskRegistry($Saved) {
     Restore-TaskRegistryProperty $taskRegPath 'UpperFilters' $Saved.UpperFilters
     Restore-TaskRegistryProperty $taskParamsPath 'DeviceInterfaceGUIDs' $Saved.InterfaceGuids
+    if($Saved.PSObject.Properties['IdlePower']){Restore-XoneIdlePower $taskParamsPath $Saved.IdlePower}
 }
 function Assert-TaskState($Saved) {
     if ($Saved.InstanceId -ne $InstanceId -or -not (Test-XoneStockBinding $Saved)) {
@@ -93,6 +95,7 @@ $taskSaved = [pscustomobject]@{
     DriverVersion=(Read-TaskProperty 'DEVPKEY_Device_DriverVersion')
     UpperFilters=(Save-TaskRegistryProperty $taskRegPath 'UpperFilters')
     InterfaceGuids=(Save-TaskRegistryProperty $taskParamsPath 'DeviceInterfaceGUIDs')
+    IdlePower=(Save-XoneIdlePower $taskParamsPath)
 }
 Assert-TaskState $taskSaved
 Invoke-TaskBinder 'plan' $taskWinusbInf 'WINUSB'
@@ -111,6 +114,7 @@ if (Test-Path -LiteralPath $taskStatePath) {
 }
 $taskSaved | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $taskStatePath -Encoding UTF8
 try {
+    Enable-XoneIdlePower $taskParamsPath
     # Only this instance changes. Leave other device filters and other GUIDs intact.
     $taskFilters = @($taskSaved.UpperFilters.Value | Where-Object { $_ -ne 'xboxgip' })
     if ($taskFilters.Count) {

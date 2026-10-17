@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 [CmdletBinding()]
-param([ValidatePattern('^\d+\.\d+\.\d+(?:-[a-z0-9.]+)?$')][string]$Version='0.1.0-alpha.5.2',
+param([ValidatePattern('^\d+\.\d+\.\d+(?:-[a-z0-9.]+)?$')][string]$Version='0.1.0-alpha.6',
       [string]$LauncherDir='')
 $ErrorActionPreference='Stop'
 $taskRoot=Split-Path -Parent $PSScriptRoot
@@ -32,15 +32,10 @@ $taskRuntimeFiles=@('LICENSE','third_party/json/LICENSE.MIT','third_party/vigem/
     'docs/INSTALL.md','docs/TROUBLESHOOTING.md','docs/cpp-bridge.md',
     'docs/LIMITATIONS.md','docs/PRIVACY.md','docs/UPSTREAM.md',
     'scripts/Setup-Action.ps1','scripts/Setup-Helpers.ps1','scripts/Device-Config.ps1',
-    'scripts/Switch-WinUSB.ps1','scripts/Import-Firmware.ps1',
-    'scripts/Set-AutomaticBridge.ps1','scripts/Run-MaintainedBridge.ps1')
-$taskSourceExtra=@('README.md','.gitignore','.gitattributes','docs/INSTALLER.md',
-    'scripts/build.cmd','scripts/Build-Appliance.cmd','scripts/Build-CppBridge.cmd',
-    'scripts/Build-Installer.ps1','scripts/Package-Release.ps1','scripts/Test-CppBridge.cmd',
-    'scripts/Test-Installer.ps1','scripts/generate-usb-profiles.py','scripts/check-public-content.py',
-    'CHANGELOG.md','docs/DEVELOPMENT.md','docs/ARCHITECTURE.md','docs/BACKGROUND-MODE.md',
-    'docs/AUTO-PAIRING.md','docs/HEADSET-RECONNECT.md','docs/USBIP-LATENCY.md',
-    'docs/RELEASE-alpha.5.md','docs/RELEASE-alpha.5.1.md','docs/RELEASE-alpha.5.2.md','.github/workflows/public-content.yml')
+    'scripts/Switch-WinUSB.ps1','scripts/Adapter-IdlePower.ps1','scripts/Set-AdapterIdlePower.ps1','scripts/Import-Firmware.ps1',
+    'scripts/Set-AutomaticBridge.ps1','scripts/Run-MaintainedBridge.ps1','scripts/Get-ControllerStatus.ps1','docs/RUNTIME-IO.md')
+$taskSourceExtra=@('README.md','.gitignore','.gitattributes','.mailmap','CHANGELOG.md',
+    '.github/workflows/public-content.yml')
 Push-Location -LiteralPath $taskRoot
 try{
     # Include new, non-ignored source files as well as tracked files. Never
@@ -49,7 +44,7 @@ try{
     if($LASTEXITCODE -ne 0 -or -not $taskFiles.Count){throw 'Package from a Git source checkout.'}
     foreach($taskFile in $taskFiles){
         if($taskFile -match '^(work|outputs|build|dist|runtime|\.git|\.agents|\.codex)/' -or $taskFile -match '\.local\.' -or $taskFile -match '(^|/)(__pycache__|\.pytest_cache)/' -or $taskFile -match '\.(pyc|log|bin|pdb)$'){continue}
-        if($taskFile -match '^(src|tests|driver|third_party|installer|config)/' -or $taskFile -in $taskRuntimeFiles -or $taskFile -in $taskSourceExtra){
+        if($taskFile -match '^(src|tests|driver|third_party|installer|config|scripts|docs|assets)/' -or $taskFile -in $taskRuntimeFiles -or $taskFile -in $taskSourceExtra){
             Copy-PackageFile $taskFile $taskSourceStage
         }
     }
@@ -58,11 +53,12 @@ try{
     [void][IO.Directory]::CreateDirectory($taskOutput)
     foreach($taskBinary in @('xone-probe-cpp.exe','xone-background.exe','xone-bind.exe')){
         $taskSource=Join-Path $taskRoot ('outputs/'+$taskBinary)
-        if($LauncherDir -and $taskBinary -in @('xone-probe-cpp.exe','xone-background.exe')){$taskSource=Join-Path $LauncherDir $taskBinary}
+        if($LauncherDir){$taskSource=Join-Path $LauncherDir $taskBinary}
         if(-not (Test-Path -LiteralPath $taskSource)){throw ('Missing release binary: '+$taskBinary)}
         Assert-PublicReleaseBinary $taskSource
         Copy-Item -LiteralPath $taskSource -Destination $taskOutput
     }
+    if($LauncherDir -and (Test-Path -LiteralPath (Join-Path $LauncherDir 'runtime-capabilities.json'))){Copy-Item -LiteralPath (Join-Path $LauncherDir 'runtime-capabilities.json') -Destination $taskOutput}
     $taskCommit=(& git rev-parse HEAD).Trim()
     $taskDirty=[bool]@(& git status --porcelain).Count
     foreach($taskPackage in @($taskSourceStage,$taskStage)){

@@ -4,6 +4,7 @@ import asyncio
 from collections import deque
 import struct
 import time
+import development_trace as trace
 from usbip_urb import Completion, IsoPacket, failed_completion
 
 # Four observed 8-ms radio blocks: a recovery budget, not an added delay.
@@ -24,15 +25,20 @@ USB_WIRED_MODE_PAYLOADS = (bytes((6,))+bytes(14),
 def frame(kind, wcid, payload=b'', token=0):
     if len(payload) > 1600 or not 0 <= wcid <= 16:
         raise ValueError('Invalid radio IPC frame')
+    trace.event('ipc_frame_encoded', kind=kind, wcid=wcid, length=len(payload), token=token)
     return struct.pack('<4sBBHI', b'XGP1', kind, wcid, len(payload), token)+payload
 
 
 async def read_frame(reader, timeout=5):
+    started = time.perf_counter_ns()
+    trace.event('ipc_read_started', timeout_seconds=timeout)
     header = await asyncio.wait_for(reader.readexactly(12), timeout)
     magic, kind, wcid, length, token = struct.unpack('<4sBBHI', header)
     if magic != b'XGP1' or length > 1600 or wcid > 16:
         raise ValueError('Invalid radio IPC header')
     payload = await asyncio.wait_for(reader.readexactly(length), timeout)
+    trace.event('ipc_read_complete', kind=kind, wcid=wcid, length=length, token=token,
+                elapsed_us=(time.perf_counter_ns()-started)/1000)
     return kind, wcid, token, payload
 
 
@@ -167,6 +173,8 @@ class RadioBackend:
         self.wcid = 0
         self.generation = 0
         self.queue = deque()
+        self.announce = None
+        self.usb_imports = 0
         self.audio_queue = deque()
         self.audio_probe = audio_probe or audio_bridge
         self.audio_bridge = audio_bridge
@@ -197,19 +205,43 @@ class RadioBackend:
         self.token = 0
         self.rx_packets = self.tx_packets = 0
         self.battery = None
+        self.recovery_required = False
 
     @property
     def ready(self):
+        return self.importable and not self.recovery_required
+
+    @property
+    def importable(self):
         return self.writer is not None and self.wcid != 0
+
+    def imported(self):
+        self.clear_audio()
+        self.recovery_required = False
+        if self.usb_imports:
+            self.queue.clear()
+            if self.announce is not None:
+                self.queue.append(self.announce)
+        self.usb_imports += 1
+
+    async def recover_audio(self):
+        announce, imports = self.announce, self.usb_imports
+        await self.reset(recover_usb=True)
+        self.announce, self.usb_imports = announce, imports
+        trace.event('audio_recovery_required', suspicious=True, wcid=self.wcid, generation=self.generation)
 
     def event(self, **fields):
         if self.on_event:
             self.on_event(fields)
 
-    async def reset(self):
-        self.wcid = 0
+    async def reset(self, recover_usb=False):
+        self.recovery_required = bool(recover_usb and self.wcid)
+        if not recover_usb:
+            self.wcid = 0
         self.generation += 1
         self.queue.clear()
+        self.announce = None
+        self.usb_imports = 0
         self.clear_audio()
         self.audio_sequence = 1
         self.capture_sequence = 1
@@ -227,6 +259,8 @@ class RadioBackend:
             self.clear_audio()
 
     def clear_audio(self):
+        trace.event('audio_reset', epoch=self.audio_epoch, capture_frames=len(self.audio_queue),
+                    render_bytes=len(self.render_pcm), pending_writes=len(self.pending))
         self.audio_epoch += 1
         self.render_pcm.clear()
         self.render_started = None
@@ -247,11 +281,16 @@ class RadioBackend:
         limit = CAPTURE_MAX_FRAMES if self.audio_bridge else 4
         while self.audio_queue and (len(self.audio_queue) > limit or
                                    now-self.audio_queue[0][0] > AUDIO_MAX_AGE):
+            trace.event('capture_frame_dropped', suspicious=True, queued=len(self.audio_queue),
+                        age_ms=(now-self.audio_queue[0][0])*1000, capacity=limit,
+                        reason='capacity' if len(self.audio_queue)>limit else 'expired')
             self.audio_queue.popleft()
             self.capture_dropped += 1
         self.capture_high_water = max(self.capture_high_water, len(self.audio_queue))
 
     def discard_render(self, request):
+        trace.event('render_expired', suspicious=True, seq=request.seq, pending=self.render_requests_pending,
+                    buffered_bytes=len(self.render_pcm), budget_ms=self.render_max_age*1000)
         self.render_dropped += 1
         self.render_discarded_bytes += len(self.render_pcm)
         self.render_pcm.clear()
@@ -297,6 +336,10 @@ class RadioBackend:
                     self.event(operation='radio_associated', wcid=wcid)
                 elif kind == 2 and wcid == self.wcid and wcid != 0 and token == 0:
                     radio_packets = gip_packets(payload)
+                    for p in radio_packets:
+                        body = p[gip_header_size(p):]
+                        if p[0] == 2 and p[1] == 32 and len(body) >= 28 and len(p) <= 64 and body[8:10] == b'\x5e\x04':
+                            self.announce = p
                     if self.on_announce is not None:
                         for p in radio_packets:
                             body = p[gip_header_size(p):]
@@ -339,7 +382,9 @@ class RadioBackend:
                         # Bounded volatile queue, no PCM is written to journals.
                         arrived = self.clock()
                         if self.radio_audio_last is not None:
-                            self.radio_audio_max_gap = max(self.radio_audio_max_gap, arrived-self.radio_audio_last)
+                            gap = arrived-self.radio_audio_last
+                            self.radio_audio_max_gap = max(self.radio_audio_max_gap, gap)
+                            trace.event('radio_audio_gap', suspicious=gap>AUDIO_MAX_AGE, gap_ms=gap*1000)
                         self.radio_audio_last = arrived
                         if self.audio_bridge:
                             if not self.audio_layout:
@@ -354,6 +399,8 @@ class RadioBackend:
                             # retain at most two requests to bound burst latency.
                             if not self.independent_clock:
                                 credits = self.render_credits+len(packets)
+                                if credits > 2:
+                                    trace.event('render_credit_overflow', suspicious=True, credits=credits, capacity=2)
                                 self.render_credit_overflow += max(0,credits-2)
                                 self.render_credits = min(2,credits)
                             self.render_credit_time = arrived
@@ -370,6 +417,9 @@ class RadioBackend:
                                    packets=self.audio_rx)
                 elif kind == 17 and len(payload) == 4 and token != 0:
                     future = self.pending.get(token)
+                    status = struct.unpack('<i', payload)[0]
+                    trace.event('radio_write_ack', suspicious=status!=0 or future is None or wcid!=self.wcid,
+                                token=token, wcid=wcid, status=status, pending=len(self.pending))
                     if future is not None and not future.done():
                         if wcid != self.wcid:
                             future.set_result(-19)
@@ -518,6 +568,9 @@ class RadioBackend:
                     duration = .001*count
                     self.capture_deadline = max(self.capture_deadline+duration,self.clock()-duration)
                 packets = [self.audio_queue.popleft()[1] for _ in range(min(count,len(self.audio_queue)))]
+                concealed = max(0, count-len(packets))
+                if concealed:
+                    trace.event('capture_concealment', suspicious=True, seq=request.seq, frames=concealed)
                 while len(packets) < count:
                     packets.append(bytes((0x60,32,self.capture_sequence,50,192,0))+bytes(48))
                     self.capture_sequence = self.capture_sequence % 255 + 1
@@ -545,10 +598,15 @@ class RadioBackend:
             if not self.ready or generation != self.generation or epoch != self.audio_epoch:
                 return failed_completion(request,-19)
             waited = self.clock()-arrived
+            trace.event('render_queue_wait', suspicious=waited>self.render_max_age, seq=request.seq,
+                        waited_ms=waited*1000, pending=self.render_requests_pending,
+                        budget_ms=self.render_max_age*1000)
             self.render_max_wait = max(self.render_max_wait, waited)
             if waited > self.render_max_age:
                 return self.discard_render(request)
             if self.render_started is not None and self.clock()-self.render_started > self.render_max_age:
+                trace.event('render_buffer_expired', suspicious=True, seq=request.seq,
+                            buffered_bytes=len(self.render_pcm))
                 self.render_discarded_bytes += len(self.render_pcm)
                 self.render_pcm.clear()
                 self.render_started = None
@@ -557,6 +615,7 @@ class RadioBackend:
             except asyncio.CancelledError:
                 # UNLINK must not leave unsent PCM for a later URB to replay.
                 if self.audio_epoch == epoch:
+                    trace.event('render_cancelled', seq=request.seq, buffered_bytes=len(self.render_pcm))
                     self.render_discarded_bytes += len(self.render_pcm)
                     self.render_pcm.clear()
                     self.render_started = None
@@ -578,6 +637,8 @@ class RadioBackend:
             return failed_completion(request, -71)
         self.render_fragment_count += len(fragments)
         if len(self.render_pcm)+192*len(fragments) > 192*CAPTURE_MAX_FRAMES or len(self.pending) >= 64:
+            trace.event('render_queue_full', suspicious=True, seq=request.seq,
+                        buffered_bytes=len(self.render_pcm), pending=len(self.pending), fragments=len(fragments))
             return failed_completion(request, -12)
         generation = self.generation
         if not self.render_pcm:
@@ -634,19 +695,25 @@ class RadioBackend:
                 self.writer.write(frame(18, self.wcid, packet, token))
                 await asyncio.wait_for(self.writer.drain(), 5)
                 status = await asyncio.wait_for(future, 5)
-                self.radio_ack_max_wait = max(self.radio_ack_max_wait, self.clock()-sent)
+                waited = self.clock()-sent
+                self.radio_ack_max_wait = max(self.radio_ack_max_wait, waited)
+                trace.event('radio_audio_ack_wait', suspicious=waited>.020 or status!=0,
+                            token=token, seq=request.seq, waited_ms=waited*1000, status=status)
                 if self.generation != generation or self.audio_epoch != epoch:
                     status = -19
+                if status == -18:
+                    # Explicit unsent-media expiry is not a radio TX failure.
+                    return self.discard_render(request)
                 if status != 0:
                     if self.generation == generation and self.audio_epoch == epoch:
-                        await self.reset()
+                        await self.recover_audio()
                     return failed_completion(request, status)
                 self.audio_tx += 1
                 if self.audio_tx <= 8 or self.audio_tx % 500 == 0:
                     self.event(operation='radio_audio_out', packets=self.audio_tx, pcm_bytes=1536)
             except (ConnectionError, TimeoutError, AttributeError):
                 if self.generation == generation and self.audio_epoch == epoch:
-                    await self.reset()
+                    await self.recover_audio()
                 return failed_completion(request, -19)
             finally:
                 self.pending.pop(token, None)
@@ -659,6 +726,7 @@ class RadioBackend:
 
     def status(self):
         return {'RadioConnected': self.writer is not None, 'Wcid': self.wcid,
+                'RadioAssociated': self.importable, 'RecoveryRequired': self.recovery_required,
                 'Generation': self.generation,
                 'Ready': self.ready, 'QueuedPackets': len(self.queue),
                 'PendingWrites': len(self.pending), 'RxPackets': self.rx_packets,

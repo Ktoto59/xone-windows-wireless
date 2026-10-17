@@ -40,6 +40,43 @@ try{
     Check ((Get-Content -LiteralPath $custom -Raw | ConvertFrom-Json).Error -eq 'Native bootstrap preserves failure') 'WOW64 bootstrap lost diagnostics'
     Write-Output 'PASS actual WOW64-to-x64 maintenance bootstrap, spaced paths and failure propagation'
     Write-Output 'PASS maintenance diagnostics, helper-load failure, custom path and successful retry'
+    [IO.File]::WriteAllText($helper,@'
+function Read-XoneJson($Path){if(Test-Path -LiteralPath $Path){Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json}}
+function Write-XoneJson($Path,$Value){[void][IO.Directory]::CreateDirectory((Split-Path -Parent $Path));$Value | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $Path -Encoding UTF8}
+function Move-XonePreviousInstallation($Root){}
+function Initialize-XoneApplication($Root,$InstanceId,[switch]$AllowPendingRestart){Write-XoneJson (Join-Path $Root 'config/devices.local.json') @{Devices=@()};return @{ReconnectRequired=$false}}
+function Get-XoneUsbipStatus{return @{Ready=$true}}
+function Test-XoneFirmware($Root){return $true}
+function Read-XoneDeviceConfig($Path,[switch]$AllowEmpty){return @{Devices=@()}}
+'@)
+    [IO.File]::WriteAllText((Join-Path $fixture 'scripts/Set-AutomaticBridge.ps1'),@'
+param($Mode,[switch]$NoStart)
+@{Mode=$Mode;NoStart=[bool]$NoStart} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'work/startup-call.json')
+'@)
+    & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $action -Action InitializePreferences -Startup off
+    Check ($LASTEXITCODE -eq 0) 'Startup opt-out initialization failed'
+    & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $action -Action AutomaticSetup
+    Check ($LASTEXITCODE -eq 0) 'Automatic setup fixture failed'
+    $preferences=Get-Content -LiteralPath (Join-Path $fixture 'config/app.local.json') -Raw | ConvertFrom-Json
+    Check ($preferences.AutoStart -eq $false -and $preferences.OwnerSid) 'Adapter setup replaced startup opt-out or owner identity'
+    & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $action -Action ConfigureStartup
+    Check ($LASTEXITCODE -eq 0) 'Startup opt-out application failed'
+    $startupCall=Get-Content -LiteralPath (Join-Path $fixture 'work/startup-call.json') -Raw | ConvertFrom-Json
+    Check ($startupCall.Mode -eq 'Disable') 'Opt-out enabled automatic startup'
+    & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $action -Action Start
+    Check ($LASTEXITCODE -eq 0) 'Independent start-now action failed'
+    $startupCall=Get-Content -LiteralPath (Join-Path $fixture 'work/startup-call.json') -Raw | ConvertFrom-Json
+    Check ($startupCall.Mode -eq 'Start' -and -not $startupCall.NoStart) 'Start-now implicitly enabled sign-in startup'
+    & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $action -Action InitializePreferences -Startup on
+    Check ($LASTEXITCODE -eq 0) 'Startup opt-in initialization failed'
+    & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $action -Action ConfigureStartup
+    Check ($LASTEXITCODE -eq 0) 'Startup opt-in application failed'
+    $startupCall=Get-Content -LiteralPath (Join-Path $fixture 'work/startup-call.json') -Raw | ConvertFrom-Json
+    Check ($startupCall.Mode -eq 'Enable' -and $startupCall.NoStart) 'Startup registration ignored separate start-now choice'
+    [IO.File]::Delete((Join-Path $fixture 'config/app.local.json'))
+    & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $action -Action ConfigureStartup | Out-Null
+    Check ($LASTEXITCODE -eq 1) 'Missing preferences silently enabled startup'
+    Write-Output 'PASS startup opt-out survives adapter setup, registration is separate from start-now, missing preferences fail explicitly'
 }finally{
     $resolved=[IO.Path]::GetFullPath($fixture)
     $boundary=[IO.Path]::GetFullPath((Join-Path $taskRoot 'work'))+[IO.Path]::DirectorySeparatorChar

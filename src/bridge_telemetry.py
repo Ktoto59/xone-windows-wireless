@@ -3,6 +3,7 @@
 from collections import deque
 import json
 import threading
+import development_trace as trace
 
 
 class BridgeTelemetry:
@@ -17,10 +18,19 @@ class BridgeTelemetry:
         self.stopping = False
         self.dropped = self.errors = 0
         self.event_count = self.diagnostic_count = 0
+        self.previous_counters = {}
         self.thread = threading.Thread(target=self._run, name='USBIP telemetry', daemon=True)
         self.thread.start()
 
     def event(self, fields):
+        if trace.active():
+            operation = fields.get('operation', '')
+            suspicious = (operation in ('close', 'radio_removed', 'radio_closed',
+                            'automatic_worker_closed', 'automatic_stopped', 'attach_retry')
+                          or any(word in operation for word in ('error', 'timeout', 'overflow', 'underrun'))
+                          or (isinstance(fields.get('status'), (int, float)) and fields['status'] != 0))
+            # The development file receives every event before the console cap.
+            trace.event('bridge_event', suspicious=suspicious, event=fields)
         # Preserve the existing log limits; even a blocked console has a bound.
         self.event_count += 1
         diagnostic = fields.get('operation', '').startswith(('radio_', 'usb_audio_'))
@@ -38,6 +48,26 @@ class BridgeTelemetry:
             self.condition.notify()
 
     def publish(self, fields):
+        if trace.active():
+            increased = {}
+            for key, value in fields.items():
+                if isinstance(value, (int, float)) and not isinstance(value, bool) and any(
+                        word in key.lower() for word in ('error', 'dropped', 'discarded', 'overflow', 'concealed', 'expired')):
+                    previous = self.previous_counters.get(key, 0)
+                    if value > previous:
+                        increased[key] = dict(previous=previous, current=value)
+                    self.previous_counters[key] = value
+            for key, threshold in (('RadioAudioMaxGapMs', 32), ('RadioAudioMaxAckMs', 20),
+                                   ('RenderMaxQueueWaitMs', fields.get('RenderMaxAgeMs', 64))):
+                value = fields.get(key, 0)
+                if isinstance(value, (int, float)):
+                    if value > threshold and value > self.previous_counters.get(key, 0):
+                        increased[key] = dict(previous=self.previous_counters.get(key, 0),
+                                              current=value, threshold=threshold)
+                    self.previous_counters[key] = value
+            trace.event('status_snapshot', status=fields)
+            if increased:
+                trace.event('counter_increased', suspicious=True, counters=increased)
         if self.status_file is None:
             return
         with self.condition:
@@ -64,11 +94,13 @@ class BridgeTelemetry:
                     self.write_status(snapshot)
                 except OSError:
                     self.errors += 1
+                    trace.event('status_write_error', suspicious=True, errors=self.errors)
             for fields in events:
                 try:
                     self.emit(fields)
                 except OSError:
                     self.errors += 1
+                    trace.event('console_write_error', suspicious=True, errors=self.errors)
             if stopping:
                 return
 
