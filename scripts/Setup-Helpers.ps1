@@ -229,6 +229,54 @@ function Set-XoneBridgeBackend([string]$Root,[ValidateSet('cpp','python')][strin
     $value | Add-Member -NotePropertyName BridgeBackend -NotePropertyValue $Backend -Force
     Write-XoneJson $path $value
 }
+function Get-XoneRecoveryInf($State){return (Join-Path (Join-Path $env:windir 'INF') $State.InfName)}
+function Assert-XoneRecovery([string]$Root,[string]$InstanceId){
+    $saved=Read-XoneJson (Join-Path $Root 'work/binding-state.json')
+    if(-not (Test-XoneStockBinding $saved) -or $saved.InstanceId -ne $InstanceId){
+        throw 'Driver recovery data is missing or belongs to another adapter. Keep the previous installation and transfer its matching binding-state.json and driver-backup before retrying Setup.'
+    }
+    foreach($name in @('UpperFilters','InterfaceGuids')){
+        if($saved.$name.Present -isnot [bool] -or -not $saved.$name.PSObject.Properties['Value']){throw 'Driver recovery registry snapshots are incomplete. Keep the original backup and retry Setup.'}
+    }
+    $backupRoot=Join-Path $Root 'work/driver-backup'
+    if(-not [IO.Directory]::Exists($backupRoot)){throw 'The driver-backup folder is missing. Keep the previous installation and transfer its recovery backup before retrying Setup.'}
+    # OneDrive placeholders also have ReparsePoint; only actual filesystem links
+    # redirect a backup outside its folder. Read/hash operations hydrate cloud files.
+    if((Get-Item -LiteralPath $backupRoot -Force).LinkType -in @('SymbolicLink','Junction')){throw 'A linked driver-backup folder is not accepted.'}
+    $items=@(Get-ChildItem -LiteralPath $backupRoot -Recurse -Force)
+    if(@($items | Where-Object {$_.LinkType -in @('SymbolicLink','Junction')}).Count){throw 'Links are not accepted inside driver recovery backups.'}
+    $package=Get-XoneAdapterPackage $InstanceId
+    if(-not @($items | Where-Object {-not $_.PSIsContainer -and $_.Name -eq $package.Catalog}).Count -or
+       -not @($items | Where-Object {-not $_.PSIsContainer -and $_.Extension -eq '.sys'}).Count){throw 'The saved driver catalog or driver binary is missing. Keep the original driver backup and retry Setup.'}
+    $infs=@($items | Where-Object {-not $_.PSIsContainer -and $_.Name -eq $package.Inf})
+    $installedInf=Get-XoneRecoveryInf $saved
+    if($infs.Count -ne 1 -or -not [IO.File]::Exists($installedInf) -or
+       (Get-FileHash -LiteralPath $infs[0].FullName -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $installedInf -Algorithm SHA256).Hash){
+        throw 'The saved Microsoft driver package could not be verified against its installed INF. Keep the recovery backup and repair it before retrying Setup.'
+    }
+    return $saved
+}
+function Copy-XoneRecovery([string]$OldRoot,[string]$Root,[string]$InstanceId){
+    $target=Join-Path $Root 'work/binding-state.json'
+    if([IO.File]::Exists($target)){[void](Assert-XoneRecovery $Root $InstanceId);return}
+    $saved=Assert-XoneRecovery $OldRoot $InstanceId
+    $source=[IO.Path]::GetFullPath((Join-Path $OldRoot 'work/driver-backup')).TrimEnd('\')+'\'
+    $destination=Join-Path $Root 'work/driver-backup'
+    if([IO.Directory]::Exists($destination)){
+        $existing=@(Get-Item -LiteralPath $destination -Force)+@(Get-ChildItem -LiteralPath $destination -Recurse -Force)
+        if(@($existing | Where-Object {$_.LinkType -in @('SymbolicLink','Junction')}).Count){throw 'Links are not accepted inside the destination recovery backup.'}
+    }
+    foreach($file in Get-ChildItem -LiteralPath $source -Recurse -File -Force){
+        if(-not $file.FullName.StartsWith($source,[StringComparison]::OrdinalIgnoreCase)){throw 'Recovery file outside the backup folder refused.'}
+        $newPath=Join-Path $destination $file.FullName.Substring($source.Length)
+        [void][IO.Directory]::CreateDirectory((Split-Path -Parent $newPath))
+        if(-not [IO.File]::Exists($newPath)){[IO.File]::Copy($file.FullName,$newPath,$false)}
+        if((Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $newPath -Algorithm SHA256).Hash){throw 'Recovery copy differs from an existing backup; no metadata was replaced.'}
+    }
+    # Publish the registry/binding snapshots only after every backup file is safe.
+    Write-XoneJson $target $saved
+    [void](Assert-XoneRecovery $Root $InstanceId)
+}
 function Initialize-XoneApplication([string]$Root,[string]$InstanceId,[switch]$AllowPendingRestart){
     $restartMarker=Join-Path $Root 'work/setup-restart-required.json'
     if([IO.File]::Exists($restartMarker)){
@@ -244,6 +292,8 @@ function Initialize-XoneApplication([string]$Root,[string]$InstanceId,[switch]$A
         [void](Read-XoneDeviceConfig $path -AllowEmpty)
         if($config.AdapterInstanceId -and $config.AdapterInstanceId -ne $InstanceId){throw 'This configuration belongs to a different adapter. Select it or use Advanced settings.'}
     }
+    $script:XoneSetupStage='RecoveryValidation'
+    if((Get-XoneDeviceService $InstanceId) -eq 'WinUSB'){[void](Assert-XoneRecovery $Root $InstanceId)}
     $script:XoneSetupStage='StopExistingBridge'
     Stop-XoneManagedBridge $Root;Assert-XoneRadioIdle
     Initialize-XonePrerequisites $Root -AllowPendingRestart:$AllowPendingRestart
@@ -255,6 +305,8 @@ function Initialize-XoneApplication([string]$Root,[string]$InstanceId,[switch]$A
         & (Join-Path $Root 'scripts/Switch-WinUSB.ps1') -Mode Bind -InstanceId $InstanceId
         $switched=$true
     }elseif($service -ne 'WinUSB'){throw 'Adapter preparation did not select the expected driver.'}
+    $script:XoneSetupStage='RecoveryValidation'
+    [void](Assert-XoneRecovery $Root $InstanceId)
     $reconnect=$false
     if($switched){
         $script:XoneSetupStage='AdapterRestart'
@@ -280,6 +332,18 @@ function Move-XonePreviousInstallation([string]$Root){
     if($actions.Count -ne 1 -or $actions[0].Arguments -or [IO.Path]::GetFileName($actions[0].Execute) -ne 'xone-background.exe'){throw 'The existing startup task is not an owned xone background host.'}
     $oldRoot=Split-Path -Parent (Split-Path -Parent $actions[0].Execute)
     if([IO.Path]::GetFullPath($oldRoot) -eq [IO.Path]::GetFullPath($Root)){return}
+    Assert-XonePanelClosed $oldRoot
+    $oldConfig=Join-Path $oldRoot 'config/devices.local.json';$newConfig=Join-Path $Root 'config/devices.local.json'
+    $previous=Read-XoneDeviceConfig $oldConfig -AllowEmpty
+    $current=Read-XoneJson $newConfig
+    if(-not $previous.AdapterInstanceId -or ($current.AdapterInstanceId -and $current.AdapterInstanceId -ne $previous.AdapterInstanceId)){throw 'Previous and current installations do not select the same adapter.'}
+    # Finish copying recovery before unregistering the only pointer to OldRoot.
+    # A failed copy leaves the old task and all original recovery files in place.
+    Copy-XoneRecovery $oldRoot $Root $previous.AdapterInstanceId
+    if(-not [IO.File]::Exists($newConfig)){
+        [void][IO.Directory]::CreateDirectory((Split-Path -Parent $newConfig))
+        Copy-Item -LiteralPath $oldConfig -Destination $newConfig
+    }
     # Never execute scripts/commands from the old installation with setup rights.
     $oldMemoryHost=Get-XoneMemoryHost $oldRoot
     if($oldMemoryHost){& $oldMemoryHost --stop | Out-Null}else{
@@ -290,13 +354,6 @@ function Move-XonePreviousInstallation([string]$Root){
     if($state -and (Test-XoneProcess $state.Process)){throw 'The previous installation did not stop; its recovery data is intact.'}
     Stop-ScheduledTask -TaskName $task.TaskName -ErrorAction SilentlyContinue
     Unregister-ScheduledTask -TaskName $task.TaskName -Confirm:$false
-    $oldConfig=Join-Path $oldRoot 'config/devices.local.json';$newConfig=Join-Path $Root 'config/devices.local.json'
-    if(-not [IO.File]::Exists($newConfig) -and [IO.File]::Exists($oldConfig)){[void](Read-XoneDeviceConfig $oldConfig -AllowEmpty);Copy-Item -LiteralPath $oldConfig -Destination $newConfig}
-    $backup=Read-XoneJson (Join-Path $oldRoot 'work/binding-state.json')
-    if($backup -and -not [IO.File]::Exists((Join-Path $Root 'work/binding-state.json'))){
-        if(-not (Test-XoneStockBinding $backup)){throw 'Previous adapter recovery metadata is invalid.'}
-        Write-XoneJson (Join-Path $Root 'work/binding-state.json') $backup
-    }
 }
 function Add-XoneApplicationDevice([string]$Root,[string]$InstanceId,[ValidateSet('controller-0b12-usb.json','headset-0b17-usb.json','headset-0b32-usb.json')][string]$Profile){
     $path=Join-Path $Root 'config/devices.local.json'

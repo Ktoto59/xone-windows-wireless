@@ -95,6 +95,15 @@ Run the newer Setup as the same Windows user. Setup stops its owned host and kee
 private configuration/recovery metadata. A recognized earlier installation's
 startup task can be migrated; an unrelated active radio session blocks setup.
 
+Development Setup after alpha.6.1 transfers both `binding-state.json` and the
+exported `driver-backup` from a recognized previous installation. It checks the
+selected adapter, registry snapshots, backup hashes and saved installed INF before
+accepting the transfer, then removes the old startup task. Originals are retained.
+An adapter already bound to WinUSB without matching recovery data blocks Setup
+with recovery instructions; it is no longer accepted as a complete installation.
+If the old task was previously removed, Setup cannot infer its former folder.
+Keep that folder and its recovery data for an explicit, verified transfer.
+
 Keep the adapter in its original USB port and remove **xone Wireless** (or the
 older **xone-windows-wireless** entry)
 through Windows **Installed apps**. The uninstaller stops its host, unregisters

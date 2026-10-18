@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Validate matching stock-driver recovery metadata, registry snapshots and the
+  exported driver package before accepting an existing WinUSB installation or
+  completing setup. Migrate the entire backup with hash checks before removing
+  the old startup task, preserving its folder reference and original data on
+  failure. Unknown WinUSB ownership now requires explicit recovery at setup time.
+
 - Make the Start menu shortcuts switch adapter modes: Stop pauses the owned
   startup task, stops the bridge and restores its saved Microsoft driver; Start
   selects WinUSB and launches the limited user-session task. Restore the saved
