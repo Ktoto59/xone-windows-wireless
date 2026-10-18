@@ -35,6 +35,9 @@ try{
     $taskLock=[IO.FileStream]::new($lockPath,[IO.FileMode]::Create,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
     Reject {Assert-XonePanelClosed $taskDirectory} 'Uninstall did not reject a running panel'
     $taskLock.Dispose();$taskLock=$null;Assert-XonePanelClosed $taskDirectory
+    $taskLock=[IO.FileStream]::new((Join-Path $taskDirectory 'work/mode-switch.lock'),[IO.FileMode]::Create,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+    Reject {Assert-XonePanelClosed $taskDirectory} 'Upgrade/uninstall accepted a concurrent mode switch'
+    $taskLock.Dispose();$taskLock=$null;Assert-XonePanelClosed $taskDirectory
     $old=[pscustomobject]@{Pid=$PID;StartTicks=1}
     Check (-not (Test-XoneProcess $old)) 'Reused PID accepted without matching process start'
     # Test download verification without any network or executable installer.

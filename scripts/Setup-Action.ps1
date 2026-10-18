@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 [CmdletBinding()]
-param([Parameter(Mandatory=$true)][ValidateSet('Prepare','Bind','Restore','Remove','Upgrade','Start','Stop','Discover','AutomaticEnable','AutomaticDisable','AutomaticSetup','UseCpp','UsePython','Configure','Enroll','InitializePreferences','ConfigureStartup')][string]$Action,
+param([Parameter(Mandatory=$true)][ValidateSet('Prepare','Bind','Restore','Remove','Upgrade','Start','Stop','SwitchToBridge','SwitchToStock','Discover','AutomaticEnable','AutomaticDisable','AutomaticSetup','UseCpp','UsePython','Configure','Enroll','InitializePreferences','ConfigureStartup')][string]$Action,
       [string]$InstanceId='',[string]$ResultPath='',[string]$DiscoveryPath='',[string]$Profile='',
       [ValidateSet('on','off')][string]$Startup='on')
 if([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess){
@@ -86,6 +86,11 @@ try{
             if(-not $state -or -not (Test-XoneProcess $state.Radio)){throw 'The bridge did not become ready. Inspect the work logs.'}
         }
         Stop {Stop-XoneManagedBridge $taskRoot}
+        {$_ -in @('SwitchToBridge','SwitchToStock')} {
+            . (Join-Path $PSScriptRoot 'Mode-Helpers.ps1')
+            $mode=if($Action -eq 'SwitchToBridge'){'Bridge'}else{'Stock'}
+            $taskResult.AdapterMode=Set-XoneAdapterMode $taskRoot $mode $InstanceId
+        }
         {$_ -in @('UseCpp','UsePython')} {
             $backend=if($Action -eq 'UseCpp'){'cpp'}else{'python'}
             if($backend -eq 'cpp' -and -not (Test-Path -LiteralPath (Join-Path $taskRoot 'outputs/xone-probe-cpp.exe'))){throw 'Build or install the C++ bridge first.'}

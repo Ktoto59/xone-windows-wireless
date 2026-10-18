@@ -1,6 +1,6 @@
 # Install, upgrade and remove
 
-This guide describes the alpha.6 installer.
+This guide describes alpha.6 and explicitly marked development changes.
 Download Setup from the [alpha.6 release](https://github.com/Ktoto59/xone-windows-wireless/releases/tag/v0.1.0-alpha.6)
 or [build an installer](INSTALLER.md) from source. Older alpha.5.2 startup
 behavior differs as noted below.
@@ -50,13 +50,44 @@ application/Windows tools and is not automatic duplication by this bridge.
 Alpha.6 offers separate start-now and sign-in startup choices and remembers them
 on upgrade. Start-now is skipped if Windows requires a reboot; when sign-in
 startup is off, use **Start xone Wireless** from the Start menu after restart.
-**Stop xone Wireless** stops the owned bridge without changing adapter drivers.
+In the published alpha.6, **Stop xone Wireless** stops the owned bridge without
+changing adapter drivers. The development shortcuts switch modes as described below.
 The older alpha.5.2 installer enables immediate and sign-in startup automatically.
 
 The invisible C++ host runs in the installing user's session.
 It does not run before sign-in. No Python, persistent PowerShell, control panel,
 tray icon or overlay is installed. Firmware is loaded into adapter RAM, not
 flashed as a persistent adapter update.
+
+## Switch between the bridge and the Microsoft driver
+
+**Development builds after alpha.6:** use the Start menu shortcuts, leaving the
+adapter connected in its configured USB port. Close audio/input sessions and
+switch the wireless device off before changing modes.
+
+- **Stop xone Wireless** stops the owned bridge, removes its startup task and
+  restores the saved Microsoft driver for this adapter. Your sign-in startup
+  preference is retained, but the bridge stays off until you use Start again.
+- **Start xone Wireless** selects WinUSB, restores sign-in startup if you had
+  enabled it, and requests a start of the limited user-session bridge task.
+  An opted-out sign-in preference remains off.
+
+Changing drivers requests administrator approval. Approve with the same Windows
+account that installed the application. Repeating a shortcut when its driver is
+already selected does not request UAC or rebind the adapter. Errors and required
+reconnect/restart steps appear in a dialog; a failed switch does not start the
+bridge. If the headset does not reconnect after a successful change, turn it off,
+unplug the adapter for 10 seconds, reconnect it, then turn the headset on.
+
+The shortcuts require matching private recovery data and refuse another adapter,
+account or installation's startup task. Keep `work/binding-state.json` and the
+driver backup. Low-level `Setup-Action.ps1 -Action Start/Stop` still control only
+the process for installer/maintenance use; `Set-XoneMode.ps1 -Mode Start/Stop`
+performs the manual mode change. Only these maintenance operations access files
+or run PowerShell; the audio path is unchanged. Hardware validation is pending.
+
+The published alpha.6 does not include mode-switching shortcuts. To restore its
+stock binding automatically, uninstall it with the adapter connected as below.
 
 ## Upgrade and removal
 

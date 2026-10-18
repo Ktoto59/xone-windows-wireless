@@ -33,8 +33,13 @@ an on-demand task without a sign-in trigger.
 The shipped setup scripts run automatically inside the installation workflow;
 users do not have to execute them separately. Progress text identifies saving
 preferences, preparing the adapter, applying startup settings and starting the
-bridge. The Start menu includes native-host start, stop and uninstall shortcuts.
-Only adapter/dependency preparation and owned stock-driver restoration need UAC.
+bridge. Development Setup alpha.6.1 adds Start/Stop mode-switching shortcuts and
+an uninstall shortcut. Start selects WinUSB and requests the limited host task;
+Stop restores the owned Microsoft driver and pauses automatic startup until Start
+is used again. The saved sign-in preference is retained. Driver changes request
+UAC; the native runtime and sign-in task remain unelevated. See
+[mode switching](INSTALL.md#switch-between-the-bridge-and-the-microsoft-driver).
+Published alpha.6 shortcuts only start/stop the process.
 
 The radio child is owned through a Windows job. Runtime USBip ports and process
 identities belong to that host; removal does not kill arbitrary Python processes

@@ -93,6 +93,13 @@ the older alpha.5.2 installer enables both automatically. Newer Setup can
 replace an older version as the same Windows user, retaining private configuration
 and recovery data. No prior uninstall is required.
 
+In the development checkout after alpha.6, **Stop xone Wireless** also restores
+the Microsoft adapter driver and pauses automatic bridge startup. **Start xone
+Wireless** selects WinUSB and restores the saved startup choice. Driver changes
+require UAC approval; reconnect/restart instructions are shown when needed. The
+published alpha.6 shortcuts only control the bridge process. See
+[mode switching](docs/INSTALL.md#switch-between-the-bridge-and-the-microsoft-driver).
+
 The invisible host runs in the installing user's session. No Python installation,
 resident PowerShell, tray application or test-signing mode is required. Remove it
 through Windows **Installed apps**, keeping the adapter connected. Read the

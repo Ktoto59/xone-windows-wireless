@@ -26,7 +26,7 @@ try{
     }
     # Check every installed maintenance script for bare executable invocations.
     # Cmdlets are resolved normally; external tools must have an explicit path.
-    foreach($name in @('Setup-Action','Setup-Helpers','Device-Config','Switch-WinUSB','Import-Firmware','Set-AutomaticBridge','Run-MaintainedBridge')){
+    foreach($name in @('Setup-Action','Setup-Helpers','Device-Config','Switch-WinUSB','Import-Firmware','Set-AutomaticBridge','Run-MaintainedBridge','Mode-Helpers','Set-XoneMode')){
         $tokens=$null;$errors=$null
         $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $taskRoot ('scripts/'+$name+'.ps1')),[ref]$tokens,[ref]$errors)
         if($errors.Count){throw ('Maintenance syntax error: '+$name)}

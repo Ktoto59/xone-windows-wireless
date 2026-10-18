@@ -37,10 +37,11 @@ $taskStopShortcut=Join-Path $taskStartMenu 'Stop xone Wireless.lnk'
 if(-not (Test-Path -LiteralPath $taskStartShortcut) -or -not (Test-Path -LiteralPath $taskStopShortcut)){throw 'Start/stop shortcuts are missing'}
 $taskShell=New-Object -ComObject WScript.Shell
 try{
-    $taskLink=$taskShell.CreateShortcut($taskStartShortcut)
-    if([IO.Path]::GetFullPath($taskLink.TargetPath) -ne [IO.Path]::GetFullPath((Join-Path $taskInstall 'outputs/xone-background.exe'))){throw 'Start shortcut targets another installation'}
-    $taskLink=$taskShell.CreateShortcut($taskStopShortcut)
-    if(-not $taskLink.Arguments.Contains((Join-Path $taskInstall 'scripts\Setup-Action.ps1')) -or -not $taskLink.Arguments.Contains('-Action Stop') -or -not $taskLink.Arguments.Contains('-WindowStyle Hidden')){throw 'Stop shortcut does not invoke owned hidden maintenance'}
+    foreach($taskMode in @('Start','Stop')){
+        $taskLink=$taskShell.CreateShortcut((Join-Path $taskStartMenu ($taskMode+' xone Wireless.lnk')))
+        if([IO.Path]::GetFullPath($taskLink.TargetPath) -ne [IO.Path]::GetFullPath((Join-Path $env:windir 'System32/WindowsPowerShell/v1.0/powershell.exe'))){throw 'Mode shortcut does not use native Windows PowerShell'}
+        if(-not $taskLink.Arguments.Contains((Join-Path $taskInstall 'scripts\Set-XoneMode.ps1')) -or -not $taskLink.Arguments.Contains('-Mode '+$taskMode) -or -not $taskLink.Arguments.Contains('-WindowStyle Hidden')){throw 'Mode shortcut does not invoke owned hidden switching'}
+    }
 }finally{[void][Runtime.InteropServices.Marshal]::ReleaseComObject($taskLink);[void][Runtime.InteropServices.Marshal]::ReleaseComObject($taskShell)}
 foreach($taskFile in $taskManifest.Files){
     if((Get-FileHash -LiteralPath (Join-Path $taskInstall $taskFile.Path) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $taskFile.SHA256){throw ('Installed payload differs: '+$taskFile.Path)}

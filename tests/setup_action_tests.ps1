@@ -77,6 +77,19 @@ param($Mode,[switch]$NoStart)
     & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $action -Action ConfigureStartup | Out-Null
     Check ($LASTEXITCODE -eq 1) 'Missing preferences silently enabled startup'
     Write-Output 'PASS startup opt-out survives adapter setup, registration is separate from start-now, missing preferences fail explicitly'
+    [IO.File]::WriteAllText((Join-Path $fixture 'scripts/Mode-Helpers.ps1'),@'
+function Set-XoneAdapterMode($Root,$Mode,$InstanceId){
+    if($InstanceId -ne 'USB\VID_045E&PID_02FE\TEST'){throw 'Adapter identity was lost'}
+    return @{Mode=$Mode;Changed=$true;ReconnectRequired=$false;RestartRequired=$false}
+}
+'@)
+    foreach($mode in @('Bridge','Stock')){
+        & $wow -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $action -Action ('SwitchTo'+$mode) -InstanceId 'USB\VID_045E&PID_02FE\TEST'
+        Check ($LASTEXITCODE -eq 0) 'Mode maintenance action failed'
+        $state=Get-Content -LiteralPath (Join-Path $fixture ('work/setup-SwitchTo'+$mode+'.json')) -Raw | ConvertFrom-Json
+        Check ($state.Success -and $state.AdapterMode.Mode -eq $mode -and $state.AdapterMode.Changed -and $state.ProcessBitness -eq 64) 'Mode result/identity lost across native maintenance bootstrap'
+    }
+    Write-Output 'PASS mode maintenance result propagation and selected-adapter identity across WOW64 bootstrap'
 }finally{
     $resolved=[IO.Path]::GetFullPath($fixture)
     $boundary=[IO.Path]::GetFullPath((Join-Path $taskRoot 'work'))+[IO.Path]::DirectorySeparatorChar

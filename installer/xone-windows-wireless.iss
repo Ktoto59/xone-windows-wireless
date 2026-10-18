@@ -1,6 +1,6 @@
 ; SPDX-License-Identifier: GPL-2.0-or-later
 #ifndef AppVersion
-  #define AppVersion "0.1.0-alpha.6"
+  #define AppVersion "0.1.0-alpha.6.1"
 #endif
 #ifndef StageDir
   #error StageDir must point to a verified public release stage
@@ -52,8 +52,8 @@ Name: "startnow"; Description: "Start xone Wireless after installation"; GroupDe
 Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\Start xone Wireless"; Filename: "{app}\outputs\xone-background.exe"; WorkingDir: "{app}"
-Name: "{group}\Stop xone Wireless"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File ""{app}\scripts\Setup-Action.ps1"" -Action Stop"; WorkingDir: "{app}"; IconFilename: "{app}\outputs\xone-background.exe"
+Name: "{group}\Start xone Wireless"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File ""{app}\scripts\Set-XoneMode.ps1"" -Mode Start"; WorkingDir: "{app}"; IconFilename: "{app}\outputs\xone-background.exe"; Comment: "Select WinUSB and start the bridge; driver changes require administrator approval"
+Name: "{group}\Stop xone Wireless"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File ""{app}\scripts\Set-XoneMode.ps1"" -Mode Stop"; WorkingDir: "{app}"; IconFilename: "{app}\outputs\xone-background.exe"; Comment: "Stop the bridge and restore the Microsoft driver; driver changes require administrator approval"
 Name: "{group}\Uninstall xone-windows-wireless"; Filename: "{uninstallexe}"; IconFilename: "{app}\outputs\xone-background.exe"; IconIndex: 0
 
 [Code]
@@ -69,7 +69,7 @@ begin
     'Windows asks for administrator approval for adapter setup. The first USBip installation can briefly restart USB hubs.' + NewLine + NewLine +
     MemoTasksInfo + NewLine + NewLine +
     'Do not update headset/controller firmware through this bridge. Stop it and use a physical USB data cable.' + NewLine + NewLine +
-    'Use the Start menu shortcuts to start or stop the bridge later. No control window or tray icon is required.';
+    'Start selects WinUSB and runs the bridge; Stop returns to the Microsoft driver. Driver changes ask for administrator approval.';
 end;
 function StartupChoice: String;
 begin

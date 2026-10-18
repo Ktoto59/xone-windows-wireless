@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 [CmdletBinding()]
-param([ValidatePattern('^\d+\.\d+\.\d+(?:-[a-z0-9.]+)?$')][string]$Version='0.1.0-alpha.6',
+param([ValidatePattern('^\d+\.\d+\.\d+(?:-[a-z0-9.]+)?$')][string]$Version='0.1.0-alpha.6.1',
       [string]$LauncherDir='')
 $ErrorActionPreference='Stop'
 $taskRoot=Split-Path -Parent $PSScriptRoot
@@ -32,6 +32,7 @@ $taskRuntimeFiles=@('LICENSE','third_party/json/LICENSE.MIT','third_party/vigem/
     'docs/INSTALL.md','docs/TROUBLESHOOTING.md','docs/cpp-bridge.md',
     'docs/LIMITATIONS.md','docs/PRIVACY.md','docs/UPSTREAM.md',
     'scripts/Setup-Action.ps1','scripts/Setup-Helpers.ps1','scripts/Device-Config.ps1',
+    'scripts/Set-XoneMode.ps1','scripts/Mode-Helpers.ps1',
     'scripts/Switch-WinUSB.ps1','scripts/Adapter-IdlePower.ps1','scripts/Set-AdapterIdlePower.ps1','scripts/Import-Firmware.ps1',
     'scripts/Set-AutomaticBridge.ps1','scripts/Run-MaintainedBridge.ps1','scripts/Get-ControllerStatus.ps1','docs/RUNTIME-IO.md')
 $taskSourceExtra=@('README.md','.gitignore','.gitattributes','.mailmap','CHANGELOG.md',

@@ -356,10 +356,12 @@ function Restore-XoneForRemoval([string]$Root){
     if($service -ne (Get-XoneAdapterPackage $state.InstanceId).Service){throw 'Stock driver restoration is not verified. Keep this installation and its recovery data.'}
 }
 function Assert-XonePanelClosed([string]$Root){
-    $path=Join-Path $Root 'work/control-panel.lock'
-    if(-not (Test-Path -LiteralPath $path)){return}
-    $stream=$null
-    try{$stream=[IO.FileStream]::new($path,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)}
-    catch [IO.IOException]{throw 'Close the xone-windows-wireless control panel before updating or uninstalling.'}
-    finally{if($stream){$stream.Dispose()}}
+    foreach($name in @('control-panel.lock','mode-switch.lock')){
+        $path=Join-Path $Root ('work/'+$name)
+        if(-not (Test-Path -LiteralPath $path)){continue}
+        $stream=$null
+        try{$stream=[IO.FileStream]::new($path,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)}
+        catch [IO.IOException]{throw 'Close the xone-windows-wireless control panel or wait for Start/Stop to finish before updating or uninstalling.'}
+        finally{if($stream){$stream.Dispose()}}
+    }
 }

@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Make the Start menu shortcuts switch adapter modes: Stop pauses the owned
+  startup task, stops the bridge and restores its saved Microsoft driver; Start
+  selects WinUSB and launches the limited user-session task. Restore the saved
+  sign-in preference only when returning to bridge mode. Request UAC only for a
+  driver change; report cancellation, missing backups and restart/reconnect
+  requirements visibly. Keep installer/runtime-only Start/Stop actions separate.
+- Test switching with mocked drivers/tasks, guard installation/adapter ownership
+  and block upgrade/removal during an active shortcut operation. Hardware mode
+  switching still needs validation; a cold adapter reconnect may be necessary.
+
 ## 0.1.0-alpha.6 - 2026-10-17
 
 Promote the tested experimental changes below to the main release channel.
