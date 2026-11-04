@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Shared by the first-run UI and the uninstall guard. No action on dot-source.
 . (Join-Path $PSScriptRoot 'Device-Config.ps1')
+. (Join-Path $PSScriptRoot 'Stock-Driver.ps1')
 $script:XoneFirmwareHash='48084d9fa53b9bb04358f3bb127b7495dc8f7bb0b3ca1437bd24ef2b6eabdf66'
 $script:XoneFirmwareCabHash='65736a84ff4036645b8f8ec602bed91ab6353019c9cb3233decab9feec0f6f04'
 $script:XoneUsbipHash='38cad6d4432b52d5bb9409d9ad03b72fdffc4ada4cd3a48fbeca1a2752a8518a'
@@ -129,23 +130,9 @@ function Initialize-XoneStockDriver([string]$Root,[string]$InstanceId){
     $service=Get-XoneDeviceService $InstanceId
     if($service -eq 'WinUSB' -or $service -eq $package.Service){return $service}
     if($service){throw 'The adapter is owned by an unexpected driver. Setup will not replace another application driver.'}
-    $script:XoneSetupStage='StockDriverDownload'
-    $downloads=Join-Path $Root 'work/downloads'
-    # Reuse the same verified CAB when firmware preparation downloaded it.
-    $cabName=if($package.Model -eq '02FE'){'adapter-driver.cab'}else{'adapter-'+$package.Model+'.cab'}
-    $cab=Join-Path $downloads $cabName
-    Get-XoneDownload $package.Url $cab $package.Hash
-    $directory=Join-Path $downloads ('stock-'+$package.Model)
-    [void][IO.Directory]::CreateDirectory($directory)
-    $script:XoneSetupStage='StockDriverExtraction'
-    & (Get-XoneSystemTool 'expand.exe') '-F:*' $cab $directory | Out-Host
-    if($LASTEXITCODE -ne 0){throw 'Cannot extract the Microsoft adapter driver package.'}
-    $script:XoneSetupStage='StockDriverSignatureCheck'
-    $signature=Get-AuthenticodeSignature -LiteralPath (Join-Path $directory $package.Catalog)
-    if($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'CN=Microsoft Windows Hardware Compatibility Publisher,'){throw 'Microsoft adapter driver catalog verification failed.'}
-    $inf=Join-Path $directory $package.Inf
-    $hardwareId='USB\VID_045E&PID_'+$package.Model
-    if(-not [IO.File]::ReadAllText($inf).Contains($hardwareId)){throw 'The verified driver package does not match the selected adapter model.'}
+    $script:XoneSetupStage='StockDriverPreparation'
+    $prepared=Get-XonePreparedStockPackage $Root $InstanceId -AllowDownload
+    $inf=$prepared.Inf
     $script:XoneSetupStage='StockDriverInstallation'
     # Windows validates catalog membership/signatures before accepting the INF.
     # Only one supported adapter is selected, and this INF matches one model.
@@ -169,7 +156,10 @@ function Initialize-XonePrerequisites([string]$Root,[switch]$AllowPendingRestart
             $downloads=Join-Path $Root 'work/downloads'
             $cab=Join-Path $downloads 'adapter-driver.cab'
             $script:XoneSetupStage='FirmwareDownload'
-            Get-XoneDownload 'https://catalog.s.download.windowsupdate.com/c/msdownload/update/driver/drvs/2017/07/1cd6a87c-623f-4407-a52d-c31be49e925c_e19f60808bdcbfbd3c3df6be3e71ffc52e43261e.cab' $cab $script:XoneFirmwareCabHash
+            $bundled=Get-XoneBundledStockCab $Root 'USB\VID_045E&PID_02FE\FIRMWARE'
+            if($bundled){[void][IO.Directory]::CreateDirectory($downloads);Copy-Item -LiteralPath $bundled -Destination $cab -Force}else{
+                Get-XoneDownload 'https://catalog.s.download.windowsupdate.com/c/msdownload/update/driver/drvs/2017/07/1cd6a87c-623f-4407-a52d-c31be49e925c_e19f60808bdcbfbd3c3df6be3e71ffc52e43261e.cab' $cab $script:XoneFirmwareCabHash
+            }
             $script:XoneSetupStage='FirmwareExtraction'
             & (Get-XoneSystemTool 'expand.exe') '-F:FW_ACC_00U.bin' $cab $downloads
             if($LASTEXITCODE -ne 0){throw 'Cannot extract the Microsoft firmware CAB.'}
@@ -238,7 +228,7 @@ function Assert-XoneRecovery([string]$Root,[string]$InstanceId){
     foreach($name in @('UpperFilters','InterfaceGuids')){
         if($saved.$name.Present -isnot [bool] -or -not $saved.$name.PSObject.Properties['Value']){throw 'Driver recovery registry snapshots are incomplete. Keep the original backup and retry Setup.'}
     }
-    $backupRoot=Join-Path $Root 'work/driver-backup'
+    $backupRoot=Get-XoneRecoveryBackupRoot $Root $saved
     if(-not [IO.Directory]::Exists($backupRoot)){throw 'The driver-backup folder is missing. Keep the previous installation and transfer its recovery backup before retrying Setup.'}
     # OneDrive placeholders also have ReparsePoint; only actual filesystem links
     # redirect a backup outside its folder. Read/hash operations hydrate cloud files.
@@ -254,14 +244,15 @@ function Assert-XoneRecovery([string]$Root,[string]$InstanceId){
        (Get-FileHash -LiteralPath $infs[0].FullName -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $installedInf -Algorithm SHA256).Hash){
         throw 'The saved Microsoft driver package could not be verified against its installed INF. Keep the recovery backup and repair it before retrying Setup.'
     }
+    if($saved.BackupInfSHA256 -and (Get-FileHash -LiteralPath $installedInf -Algorithm SHA256).Hash.ToLowerInvariant() -ne $saved.BackupInfSHA256){throw 'The recovery package does not match its recorded INF hash.'}
     return $saved
 }
 function Copy-XoneRecovery([string]$OldRoot,[string]$Root,[string]$InstanceId){
     $target=Join-Path $Root 'work/binding-state.json'
     if([IO.File]::Exists($target)){[void](Assert-XoneRecovery $Root $InstanceId);return}
     $saved=Assert-XoneRecovery $OldRoot $InstanceId
-    $source=[IO.Path]::GetFullPath((Join-Path $OldRoot 'work/driver-backup')).TrimEnd('\')+'\'
-    $destination=Join-Path $Root 'work/driver-backup'
+    $source=[IO.Path]::GetFullPath((Get-XoneRecoveryBackupRoot $OldRoot $saved)).TrimEnd('\')+'\'
+    $destination=Get-XoneRecoveryBackupRoot $Root $saved
     if([IO.Directory]::Exists($destination)){
         $existing=@(Get-Item -LiteralPath $destination -Force)+@(Get-ChildItem -LiteralPath $destination -Recurse -Force)
         if(@($existing | Where-Object {$_.LinkType -in @('SymbolicLink','Junction')}).Count){throw 'Links are not accepted inside the destination recovery backup.'}

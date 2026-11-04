@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <string>
 #include <array>
+#include <chrono>
 namespace xone {
 struct FirmwareInfo { uint32_t ilm, dlm; uint16_t build, version; std::string timestamp; };
 FirmwareInfo validate_firmware(std::span<const uint8_t> bytes);
@@ -34,6 +35,7 @@ struct RadioEvent {
     enum class Kind { ignored, button, lost, association, disassociation, client_command, gip } kind=Kind::ignored;
     uint8_t wcid=0,command=0;
     std::vector<uint8_t> address, payload;
+    std::chrono::steady_clock::time_point arrived=std::chrono::steady_clock::now();
 };
 RadioEvent parse_radio(std::span<const uint8_t> bytes);
 std::string hex(std::span<const uint8_t> bytes);

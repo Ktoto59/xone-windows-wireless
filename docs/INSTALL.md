@@ -86,6 +86,12 @@ the process for installer/maintenance use; `Set-XoneMode.ps1 -Mode Start/Stop`
 performs the manual mode change. Only these maintenance operations access files
 or run PowerShell; the audio path is unchanged. Hardware validation is pending.
 
+Development Setup includes verified stock-driver CABs for all four supported
+adapter models. Stop can restore from that local payload if Windows lost the
+saved OEM package; no driver download is needed. The original adapter identity
+and registry snapshots remain private and required, so the bundle does not adopt
+an unknown WinUSB binding or copy another PC's recovery state.
+
 The published alpha.6 does not include mode-switching shortcuts. To restore its
 stock binding automatically, uninstall it with the adapter connected as below.
 

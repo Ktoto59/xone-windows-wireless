@@ -15,6 +15,7 @@ public:
     bool audio_active()const;
     bool claim(std::span<const uint8_t> mac,uint16_t vendor,uint16_t product);
     void event(uint8_t kind,uint8_t wcid,std::span<const uint8_t> data={})override;
+    void event_at(uint8_t kind,uint8_t wcid,std::span<const uint8_t> data,Time arrived)override;
     std::vector<RawGipTransmit> poll()override;
     void complete(uint8_t wcid,uint32_t token,int status)override;
 };

@@ -312,6 +312,7 @@ public:
                 try {
                     while (!token.stop_requested() && !interrupted) {
                         auto bytes=usb_.read(pipe,token);
+                        const auto received=std::chrono::steady_clock::now();
                         if (bytes.empty()) continue;
                         const auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-start_).count();
                         ++count_;
@@ -324,7 +325,7 @@ public:
                         xone::RadioEvent event;
                         try {event=xone::parse_radio(bytes);}
                         catch (const std::exception &e) { xone::diagnostic("radio_decode_error",{{"endpoint",pipe},{"error",e.what()}},true);std::cerr << "Packet decode: " << e.what() << '\n';continue; }
-                        if(session_){std::lock_guard lock(mutex_);events_.push(std::move(event));}
+                        if(session_){std::lock_guard lock(mutex_);events_.push(std::move(event),received);}
                         else {std::lock_guard lock(mutex_);show_radio(event);}
                     }
                 } catch (const std::exception &e) {
@@ -452,7 +453,8 @@ int radio_test(const Options &opt,bool controller=false,bool run=false) {
                 json<<",\"MalformedGipPackets\":"<<c.malformed_gip_packets
                     <<",\"OutputRecovering\":"<<c.output_recovering<<",\"OutputRecoveryAttempt\":"<<c.output_recovery_attempt<<",\"OutputError\":"<<xone::Json(c.output_error).dump();
                 json<<",\"UsbTx\":{\"Packets\":"<<c.usb_tx.packets<<",\"Over8ms\":"<<c.usb_tx.over_8ms
-                    <<",\"MaxUs\":"<<c.usb_tx.max_us<<",\"LastUs\":"<<c.usb_tx.last_us<<",\"MaxQueueWaitUs\":"<<c.usb_tx.max_queue_us<<",\"Expired\":"<<c.usb_tx.expired<<",\"Failed\":"<<c.usb_tx.failed<<"},\"Audio\":";
+                    <<",\"MaxUs\":"<<c.usb_tx.max_us<<",\"LastUs\":"<<c.usb_tx.last_us<<",\"MaxQueueWaitUs\":"<<c.usb_tx.max_queue_us<<",\"Expired\":"<<c.usb_tx.expired<<",\"Failed\":"<<c.usb_tx.failed
+                    <<",\"LastErrorStatus\":"<<c.usb_tx.last_error_status<<",\"LastNativeError\":"<<c.usb_tx.last_native_error<<",\"LastErrorBytes\":"<<c.usb_tx.last_error_bytes<<"},\"Audio\":";
                 if(c.audio){json<<"{\"Stage\":\""<<c.audio->stage<<"\",\"InputRate\":"<<c.audio->input_rate<<",\"OutputRate\":"<<c.audio->output_rate<<",\"InputChannels\":"<<unsigned(c.audio->input_channels)<<",\"OutputChannels\":"<<unsigned(c.audio->output_channels)<<",\"ReceivedPackets\":"<<c.audio->received_packets<<",\"SilencePackets\":"<<c.audio->silence_packets<<",\"PlaybackPackets\":"<<c.audio->playback_packets<<",\"CapturePackets\":"<<c.audio->capture_packets<<",\"WindowsEndpoint\":"<<(!c.audio->endpoints.render.empty() && !c.audio->endpoints.capture.empty())<<",\"SyntheticGamepadParent\":"<<c.audio->synthetic_parent<<",\"RenderId\":\""<<c.audio->endpoints.render<<"\",\"CaptureId\":\""<<c.audio->endpoints.capture<<"\"}";}
                 else json<<"null";
                 json<<'}';

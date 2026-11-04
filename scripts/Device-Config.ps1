@@ -27,6 +27,14 @@ function Test-XoneStockBinding($State){
     $package=Get-XoneAdapterPackage $State.InstanceId
     return $State.Service -eq $package.Service -and $State.InfName -match '^oem\d+\.inf$' -and $State.Section -eq $package.Section
 }
+function Get-XoneRecoveryBackupRoot([string]$Root,$State){
+    $base=Join-Path $Root 'work/driver-backup'
+    if($State.BackupInfSHA256){
+        if([string]$State.BackupInfSHA256 -notmatch '^[a-fA-F0-9]{64}$'){throw 'Invalid driver recovery package hash.'}
+        return (Join-Path $base ([string]$State.BackupInfSHA256).ToLowerInvariant())
+    }
+    return $base
+}
 function Resolve-XoneAdapterInstance([string]$InstanceId=''){
     if($InstanceId){
         if(-not (Test-XoneAdapterInstance $InstanceId)){throw 'Unsupported Xbox Wireless Adapter instance. Supported IDs: 045E:02FE, 02E6, 02F9, 091E.'}

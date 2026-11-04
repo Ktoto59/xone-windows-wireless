@@ -139,8 +139,10 @@ See the [repository map](docs/DEVELOPMENT.md#repository-layout) and
 [script guide](scripts/README.md) for the supported entry points and research tools.
 
 The repository and release payloads exclude real device addresses, captured
-serials, user SIDs, local configurations, recordings, packet captures, firmware,
-driver backups and certificates. Pairing data and recovery state are generated
+serials, user SIDs, local configurations, recordings, packet captures, private
+driver backups and certificates. Development runtime installers bundle verified
+Microsoft stock-driver CABs and their adapter firmware; source archives and Git
+exclude those binaries. Pairing data and recovery state are generated
 locally for each installation. Do not upload your complete `work/` or `config/`
 directories; see [privacy notes](docs/PRIVACY.md).
 

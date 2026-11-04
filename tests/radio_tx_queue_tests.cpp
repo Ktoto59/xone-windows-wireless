@@ -51,6 +51,11 @@ int main(){try{
         std::vector<RadioTxQueue::Result> results;until([&]{auto r=queue.poll();results.insert(results.end(),r.begin(),r.end());return results.size()==2;});
         require(entered==1 && std::all_of(results.begin(),results.end(),[](const auto &r){return r.status==-19;}));
     }
-    std::cout<<"PASS bounded asynchronous radio TX: real completions, control priority, expiry, cancellation, backpressure and shutdown\n";
+    {
+        RadioTxQueue queue([](std::span<const uint8_t>,std::stop_token,RadioTxQueue::Clock::time_point){return UsbTransmitResult{-110,121,17};});
+        queue.push(work(1));std::vector<RadioTxQueue::Result> result;until([&]{result=queue.poll();return !result.empty();});
+        require(result[0].status==-110 && result[0].native_error==121 && result[0].transferred==17);
+    }
+    std::cout<<"PASS bounded asynchronous radio TX: real completions, control priority, expiry, cancellation, backpressure, native error and shutdown\n";
     return 0;
 }catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}}

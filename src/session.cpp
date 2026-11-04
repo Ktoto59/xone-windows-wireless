@@ -290,7 +290,7 @@ void Session::process(const RadioEvent &e) {
         const auto wcid=static_cast<uint8_t>(at-clients_.begin()+1); auto client=std::make_unique<Client>(*this,wcid,e.address);
         check(xone_mt76_associate_client(&mt_,wcid,client->address.data()),"Associate client"); *at=std::move(client);
         ++status_revision_;
-        if(raw_output_ && raw_output_->target(e.address))raw_output_->event(1,wcid,e.address);
+        if(raw_output_ && raw_output_->target(e.address))raw_output_->event_at(1,wcid,e.address,e.arrived);
         if(!pairing_) check(xone_mt76_set_led_mode(&mt_,XONE_MT_LED_ON),"Adapter LED");
         std::cout<<"ASSOCIATED WCID="<<unsigned(wcid)<<" MAC="<<hex(e.address)<<"\n"; break;
     }
@@ -331,7 +331,7 @@ void Session::process(const RadioEvent &e) {
             catch(const std::runtime_error &) { ++client.malformed_gip_packets; break; }
             if(raw_output_ && raw_output_->target(clients_[e.wcid-1]->address)){
                 // Audio has a separate IPC type and never enters interrupt IN.
-                for(const auto &p:packets)raw_output_->event(p.command==0x60?4:2,e.wcid,encode_gip(p));
+                for(const auto &p:packets)raw_output_->event_at(p.command==0x60?4:2,e.wcid,encode_gip(p),e.arrived);
             }else for(const auto &p:packets) client.receive(p);
         }break;
     default: break;
@@ -344,6 +344,7 @@ void Session::tick(std::chrono::steady_clock::time_point now) {
         stats.last_us=result.last_us;stats.max_us=std::max(stats.max_us,result.max_us);
         stats.max_queue_us=std::max(stats.max_queue_us,result.queue_us);
         if(result.status==-18)++stats.expired;else if(result.status)++stats.failed;
+        if(result.status && result.status!=-18){stats.last_error_status=result.status;stats.last_native_error=result.native_error;stats.last_error_bytes=result.transferred;}
         if(raw_output_)raw_output_->complete(result.wcid,result.token,result.status);
     }
     auto requests=raw_output_?raw_output_->poll():std::vector<RawGipTransmit>{};

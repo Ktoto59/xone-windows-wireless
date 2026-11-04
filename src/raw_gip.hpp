@@ -19,9 +19,13 @@ inline void prioritize_control(std::vector<RawGipTransmit> &requests){
 }
 class RawGipOutput {
 public:
+    using Time=std::chrono::steady_clock::time_point;
     virtual ~RawGipOutput()=default;
     virtual bool target(std::span<const uint8_t> mac) const=0;
     virtual void event(uint8_t kind,uint8_t wcid,std::span<const uint8_t> data={})=0;
+    // Legacy brokers retain their wire format; native routes preserve age all
+    // the way from physical receive to the audio worker.
+    virtual void event_at(uint8_t kind,uint8_t wcid,std::span<const uint8_t> data,Time arrived){(void)arrived;event(kind,wcid,data);}
     virtual std::vector<RawGipTransmit> poll()=0;
     virtual void complete(uint8_t wcid,uint32_t token,int status)=0;
     virtual std::vector<RawGipFault> faults(){return {};}

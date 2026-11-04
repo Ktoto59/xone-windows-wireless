@@ -179,24 +179,34 @@ int WinUsbTransport::bulk_callback(void *context,u8 pipe,void *data,int size,int
     if(diagnostic_verbose || elapsed>8000 || transferred!=static_cast<ULONG>(size))diagnostic("usb_write",{{"endpoint",pipe},{"requested",size},{"actual",transferred},{"elapsed_us",elapsed}},elapsed>8000 || transferred!=static_cast<ULONG>(size));
     *actual=static_cast<int>(transferred); return 0;
 }
-int WinUsbTransport::write_async(std::span<const uint8_t> packet,std::stop_token stop,std::chrono::steady_clock::time_point deadline){
-    std::lock_guard lock(write_mutex_);
-    if(stop.stop_requested())return -19;
+UsbTransmitResult WinUsbTransport::write_async(std::span<const uint8_t> packet,std::stop_token stop,std::chrono::steady_clock::time_point deadline){
+    using Clock=std::chrono::steady_clock;
+    std::unique_lock lock(write_mutex_,std::defer_lock);
+    const auto lock_deadline=std::min(deadline,Clock::now()+std::chrono::seconds(1));
+    while(!lock.owns_lock()){
+        if(stop.stop_requested())return usb_write_failure(ERROR_OPERATION_ABORTED,true);
+        if(Clock::now()>=lock_deadline)return deadline==Clock::time_point::max()?usb_write_failure(ERROR_SEM_TIMEOUT):UsbTransmitResult{-18};
+        if(lock.try_lock_until(std::min(lock_deadline,Clock::now()+std::chrono::milliseconds(10))))break;
+    }
+    if(stop.stop_requested())return usb_write_failure(ERROR_OPERATION_ABORTED,true);
     if(std::chrono::steady_clock::now()>deadline)return -18;
-    if(packet.empty() || packet.size()>4096 || !set_timeout(4,1000))return -19;
+    if(packet.empty() || packet.size()>4096)return {-5,ERROR_INVALID_PARAMETER};
+    if(!set_timeout(4,1000))return usb_write_failure(GetLastError());
     OVERLAPPED operation{};operation.hEvent=CreateEventW(nullptr,TRUE,FALSE,nullptr);
-    if(!operation.hEvent)return -19;
+    if(!operation.hEvent)return usb_write_failure(GetLastError());
     struct Event{HANDLE h;~Event(){CloseHandle(h);}} event{operation.hEvent};
     // The caller owns packet storage until completion/cancellation is drained.
     const BOOL immediate=WinUsb_WritePipe(usb_,4,const_cast<PUCHAR>(packet.data()),static_cast<ULONG>(packet.size()),nullptr,&operation);
-    if(!immediate && GetLastError()!=ERROR_IO_PENDING)return -19;
+    if(!immediate){const auto error=GetLastError();if(error!=ERROR_IO_PENDING)return usb_write_failure(error,stop.stop_requested());}
     ULONG transferred=0;
     if(!immediate){
-        std::stop_callback cancel(stop,[&]{CancelIoEx(file_,&operation);});
-        if(WaitForSingleObject(operation.hEvent,INFINITE)!=WAIT_OBJECT_0)CancelIoEx(file_,&operation);
-        if(!WinUsb_GetOverlappedResult(usb_,&operation,&transferred,TRUE))return -19;
-    }else if(!WinUsb_GetOverlappedResult(usb_,&operation,&transferred,FALSE))return -19;
-    return transferred==packet.size()?0:-19;
+        return finish_usb_write(packet.size(),stop,deadline,
+            [&](DWORD timeout){return WaitForSingleObject(operation.hEvent,timeout);},
+            [&]{CancelIoEx(file_,&operation);},
+            [&]{const bool ok=WinUsb_GetOverlappedResult(usb_,&operation,&transferred,TRUE)!=FALSE;return UsbWriteCompletion{ok,transferred,ok?ERROR_SUCCESS:GetLastError()};});
+    }
+    if(!WinUsb_GetOverlappedResult(usb_,&operation,&transferred,FALSE))return usb_write_failure(GetLastError());
+    return {transferred==packet.size()?0:-5,0,transferred};
 }
 bool WinUsbTransport::prepare_idle_power(const DeviceInfo &device){
     USB_CONFIGURATION_DESCRIPTOR config{};ULONG actual=0;

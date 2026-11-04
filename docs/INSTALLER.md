@@ -5,10 +5,12 @@ See [INSTALL.md](INSTALL.md) for the end-user workflow.
 The runtime package contains three executables (`xone-background.exe`,
 `xone-probe-cpp.exe`, installation-only `xone-bind.exe`), setup/removal scripts,
 licenses and short documentation. Device profiles are compiled into the radio
-binary. Python, research probes, source trees, firmware, driver backups, physical
-addresses and captured USB traffic are excluded from the installed payload.
+binary. The development runtime also includes four unchanged Microsoft CABs in
+`drivers/stock`, with pinned hashes and catalog verification. They include the
+stock drivers and their adapter firmware. Python, research probes, source trees,
+private driver backups, physical addresses and captures are excluded.
 
-On a fresh Windows 11 x64 installation, Setup downloads a pinned Microsoft CAB
+On a fresh Windows 11 x64 installation, Setup uses the bundled Microsoft CAB
 for the selected adapter model, verifies its catalog, installs the missing stock
 driver, saves recovery metadata and selects inbox WinUSB. Verified adapter RAM
 firmware and the pinned signed USBip client/virtual bus are prepared automatically.
@@ -16,6 +18,12 @@ An incomplete installation of the tested USBip version is repaired by Setup.
 The application uses a static C/C++ runtime and Windows inbox GIP/audio drivers;
 Python, Visual C++ Redistributable, Accessories and build tools are not prerequisites.
 Internet access and UAC approval are required for missing downloaded components.
+The separate USBip dependency can still require a download. Stock-driver recovery
+uses local payloads without downloading; if the saved OEM INF was removed, it
+stages the verified bundled package, exports it to a hash-scoped recovery folder
+and binds only the selected adapter. Original per-device registry snapshots remain
+required. Source archives stay free of Microsoft binaries; runtime manifest flags
+identify the bundled Microsoft drivers and firmware explicitly.
 A Windows-requested reboot is reported by Setup; the registered host starts at
 sign-in after reboot, without requiring manual dependency commands.
 

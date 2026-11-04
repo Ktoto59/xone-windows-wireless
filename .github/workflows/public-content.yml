@@ -43,3 +43,10 @@ jobs:
             & "$env:windir\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path tests $test)
             if ($LASTEXITCODE -ne 0) { throw ('Failed: ' + $test) }
           }
+      - name: Verify bundled stock drivers without changing driver bindings
+        shell: powershell
+        run: |
+          & scripts/Prepare-StockDriverBundle.ps1 -Destination work/ci-stock-bundle
+          if ($LASTEXITCODE -ne 0) { throw 'Stock driver bundle preparation failed' }
+          & tests/bundled_stock_driver_tests.ps1 -PackageDirectory work/ci-stock-bundle
+          if ($LASTEXITCODE -ne 0) { throw 'Offline stock driver tests failed' }

@@ -28,6 +28,12 @@ overflow is an explicit failure. Media that cannot be admitted or expires before
 submission receives an expiry completion. A successful completion requires actual
 physical USB completion, not acceptance into a queue.
 
+Native write waits now respect media deadlines and owner cancellation before
+draining the actual completion. The RAM snapshot retains the last native USB
+error and distinguishes an unsent media expiry from an uncertain in-flight
+timeout. Cancellation cannot bypass draining or guarantee response from a hung
+kernel driver. See [audio recovery](AUDIO-RECOVERY.md#physical-transmit-completion).
+
 Cancellation tokens belong to USB requests; unlink, reimport, alternate-setting
 changes and detach cancel stale queued/in-flight work. RF epochs additionally
 protect reused WCIDs from an old completion. Cancelled OVERLAPPED operations are
@@ -39,6 +45,11 @@ make firmware initialization or every lifecycle command asynchronous. This is no
 yet a demonstrated fix for audible micro interruptions.
 
 ## Files and compatibility
+
+The experimental [audio recovery candidate](AUDIO-RECOVERY.md) preserves fresh
+PCM during expiry and bounds timer prediction/catch-up after worker stalls. Its
+additional counters use the same memory publisher; receiver behavior still
+requires hardware validation.
 
 Configuration and firmware are read during startup. Newly learned pairing
 metadata stays in RAM during operation and is saved after radio shutdown. Runtime

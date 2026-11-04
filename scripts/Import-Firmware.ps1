@@ -21,4 +21,4 @@ $taskDestination=Join-Path $taskRoot 'work/firmware/FW_ACC_00U.bin'
 [void][IO.Directory]::CreateDirectory((Split-Path -Parent $taskDestination))
 if([IO.Path]::GetFullPath($taskMatch.FullName) -ne [IO.Path]::GetFullPath($taskDestination)){Copy-Item -LiteralPath $taskMatch.FullName -Destination $taskDestination -Force}
 if((Get-FileHash -LiteralPath $taskDestination -Algorithm SHA256).Hash.ToLowerInvariant() -ne $taskExpected){throw 'Copied firmware hash mismatch.'}
-Write-Output 'Verified firmware imported locally. Firmware is not included in this project or release archive.'
+Write-Output 'Verified adapter RAM firmware prepared locally. Original Microsoft CABs are bundled in the runtime installer, separately from project source.'

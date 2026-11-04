@@ -45,7 +45,7 @@ int main(int argc,char **argv){
                 core.submit(render(12,4),t+60ms);if(!core.outbound().empty())return 8;
                 core.radio(4,1,audio(),t+70ms);auto old_tx=core.outbound();
                 auto done=core.replies();if(done.size()!=1)return 10;
-                std::cout<<"{\"tx\":"<<old_tx.size()<<",\"expired\":"<<core.stats().render_expired<<",\"oldest_pcm_age_ms\":70,\"status\":"<<static_cast<int32_t>(be(done[0],20))<<",\"iso_status\":"<<static_cast<int32_t>(be(done[0],60))<<",\"actual\":"<<be(done[0],24)<<"}\n";
+                std::cout<<"{\"tx\":"<<old_tx.size()<<",\"expired\":"<<core.stats().render_expired<<",\"dropped_frames\":"<<core.stats().render_dropped_frames<<",\"oldest_pcm_age_ms\":70,\"status\":"<<static_cast<int32_t>(be(done[0],20))<<",\"iso_status\":"<<static_cast<int32_t>(be(done[0],60))<<",\"actual\":"<<be(done[0],24)<<"}\n";
             }else return 9;
         }
         return 0;

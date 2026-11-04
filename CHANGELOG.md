@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+- Bundle unchanged, hash-pinned Microsoft stock-driver CABs for all four adapter
+  models in the runtime installer, keeping Microsoft binaries out of Git/source
+  archives and setting manifest flags accurately. Prefer the local payload for
+  stock-driver/firmware preparation. If a saved OEM INF disappeared, stage the
+  signed local package without binding other devices, preserve original registry
+  snapshots and export a hash-scoped backup before restoring the selected adapter.
+  Missing ownership metadata still fails explicitly. Test offline package checks,
+  simulated staging/export, migration and repeat mode changes without hardware.
+
+- Address six native audio/recovery audit findings: carry physical-read age
+  across queues, preserve successful ISO slots on partial expiry, discipline
+  the 2024 clock from RX timing, isolate malformed media with bounded USB-only
+  resync, and time out missing model announcements through per-peer recovery.
+  Bound native write waits by deadline/cancellation, always drain before freeing
+  buffers, and preserve native errors and uncertain outcomes without replay.
+  Add virtual-clock drift/loss tests, fake-route timeout tests and injected
+  write completion/cancellation races. The candidate still requires hardware
+  validation; no installed runtime or driver is changed by these source edits.
+
+- Draft native audio recovery for hardware comparison: expire PCM per aligned
+  frame, preserve fresh fragments across request expiry/unlink and retain a
+  fresh tail after a mixed-age physical send expires. Report affected ISO slots
+  individually. Bound 2024 timer prediction by 32 ms since RX audio and prevent
+  render catch-up bursts after stalls on both headset models. Add volatile
+  counters and virtual-clock fault tests (10/20/40/80 ms). Python remains the
+  previous baseline; document the intended audio-policy difference. Receiver
+  behavior and audible improvement are not yet hardware-validated.
+
 - Validate matching stock-driver recovery metadata, registry snapshots and the
   exported driver package before accepting an existing WinUSB installation or
   completing setup. Migrate the entire backup with hash checks before removing

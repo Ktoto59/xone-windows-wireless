@@ -27,12 +27,13 @@ foreach($required in @('work/firmware/FW_ACC_00U.bin','work/usbip-installed','wo
 }
 [IO.File]::WriteAllText((Join-Path $root 'work/bound'),'fixture binding completed')
 $backup=Join-Path $root 'work/driver-backup';[void][IO.Directory]::CreateDirectory($backup)
-Copy-Item -LiteralPath (Join-Path $root 'work/downloads/stock-02FE/mt7612us_RL.inf') -Destination $backup
-Copy-Item -LiteralPath (Join-Path $root 'work/downloads/stock-02FE/mt7612US.cat') -Destination $backup
-Copy-Item -LiteralPath (Join-Path $root 'work/downloads/stock-02FE/mt7612US.sys') -Destination $backup
+$preparedDirectory=Join-Path $root ('work/downloads/stock-02FE-'+(Get-XoneAdapterPackage $InstanceId).Hash)
+Copy-Item -LiteralPath (Join-Path $preparedDirectory 'mt7612us_RL.inf') -Destination $backup
+Copy-Item -LiteralPath (Join-Path $preparedDirectory 'mt7612US.cat') -Destination $backup
+Copy-Item -LiteralPath (Join-Path $preparedDirectory 'mt7612US.sys') -Destination $backup
 Write-XoneJson (Join-Path $root 'work/binding-state.json') @{InstanceId=$InstanceId;Service='mt7612US';InfName='oem1.inf';Section='MTWLAN.ndi';UpperFilters=@{Present=$false;Value=@()};InterfaceGuids=@{Present=$false;Value=@()}}
 '@)
-function Get-XoneRecoveryInf($State){return (Join-Path $script:fixtureRoot 'work/downloads/stock-02FE/mt7612us_RL.inf')}
+function Get-XoneRecoveryInf($State){return (Join-Path $script:fixtureRoot ('work/downloads/stock-02FE-'+$script:XoneFirmwareCabHash+'/mt7612us_RL.inf'))}
 function Stop-XoneManagedBridge($Root){}
 function Assert-XoneRadioIdle {}
 function Get-PnpDevice {param($InstanceId,[switch]$PresentOnly,$ErrorAction) return [pscustomobject]@{InstanceId='USB\VID_045E&PID_02FE\EXAMPLE';Status='Unknown'}}

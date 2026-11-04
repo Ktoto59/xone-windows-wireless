@@ -28,7 +28,12 @@ Third-party notices remain with the relevant source/header and installed payload
 Inno Setup builds the installer and retains its runtime notices.
 
 Python is a development/reference dependency, not bundled in the current Setup.
-Microsoft firmware, system DLL/SYS files, PDBs, driver-store backups, test
+Development runtime installers include unchanged Microsoft stock-driver CABs for
+045E:02FE, 02E6, 02F9 and 091E, including their adapter firmware. Official source
+URLs and SHA-256 hashes are recorded in `drivers/stock/packages.json`; scripts
+verify each CAB and Microsoft catalog. These vendor packages remain separate
+from GPL project code and are not included in the source archive or Git tree.
+Other system DLL/SYS files, PDBs, private driver-store backups, test
 certificates, local data and packet/audio captures are not distributed. Public
 USB profiles contain model descriptors with physical serials omitted. The project
 is independent of Microsoft/Xbox; names identify compatibility targets.

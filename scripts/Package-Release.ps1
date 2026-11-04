@@ -31,7 +31,7 @@ function Assert-PublicReleaseBinary([string]$Path){
 $taskRuntimeFiles=@('LICENSE','third_party/json/LICENSE.MIT','third_party/vigem/LICENSE',
     'docs/INSTALL.md','docs/TROUBLESHOOTING.md','docs/cpp-bridge.md',
     'docs/LIMITATIONS.md','docs/PRIVACY.md','docs/UPSTREAM.md',
-    'scripts/Setup-Action.ps1','scripts/Setup-Helpers.ps1','scripts/Device-Config.ps1',
+    'scripts/Setup-Action.ps1','scripts/Setup-Helpers.ps1','scripts/Device-Config.ps1','scripts/Stock-Driver.ps1',
     'scripts/Set-XoneMode.ps1','scripts/Mode-Helpers.ps1',
     'scripts/Switch-WinUSB.ps1','scripts/Adapter-IdlePower.ps1','scripts/Set-AdapterIdlePower.ps1','scripts/Import-Firmware.ps1',
     'scripts/Set-AutomaticBridge.ps1','scripts/Run-MaintainedBridge.ps1','scripts/Get-ControllerStatus.ps1','docs/RUNTIME-IO.md')
@@ -50,6 +50,7 @@ try{
         }
     }
     foreach($taskFile in $taskRuntimeFiles){Copy-PackageFile $taskFile $taskStage}
+    & (Join-Path $PSScriptRoot 'Prepare-StockDriverBundle.ps1') -Destination (Join-Path $taskStage 'drivers/stock')
     $taskOutput=Join-Path $taskStage 'outputs'
     [void][IO.Directory]::CreateDirectory($taskOutput)
     foreach($taskBinary in @('xone-probe-cpp.exe','xone-background.exe','xone-bind.exe')){
@@ -63,7 +64,8 @@ try{
     $taskCommit=(& git rev-parse HEAD).Trim()
     $taskDirty=[bool]@(& git status --porcelain).Count
     foreach($taskPackage in @($taskSourceStage,$taskStage)){
-        $taskManifest=[ordered]@{Project='xone-windows-wireless';Version=$Version;Architecture='x64';BaseCommit=$taskCommit;WorkingTreeModified=$taskDirty;BuiltAt=[datetime]::UtcNow.ToString('o');FirmwareIncluded=$false;MicrosoftDriversIncluded=$false;PrivateConfigurationIncluded=$false;Files=@()}
+        $taskHasStock=($taskPackage -eq $taskStage)
+        $taskManifest=[ordered]@{Project='xone-windows-wireless';Version=$Version;Architecture='x64';BaseCommit=$taskCommit;WorkingTreeModified=$taskDirty;BuiltAt=[datetime]::UtcNow.ToString('o');FirmwareIncluded=$taskHasStock;MicrosoftDriversIncluded=$taskHasStock;PrivateConfigurationIncluded=$false;Files=@()}
         foreach($taskFile in Get-ChildItem -LiteralPath $taskPackage -File -Recurse | Sort-Object FullName){
             $taskRelative=$taskFile.FullName.Substring($taskPackage.Length+1).Replace('\','/')
             $taskManifest.Files+=@{Path=$taskRelative;SHA256=(Get-FileHash -LiteralPath $taskFile.FullName -Algorithm SHA256).Hash.ToLowerInvariant();Bytes=$taskFile.Length}

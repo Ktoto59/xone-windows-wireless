@@ -32,6 +32,9 @@ public:
     }
     bool target(std::span<const uint8_t> mac)const override{return mac.size()==6;}
     void event(uint8_t kind,uint8_t wcid,std::span<const uint8_t> data={})override{
+        event_at(kind,wcid,data,std::chrono::steady_clock::now());
+    }
+    void event_at(uint8_t kind,uint8_t wcid,std::span<const uint8_t> data,Time arrived)override{
         if(!wcid || wcid>16)throw std::runtime_error("Invalid automatic WCID");
         auto &owner=owners_[wcid-1];
         if(kind==3)std::erase_if(faults_,[&](const auto &f){return f.wcid==wcid;});
@@ -43,12 +46,12 @@ public:
             try{
                 auto peer=factory_(n,Bytes(data.begin(),data.end()));
                 if(!peer || !peer->target(data))throw std::runtime_error("Automatic peer identity mismatch");
-                peer->event(kind,wcid,data);available->peer=std::move(peer);available->wcid=wcid;owner=static_cast<int>(n);
+                peer->event_at(kind,wcid,data,arrived);available->peer=std::move(peer);available->wcid=wcid;owner=static_cast<int>(n);
             }catch(const std::exception &e){failed(wcid,e.what());}
         }else if(owner!=-1){
             const auto n=static_cast<size_t>(owner);
             if(kind==3){release(n);return;} // TCP EOF resets only this worker.
-            try{slots_[n].peer->event(kind,wcid,data);}
+            try{slots_[n].peer->event_at(kind,wcid,data,arrived);}
             catch(const std::exception &e){failed(wcid,e.what());release(n);}
         }
     }

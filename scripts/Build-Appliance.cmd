@@ -64,5 +64,9 @@ cl /nologo /std:c++20 /EHsc /O2 /DNDEBUG /W4 /WX /utf-8 /I src tests\radio_tx_qu
 if errorlevel 1 exit /b 1
 "%XONE_APPLIANCE_OUTPUT%\radio-tx-queue-tests.exe"
 if errorlevel 1 exit /b 1
+cl /nologo /std:c++20 /EHsc /O2 /DNDEBUG /W4 /WX /utf-8 /I src tests\usb_write_completion_tests.cpp /Fobuild\appliance\usb_write_completion_tests.obj /Fe"%XONE_APPLIANCE_OUTPUT%\usb-write-completion-tests.exe"
+if errorlevel 1 exit /b 1
+"%XONE_APPLIANCE_OUTPUT%\usb-write-completion-tests.exe"
+if errorlevel 1 exit /b 1
 > "%XONE_APPLIANCE_OUTPUT%\runtime-capabilities.json" echo {"RuntimeState":"memory-v1"}
 exit /b 0

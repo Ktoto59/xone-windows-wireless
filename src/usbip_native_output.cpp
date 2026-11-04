@@ -123,7 +123,10 @@ struct NativeUsbOutput::Impl {
         json
             <<",\"RxPackets\":"<<s.rx<<",\"TxPackets\":"<<s.tx<<",\"AudioBridge\":"<<audio<<",\"AudioLayoutSupported\":"<<s.layout
             <<",\"AudioRxPackets\":"<<s.audio_rx<<",\"AudioTxPackets\":"<<s.audio_tx<<",\"UsbAudioInCompletions\":"<<s.capture_slots<<",\"CaptureDroppedFrames\":"<<s.dropped
-            <<",\"CaptureQueueHighWater\":"<<s.capture_high_water<<",\"RenderExpiredRequests\":"<<s.render_expired<<",\"CaptureConcealedFrames\":"<<s.concealed<<",\"UsbModeSwitchSuppressed\":"<<s.mode_suppressed<<"}";
+            <<",\"CaptureQueueHighWater\":"<<s.capture_high_water<<",\"RenderExpiredRequests\":"<<s.render_expired<<",\"CaptureConcealedFrames\":"<<s.concealed
+            <<",\"RenderDroppedFrames\":"<<s.render_dropped_frames<<",\"RenderPredictedPackets\":"<<s.render_predicted<<",\"RenderRephases\":"<<s.render_rephased
+            <<",\"RenderQueueHighWater\":"<<s.render_high_water<<",\"MaxRadioAudioGapUs\":"<<s.max_radio_gap_us
+            <<",\"StaleAudioEvents\":"<<s.stale_audio<<",\"MalformedAudioPackets\":"<<s.malformed_audio<<",\"AudioResyncs\":"<<s.audio_resyncs<<",\"UsbModeSwitchSuppressed\":"<<s.mode_suppressed<<"}";
         if(state_sink && !state_sink(json.str(),published_life!=current_life))return;
         if(status_writer)status_writer->publish(json.str());published_life=current_life;last_status=now;
     }
@@ -189,7 +192,7 @@ struct NativeUsbOutput::Impl {
                     if(m.kind==1 || m.kind==3){std::lock_guard lock(mutex);tx.clear();}
                     if(m.kind==1 || m.kind==3)for(auto &client:clients)client->dead=true;
                     try{
-                        if(m.kind==17)core.complete(m.wcid,m.token,m.status);else core.radio(m.kind,m.wcid,m.data);
+                        if(m.kind==17)core.complete(m.wcid,m.token,m.status);else core.radio(m.kind,m.wcid,m.data,usbip::Core::Clock::now(),m.arrived);
                         if(m.kind==1)peer_error=false;
                     }catch(const usbip::Error &e){
                         diagnostic("peer_protocol_error",{{"association",association_id},{"wcid",m.wcid},{"error",e.what()}},true);
@@ -235,8 +238,11 @@ bool NativeUsbOutput::claim(std::span<const uint8_t> mac,uint16_t vendor,uint16_
     std::lock_guard lock(impl_->mutex);if(impl_->bound_wcid)return false;impl_->mac.assign(mac.begin(),mac.end());++impl_->address_revision;return true;
 }
 void NativeUsbOutput::event(uint8_t kind,uint8_t wcid,std::span<const uint8_t> data){
+    event_at(kind,wcid,data,usbip::Core::Clock::now());
+}
+void NativeUsbOutput::event_at(uint8_t kind,uint8_t wcid,std::span<const uint8_t> data,Time arrived){
     {std::lock_guard lock(impl_->mutex);if(kind==1)impl_->bound_wcid=wcid;else if(kind==3)impl_->bound_wcid=0;}
-    impl_->post({kind,wcid,0,0,{data.begin(),data.end()}});
+    impl_->post({kind,wcid,0,0,{data.begin(),data.end()},arrived});
 }
 std::vector<RawGipTransmit> NativeUsbOutput::poll(){std::lock_guard lock(impl_->mutex);if(!impl_->error.empty())throw usbip::Error(impl_->error);auto out=std::move(impl_->tx);impl_->tx.clear();return out;}
 void NativeUsbOutput::complete(uint8_t wcid,uint32_t token,int status){impl_->post({17,wcid,token,status,{}});}

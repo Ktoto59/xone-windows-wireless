@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Same controlled RF/URB scenarios against production Python and C++ cores."""
+"""Shared RF/URB contracts and deliberate experimental audio-policy differences."""
 import asyncio
 import json
+import os
 from pathlib import Path
 import struct
 import subprocess
@@ -10,6 +11,7 @@ import unittest
 from unittest.mock import patch
 
 ROOT=Path(__file__).resolve().parents[1]
+NATIVE_PROBE=Path(os.environ.get('XONE_PARITY_PROBE',ROOT/'outputs/usbip-parity-probe.exe'))
 sys.path.insert(0,str(ROOT/'src'))
 from usb_gip_radio import RadioBackend
 from usbip_urb import Submit,IsoPacket
@@ -81,7 +83,7 @@ async def scenario(mode):
 
 class DifferentialTests(unittest.IsolatedAsyncioTestCase):
     async def compare(self,mode):
-        binary=ROOT/'outputs/usbip-parity-probe.exe'
+        binary=NATIVE_PROBE
         if not binary.exists():self.skipTest('Run scripts/Test-CppBridge.cmd first')
         expected=await scenario(mode)
         native=await asyncio.to_thread(subprocess.check_output,[str(binary),mode],text=True,timeout=5)
@@ -113,9 +115,17 @@ class DifferentialTests(unittest.IsolatedAsyncioTestCase):
         state=await self.compare('expiry')
         self.assertEqual((state['status'],state['iso_status'],state['frame']),(0,-18,42))
 
-    async def test_old_partial_pcm_is_not_acknowledged_as_sent(self):
-        state=await self.compare('pcm_age')
-        self.assertEqual((state['tx'],state['expired'],state['actual'],state['iso_status']),(0,1,0,-18))
+    async def test_native_candidate_preserves_fresh_pcm_unlike_reference(self):
+        # Deliberate experimental divergence: Python remains the old baseline.
+        # Its shared PCM age expires both old and fresh halves. Native now
+        # accepts the fresh half into its bounded accumulator without sending
+        # the old half, which the native recovery suite checks byte-for-byte.
+        if not NATIVE_PROBE.exists():self.skipTest('Run scripts/Test-CppBridge.cmd first')
+        baseline=await scenario('pcm_age')
+        self.assertEqual((baseline['tx'],baseline['expired'],baseline['actual'],baseline['iso_status']),(0,1,0,-18))
+        native=await asyncio.to_thread(subprocess.check_output,[str(NATIVE_PROBE),'pcm_age'],text=True,timeout=5)
+        state=json.loads(native)
+        self.assertEqual((state['tx'],state['expired'],state['actual'],state['iso_status'],state['dropped_frames']),(0,0,4*198,0,4))
 
 
 if __name__=='__main__':unittest.main()

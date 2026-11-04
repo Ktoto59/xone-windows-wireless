@@ -17,6 +17,9 @@ public:
         return std::any_of(outputs_.begin(),outputs_.end(),[&](const auto &p){return p->target(mac);});
     }
     void event(uint8_t kind,uint8_t wcid,std::span<const uint8_t> data={})override{
+        event_at(kind,wcid,data,std::chrono::steady_clock::now());
+    }
+    void event_at(uint8_t kind,uint8_t wcid,std::span<const uint8_t> data,Time arrived)override{
         if(!wcid || wcid>16)throw std::runtime_error("Invalid routed USB GIP WCID");
         auto &owner=owners_[wcid-1];
         if(kind==1){
@@ -26,10 +29,10 @@ public:
                 if(selected)throw std::runtime_error("Overlapping USB GIP routes");selected=p.get();
             }
             if(!selected)throw std::runtime_error("Missing USB GIP route");
-            selected->event(kind,wcid,data);owner=selected;
+            selected->event_at(kind,wcid,data,arrived);owner=selected;
         }else{
             if(!owner)throw std::runtime_error("USB GIP event has no owner");
-            owner->event(kind,wcid,data);if(kind==3)owner=nullptr;
+            owner->event_at(kind,wcid,data,arrived);if(kind==3)owner=nullptr;
         }
     }
     std::vector<RawGipTransmit> poll()override{

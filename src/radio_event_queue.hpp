@@ -15,6 +15,7 @@ class RadioEventQueue {
 public:
     using Clock=ControlMediaQueue<RadioEvent>::Clock;
     void push(RadioEvent event,Clock::time_point now=Clock::now()){
+        event.arrived=now;
         if(event.kind==RadioEvent::Kind::ignored)return;
         if(event.kind==RadioEvent::Kind::lost || event.kind==RadioEvent::Kind::disassociation)
             queue_.discard_media([&](const auto &e){return e.wcid==event.wcid;});

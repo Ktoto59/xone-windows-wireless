@@ -28,6 +28,7 @@ that its installer has been published.
 | [Runtime IO](RUNTIME-IO.md) | Threads, memory IPC, USB completion and cancellation |
 | [C++ bridge](cpp-bridge.md) | Implementation details and validation boundaries |
 | [USB/IP latency](USBIP-LATENCY.md) | Scheduling, buffering and expiry |
+| [Audio recovery candidate](AUDIO-RECOVERY.md) | Selective PCM expiry, bounded prediction and later hardware comparison |
 | [Native driver research](../driver/native/README.md) | Incomplete alternative kernel path |
 | [Upstream](UPSTREAM.md) | Source provenance and licenses |
 

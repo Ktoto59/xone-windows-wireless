@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #pragma once
 #include "raw_gip.hpp"
+#include "usb_write_completion.hpp"
 #include <chrono>
 #include <condition_variable>
 #include <deque>
@@ -18,9 +19,9 @@ namespace xone {
 class RadioTxQueue {
 public:
     using Clock=std::chrono::steady_clock;
-    using Sender=std::function<int(std::span<const uint8_t>,std::stop_token,Clock::time_point)>;
+    using Sender=std::function<UsbTransmitResult(std::span<const uint8_t>,std::stop_token,Clock::time_point)>;
     struct Work {uint8_t wcid;uint32_t token;uint64_t epoch;bool audio;Clock::time_point deadline;std::vector<Bytes> packets;Clock::time_point queued=Clock::now();std::stop_token cancellation;};
-    struct Result {uint8_t wcid;uint32_t token;uint64_t epoch;bool audio;int status;uint64_t packets=0,over_8ms=0;int64_t last_us=0,max_us=0,queue_us=0;};
+    struct Result {uint8_t wcid;uint32_t token;uint64_t epoch;bool audio;int status;uint64_t packets=0,over_8ms=0;int64_t last_us=0,max_us=0,queue_us=0;uint32_t native_error=0,transferred=0;};
 private:
     Sender sender_;std::mutex mutex_;std::condition_variable wake_;
     std::deque<Work> control_,media_;std::vector<Result> done_;
@@ -42,7 +43,8 @@ private:
                 for(const auto &packet:work.packets){
                     if(stop.stop_requested()){completed.status=-19;break;}
                     if(work.audio && Clock::now()>work.deadline){completed.status=-18;break;}
-                    const auto before=Clock::now();completed.status=sender_(packet,stop,work.audio?work.deadline:Clock::time_point::max());
+                    const auto before=Clock::now();const auto sent=sender_(packet,stop,work.audio?work.deadline:Clock::time_point::max());
+                    completed.status=sent.status;completed.native_error=sent.native_error;completed.transferred=sent.transferred;
                     completed.last_us=std::chrono::duration_cast<std::chrono::microseconds>(Clock::now()-before).count();
                     completed.max_us=std::max(completed.max_us,completed.last_us);
                     if(completed.status)break;

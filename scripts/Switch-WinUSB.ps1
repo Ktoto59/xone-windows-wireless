@@ -8,6 +8,7 @@ $ErrorActionPreference = 'Stop'
 $taskRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'Device-Config.ps1')
 . (Join-Path $PSScriptRoot 'Adapter-IdlePower.ps1')
+. (Join-Path $PSScriptRoot 'Setup-Helpers.ps1')
 $InstanceId=Resolve-XoneAdapterInstance $InstanceId
 $taskPackage=Get-XoneAdapterPackage $InstanceId
 $taskBinder = Join-Path $taskRoot 'outputs\xone-bind.exe'
@@ -80,11 +81,13 @@ if (-not $taskPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Admini
 
 if ($Mode -eq 'Restore') {
     if (-not (Test-Path -LiteralPath $taskStatePath)) { throw 'No saved binding-state.json; use Device Manager and the exported driver backup.' }
-    $taskSaved = Get-Content -LiteralPath $taskStatePath -Raw | ConvertFrom-Json
+    $taskSaved = Read-XoneJson $taskStatePath
     Assert-TaskState $taskSaved
-    Invoke-TaskBinder 'plan' (Join-Path $taskWindowsInf $taskSaved.InfName) $taskSaved.Section
+    $taskRestore=Resolve-XoneRestoreDriver $taskRoot $taskSaved
+    Invoke-TaskBinder 'plan' $taskRestore.Inf $taskSaved.Section
     Restore-TaskRegistry $taskSaved
-    Invoke-TaskBinder 'install' (Join-Path $taskWindowsInf $taskSaved.InfName) $taskSaved.Section
+    Invoke-TaskBinder 'install' $taskRestore.Inf $taskSaved.Section
+    if($taskRestore.Repaired){Write-XoneJson $taskStatePath $taskRestore.State}
     Write-Output 'Stock binding restored. Unplug/replug the adapter, then run xone-probe xinput.'
     return
 }
@@ -93,6 +96,7 @@ $taskSection = (Read-TaskProperty 'DEVPKEY_Device_DriverInfSection') -replace '(
 $taskSaved = [pscustomobject]@{
     InstanceId=$InstanceId; Service=$taskService; InfName=$taskInf; Section=$taskSection
     DriverVersion=(Read-TaskProperty 'DEVPKEY_Device_DriverVersion')
+    BackupInfSHA256=(Get-FileHash -LiteralPath (Join-Path $taskWindowsInf $taskInf) -Algorithm SHA256).Hash.ToLowerInvariant()
     UpperFilters=(Save-TaskRegistryProperty $taskRegPath 'UpperFilters')
     InterfaceGuids=(Save-TaskRegistryProperty $taskParamsPath 'DeviceInterfaceGUIDs')
     IdlePower=(Save-XoneIdlePower $taskParamsPath)
@@ -100,11 +104,12 @@ $taskSaved = [pscustomobject]@{
 Assert-TaskState $taskSaved
 Invoke-TaskBinder 'plan' $taskWinusbInf 'WINUSB'
 Invoke-TaskBinder 'plan' (Join-Path $taskWindowsInf $taskInf) $taskSection
-New-Item -ItemType Directory -Force -Path (Join-Path $taskRoot 'work\driver-backup') | Out-Null
-& (Get-XoneSystemTool 'pnputil.exe') /export-driver $taskInf (Join-Path $taskRoot 'work\driver-backup')
+$taskBackupRoot=Get-XoneRecoveryBackupRoot $taskRoot $taskSaved
+New-Item -ItemType Directory -Force -Path $taskBackupRoot | Out-Null
+& (Get-XoneSystemTool 'pnputil.exe') /export-driver $taskInf $taskBackupRoot
 if ($LASTEXITCODE -ne 0) { throw 'Cannot export the stock driver; binding was not changed.' }
 if (Test-Path -LiteralPath $taskStatePath) {
-    $taskPrevious = Get-Content -LiteralPath $taskStatePath -Raw | ConvertFrom-Json
+    $taskPrevious = Read-XoneJson $taskStatePath
     Assert-TaskState $taskPrevious
     if ($taskDevice.Status -ne 'OK' -or $taskPrevious.InfName -ne $taskInf) {
         throw 'Previous recovery state exists but stock restoration is not verified.'

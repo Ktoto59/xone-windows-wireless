@@ -39,6 +39,7 @@ step uses `-Mode Start` after successful preparation and when no reboot is pendi
 | `Run-Development.ps1` | Controlled Python or C++ session with separate diagnostics |
 | `Build-CppBridge.cmd` | Build the standalone native USB/IP radio |
 | `Test-CppBridge.cmd` | C++ codec/core, recovery, loopback and Python parity checks |
+| `Prepare-StockDriverBundle.ps1` | Stage four pinned Microsoft CABs for the installer; verify hashes, catalogs and model IDs |
 | `build.cmd` | Build the reference radio, binding helper and legacy probes |
 | `check-public-content.py` | Reject private identities, captures and generated binaries |
 | `generate-usb-profiles.py` | Generate compiled model profiles |

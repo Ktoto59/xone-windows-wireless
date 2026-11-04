@@ -15,6 +15,12 @@ foreach($taskFile in $taskManifest.Files){
 }
 $taskForbidden=@(Get-ChildItem -LiteralPath $taskStage -Recurse -File | Where-Object {$_.Extension -in @('.py','.pyc','.bin','.log') -or $_.Name -match '\.local\.'})
 if($taskForbidden.Count){throw 'Private/research payload was included'}
+. (Join-Path $taskRoot 'scripts/Setup-Helpers.ps1')
+if(-not $taskManifest.MicrosoftDriversIncluded -or -not $taskManifest.FirmwareIncluded){throw 'Runtime manifest does not declare the bundled Microsoft packages'}
+foreach($taskModel in @('02FE','02E6','02F9','091E')){
+    [void](Get-XoneBundledStockCab $taskStage ('USB\VID_045E&PID_'+$taskModel+'\PACKAGE'))
+}
+if(@(Get-ChildItem -LiteralPath (Join-Path $taskStage 'drivers/stock') -File -Filter '*.cab').Count -ne 4){throw 'Unexpected bundled stock-driver package count'}
 if(@(Get-ChildItem -LiteralPath (Join-Path $taskStage 'outputs') -File -Filter '*.exe').Count -ne 3){throw 'Unexpected runtime executable count'}
 Get-ChildItem -LiteralPath (Join-Path $taskStage 'scripts') -Filter '*.ps1' | ForEach-Object {
     $taskTokens=$null;$taskErrors=$null
