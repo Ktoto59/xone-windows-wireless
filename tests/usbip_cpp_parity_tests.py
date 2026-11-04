@@ -70,13 +70,13 @@ async def scenario(mode):
         while len(backend.render_pcm)!=1536:await asyncio.sleep(0)
     await asyncio.wait_for(staged(),1)
     for _ in range(4):await asyncio.sleep(0)
-    now[0]=100.070 if mode=='pcm_age' else 100.105
+    now[0]=100.080 if mode=='pcm_age' else 100.120
     if mode=='pcm_age':
         backend.render_credits=1;backend.render_credit_time=now[0]
         async with backend.changed:backend.changed.notify_all()
     result=await asyncio.wait_for(pending,1)
     if mode=='pcm_age':
-        return dict(tx=len(writer.tx),expired=backend.render_dropped,oldest_pcm_age_ms=70,
+        return dict(tx=len(writer.tx),expired=backend.render_dropped,oldest_pcm_age_ms=80,
                     status=result.status,iso_status=result.iso[0].status,actual=result.actual)
     return dict(status=result.status,iso_status=result.iso[0].status,frame=result.frame,tx=len(writer.tx))
 

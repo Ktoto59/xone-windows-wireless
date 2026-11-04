@@ -29,27 +29,28 @@ Request render(uint32_t seq,size_t frames,uint8_t value,uint32_t ep=2){
 RawGipTransmit take(Core &c){auto out=c.outbound();require(out.size()==1 && out[0].audio);return std::move(out[0]);}
 Bytes payload(const RawGipTransmit &tx){auto p=parse_gip(tx.data);require(p.size()==1 && p[0].payload.size()==1536);return p[0].payload;}
 void unlink(Core &c,uint32_t seq,uint32_t target,Core::Clock::time_point now){Request r;r.command=2;r.seq=seq;r.unlink_target=target;c.submit(r,now);c.replies();}
-Core::Stats bursty_render_stream(std::span<const std::chrono::nanoseconds> gaps,size_t batch=1){
+Core::Stats bursty_render_stream(std::span<const std::chrono::nanoseconds> gaps,size_t batch=1,std::chrono::microseconds dispatch_jitter=0us,std::chrono::microseconds callback_delay=100us){
     const auto start=Core::Clock::time_point{}+1h;const auto p=profile(0x0b32,true);
     Bytes mic;for(size_t n=0;n<batch;++n){const auto packet=microphone();mic.insert(mic.end(),packet.begin(),packet.end());}
     Core c(p,true);connect(c,start);c.radio(4,1,mic,start);
     uint32_t seq=1000;for(unsigned n=0;n<8;++n)c.submit(render(seq++,8,5),start);
-    auto tx=take(c);auto completion=100us+0ns;auto rx=gaps.front(),at=0ns;
+    auto tx=take(c);auto completion=callback_delay+0ns;auto rx=gaps.front(),at=0ns;
     size_t gap=1;unsigned iterations=0;auto last_sent=0ns;
     for(;;){
         require(++iterations<100000);
         auto next=std::min(rx,completion);
         if(const auto wake=c.wake_at(start+at))next=std::min(next,std::max(at+1ns,std::chrono::duration_cast<std::chrono::nanoseconds>(*wake-start)));
-        at=next;if(at>=30s)break;
-        if(rx==at){c.radio(4,1,mic,start+at);rx+=gaps[gap++%gaps.size()];}
-        if(completion==at){completion=60s;c.complete(1,tx.token,0,start+at);}
+        at=next+((iterations%17==0)?dispatch_jitter:0us);if(at>=30s)break;
+        while(rx<=at){c.radio(4,1,mic,start+at,start+rx);rx+=gaps[gap++%gaps.size()];}
+        if(completion<=at){completion=60s;c.complete(1,tx.token,0,start+at);}
         c.tick(start+at);
         // Windows keeps eight ISO render requests queued. Complete physical
-        // sends after 100 us and replace each finished USB request immediately.
+        // sends after a short real completion delay and replace each finished
+        // USB request immediately. Keep source RX time across dispatch jitter.
         for(const auto &reply:c.replies()){(void)reply;c.submit(render(seq++,8,5),start+at);}
         for(auto &out:c.outbound()){
-            require(completion==60s && at-last_sent>=7500us);last_sent=at;
-            tx=std::move(out);completion=at+100us;
+            require(completion==60s && at-last_sent>=7500us-dispatch_jitter);last_sent=at;
+            tx=std::move(out);completion=at+callback_delay;
         }
     }
     return c.stats();
@@ -59,6 +60,8 @@ int main(){try{
     const auto now=Core::Clock::time_point{}+100s;
     const auto profile2024=profile(0x0b32,true),profile2021=profile(0x0b17,true);
     const auto mic=microphone();
+    const auto age2024=device_connector(0x0b32).render_age;
+    require(age2024==72ms && device_connector(0x0b17).render_age==96ms && device_connector(0x0b12).render_age==64ms);
     const std::vector<std::vector<std::chrono::nanoseconds>> burst_patterns{{12ms,1ms,11ms},{7ms,1ms,12ms,12ms},{16ms,0ms},{8ms}};
     for(const auto &gaps:burst_patterns){
         const auto s=bursty_render_stream(gaps);
@@ -69,6 +72,18 @@ int main(){try{
         const std::array<std::chrono::nanoseconds,1> gaps{16ms};
         const auto s=bursty_render_stream(gaps,2);
         require(s.render_expired==0 && s.render_dropped_frames==0 && s.audio_tx>=3740 && s.audio_tx<=3760 && !s.recovery_required);
+    }
+    for(auto jitter:{500us,1000us,2000us})for(auto completion:{50us,100us,400us}){
+        const std::array<std::chrono::nanoseconds,1> gaps{8ms};
+        const auto s=bursty_render_stream(gaps,1,jitter,completion);
+        require(s.render_expired==0 && s.render_dropped_frames==0 && s.audio_tx>=3740 && s.audio_tx<=3760);
+        require(!s.recovery_required && s.render_high_water<=32 && s.render_pending_high_water==8);
+    }
+    for(auto actual:{7950us,8050us}){
+        const std::array<std::chrono::nanoseconds,1> gaps{actual};
+        const auto s=bursty_render_stream(gaps);
+        require(s.render_expired==0 && s.render_dropped_frames==0 && !s.recovery_required);
+        const auto lead=static_cast<int64_t>(s.audio_tx)-static_cast<int64_t>(s.audio_rx);require(lead>=-3 && lead<=3);
     }
     for(auto actual:{7950us,8000us,8050us}){
         RadioRenderTiming timing;auto arrived=now;timing.observe(arrived,1);
@@ -103,7 +118,7 @@ int main(){try{
         const auto generation=c.stats().generation;
         // Both the callback and the new RX batch have been held by a worker stall.
         c.radio(4,1,mic,now+pause);c.complete(1,first.token,0,now+pause);c.replies();
-        if(pause>=64ms){
+        if(pause>=age2024){
             require(c.outbound().empty() && c.stats().render_expired==2);
             c.submit(render(33,8,4),now+pause);auto fresh=take(c);
             const auto pcm=payload(fresh);require(pcm.front()==4 && pcm.back()==4);
@@ -131,13 +146,13 @@ int main(){try{
     {
         Core c(profile2024,true);connect(c,now);c.radio(4,1,mic,now);
         c.submit(render(40,2,1),now);require(c.replies().size()==1); // Old accepted fragment.
-        c.submit(render(41,6,2),now+63ms);require(c.outbound().empty());
-        c.tick(now+64ms); // Only the old two frames have expired.
+        c.submit(render(41,6,2),now+age2024-1ms);require(c.outbound().empty());
+        c.tick(now+age2024); // Only the old two frames have expired.
         require(c.stats().render_dropped_frames==2 && c.stats().render_expired==0);
         require(c.replies().size()==1);
-        c.radio(4,1,mic,now+65ms);c.submit(render(42,2,3),now+65ms);auto tx=take(c);
+        c.radio(4,1,mic,now+age2024+1ms);c.submit(render(42,2,3),now+age2024+1ms);auto tx=take(c);
         const auto pcm=payload(tx);require(pcm[0]==2 && pcm[6*192-1]==2 && pcm[6*192]==3 && pcm.back()==3);
-        require(tx.media_deadline==now+127ms && c.stats().render_high_water<=32);
+        require(tx.media_deadline==now+2*age2024-1ms && c.stats().render_high_water<=32);
     }
     {
         Core c(profile2024,true);connect(c,now);c.radio(4,1,mic,now);
@@ -155,9 +170,9 @@ int main(){try{
         c.submit(render(61,6,2),now+10ms);auto old=take(c);
         // Unsent TX expiry of an aggregate with an old constituent must retain
         // newer accepted PCM belonging to an independent request.
-        c.complete(1,old.token,-18,now+64ms);c.replies();
-        c.submit(render(62,4,3),now+64ms);c.replies();
-        c.radio(4,1,mic,now+65ms);c.submit(render(63,4,4),now+65ms);auto fresh=take(c);
+        c.complete(1,old.token,-18,now+age2024);c.replies();
+        c.submit(render(62,4,3),now+age2024);c.replies();
+        c.radio(4,1,mic,now+age2024+1ms);c.submit(render(63,4,4),now+age2024+1ms);auto fresh=take(c);
         const auto pcm=payload(fresh);require(pcm[0]==3 && pcm[4*192]==4 && c.ready());
     }
     {
@@ -171,12 +186,12 @@ int main(){try{
     {
         Core c(profile2024,true);connect(c,now);c.radio(4,1,mic,now);
         c.submit(render(65,2,1),now);c.replies();
-        c.submit(render(66,14,2),now+60ms);require(c.outbound().empty());
-        c.radio(4,1,mic,now+63ms);auto mixed=take(c);require(mixed.media_deadline==now+64ms);
-        c.complete(1,mixed.token,-18,now+65ms);require(c.replies().empty() && c.outbound().empty());
-        c.tick(now+71ms);auto tail=take(c);const auto pcm=payload(tail);
-        require(pcm.front()==2 && pcm.back()==2 && tail.media_deadline==now+124ms);
-        c.complete(1,tail.token,0,now+71ms);auto done=c.replies();require(done.size()==1);
+        c.submit(render(66,14,2),now+age2024-4ms);require(c.outbound().empty());
+        c.radio(4,1,mic,now+age2024-1ms);auto mixed=take(c);require(mixed.media_deadline==now+age2024);
+        c.complete(1,mixed.token,-18,now+age2024+1ms);require(c.replies().empty() && c.outbound().empty());
+        c.tick(now+age2024+7ms);auto tail=take(c);const auto pcm=payload(tail);
+        require(pcm.front()==2 && pcm.back()==2 && tail.media_deadline==now+2*age2024-4ms);
+        c.complete(1,tail.token,0,now+age2024+7ms);auto done=c.replies();require(done.size()==1);
         const auto be=[&](size_t at){return uint32_t(done[0][at])<<24|uint32_t(done[0][at+1])<<16|uint32_t(done[0][at+2])<<8|done[0][at+3];};
         require(be(24)==8*198 && c.stats().render_expired==1 && c.stats().render_dropped_frames==8);
         for(size_t i=0;i<14;++i)require(static_cast<int32_t>(be(48+i*16+12))==(i<6?-18:0));
@@ -215,7 +230,7 @@ int main(){try{
     {
         Core c(profile2024,true);connect(c,now);c.radio(4,1,mic,now);
         c.submit(render(92,32,4),now);auto tx=take(c);c.complete(1,tx.token,0,now+1ms);
-        c.tick(now+64ms);auto done=c.replies();require(done.size()==1 && c.stats().audio_tx==1);
+        c.tick(now+age2024);auto done=c.replies();require(done.size()==1 && c.stats().audio_tx==1);
         const auto be=[&](size_t at){return uint32_t(done[0][at])<<24|uint32_t(done[0][at+1])<<16|uint32_t(done[0][at+2])<<8|done[0][at+3];};
         require(be(24)==8*198 && be(36)==24);
         for(size_t i=0;i<32;++i)require(static_cast<int32_t>(be(48+i*16+12))==(i<8?0:-18));
@@ -259,6 +274,6 @@ int main(){try{
         if(rx_period>8000us)require(sent-received<=3 && received-sent<=3);
         require(sent<=received+3 && c.ready() && c.stats().render_high_water<=32);
     }
-    std::cout<<"PASS: burst jitter, queued render, clock drift, bounded prediction, 10/20/40/80/250/500 ms stalls, no catch-up bursts, per-frame expiry, unlink ownership and transport recovery\n";
+    std::cout<<"PASS: burst jitter, queued render, scheduler jitter, clock drift, bounded prediction, 10/20/40/80/250/500 ms stalls, no catch-up bursts, per-frame expiry, unlink ownership and transport recovery\n";
     return 0;
 }catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}}

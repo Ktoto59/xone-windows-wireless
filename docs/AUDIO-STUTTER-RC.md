@@ -89,3 +89,55 @@ the corrected RC is installed and listened to. Confirm playback first with the
 same application/source and topology, then microphone use, a normal reconnect,
 two-device isolation and a longer soak. A remaining artifact requires fresh
 status evidence; do not mask it with larger buffers or recovery watchdogs.
+
+## RC3 follow-up: render deadline has no dispatch margin
+
+The user initially heard clean playback in RC3, then reported substantially fewer
+but recurring bursts of crackling/pauses. The microphone remained enabled without
+joining voice chat. This is not accepted as a successful hardware fix.
+
+A further 206.140-second snapshot interval on the same association/import showed
+25,768 received audio packets (125.002/s), 25,571 sent packets (124.047/s), 201
+expired render requests and 1,608 dropped render frames. No USB close/reimport,
+recovery, resync, stale event or mailbox drop occurred. The exact RX mean rate
+and remaining expiry justified checking actual dispatch timing rather than
+continuing to tune the already corrected frequency estimator.
+
+The queued-URB regression originally delivered callbacks and timer wakes exactly
+at their nominal virtual time. Adding only 500 microseconds of dispatch delay
+every seventeenth event, while retaining each RX packet's original arrival time
+and completing every physical send successfully after 100 microseconds,
+reproduces 220 expired requests / 1,760 dropped frames in 30 seconds of a perfectly
+regular 8-ms stream. Both RX and TX count 3,750 packets; the discarded requests
+advance the source stream and can create audible gaps despite normal throughput.
+
+The 2024 request lifetime was 64 ms, equal to the entire observed Windows queue
+of eight 8-ms render URBs. A replacement request can legitimately spend nearly
+all that budget waiting for preceding successful sends. Small dispatch jitter
+then crosses the age boundary and discards its eight frames. The lower-level
+physical write itself is not stalled. The same missing headroom also caused
+expiry in a full queue with legitimate +/-50-us clock drift.
+
+The targeted adjustment sets the 2024 lifetime to `8 * (8 + 1) = 72 ms`: eight
+observed queued blocks plus one block of bounded dispatch/completion margin.
+It introduces no additional prefill or PCM storage; the 32-frame accumulator,
+normal 8-ms pacing, clock estimator, prediction horizon, rephase/no-burst rules,
+microphone path and all radio/USB recovery safeguards remain unchanged. The 2021
+96-ms limit and controller 64-ms limit are unchanged. This deliberately permits
+up to 8 ms more source age during backlog than RC3; it is not a claim of unchanged
+worst-case latency. Data beyond the new bound is still discarded and expired
+unsent packets are not retransmitted.
+
+The enhanced tests cover nine combinations of 0.5/1/2-ms dispatch jitter and
+50/100/400-us successful physical completions, plus full queues at 7,950/8,050-us
+RX periods. They require zero render expiry/dropped frames. The 500-us case
+improves from 220 expired requests to zero. Age-boundary tests now use the actual
+configured model lifetime and continue checking stale/fresh fragment ownership,
+partial ISO status, unlink and 80/250/500-ms stalls. The Python reference policy
+is unchanged; shared differential scenarios are sampled at 80/120 ms, beyond
+both the reference and native relevant expiry boundaries.
+
+Two RAM-only fields, `RenderPendingHighWater` and `RenderPeriodNs`, expose the
+queue depth and learned period for the next hardware observation without enabling
+journals, packet capture or file polling. All remaining real-device artifacts
+still require an audible check of the next RC followed by a longer soak.

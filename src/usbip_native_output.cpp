@@ -132,7 +132,7 @@ struct NativeUsbOutput::Impl {
             <<",\"AudioRxPackets\":"<<s.audio_rx<<",\"AudioTxPackets\":"<<s.audio_tx<<",\"UsbAudioInCompletions\":"<<s.capture_slots<<",\"CaptureDroppedFrames\":"<<s.dropped
             <<",\"CaptureQueueHighWater\":"<<s.capture_high_water<<",\"RenderExpiredRequests\":"<<s.render_expired<<",\"CaptureConcealedFrames\":"<<s.concealed
             <<",\"RenderDroppedFrames\":"<<s.render_dropped_frames<<",\"RenderPredictedPackets\":"<<s.render_predicted<<",\"RenderRephases\":"<<s.render_rephased
-            <<",\"RenderQueueHighWater\":"<<s.render_high_water<<",\"MaxRadioAudioGapUs\":"<<s.max_radio_gap_us
+            <<",\"RenderQueueHighWater\":"<<s.render_high_water<<",\"RenderPendingHighWater\":"<<s.render_pending_high_water<<",\"RenderPeriodNs\":"<<core.render_period().count()<<",\"MaxRadioAudioGapUs\":"<<s.max_radio_gap_us
             <<",\"StaleAudioEvents\":"<<s.stale_audio<<",\"MalformedAudioPackets\":"<<s.malformed_audio<<",\"AudioResyncs\":"<<s.audio_resyncs<<",\"UsbModeSwitchSuppressed\":"<<s.mode_suppressed<<"}";
         if(state_sink && !state_sink(json.str(),published_life!=current_life))return;
         if(status_writer)status_writer->publish(json.str());published_life=current_life;last_status=now;

@@ -188,7 +188,7 @@ void Core::submit(Request r,Clock::time_point now){
     switch(kind){
     case Kind::irq_in:irq_wait_.push_back(seq);break;
     case Kind::capture:capture_wait_.push_back(seq);break;
-    case Kind::render:render_wait_.push_back(seq);break;
+    case Kind::render:render_wait_.push_back(seq);stats_.render_pending_high_water=std::max(stats_.render_pending_high_water,render_wait_.size());break;
     case Kind::irq_out:transmit(seq,pending_.at(seq).request.data,false,now);break;
     }pump(now);
 }

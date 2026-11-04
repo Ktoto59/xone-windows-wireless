@@ -22,7 +22,7 @@ public:
         bool recovery_required=false;
         uint64_t usb_imports=0,announce_replays=0,capture_without_usb=0,capture_drop_reports=0,render_expiry_reports=0;
         uint64_t render_dropped_frames=0,render_predicted=0,render_rephased=0,max_radio_gap_us=0;
-        size_t render_high_water=0;
+        size_t render_high_water=0,render_pending_high_water=0;
         uint64_t stale_audio=0,malformed_audio=0,audio_resyncs=0;
     };
 private:
@@ -83,6 +83,7 @@ public:
         }}return result;
     }
     const Stats &stats()const{return stats_;}
+    std::chrono::nanoseconds render_period()const{return connector_.independent_clock?std::chrono::nanoseconds(std::chrono::milliseconds(8)):render_timing_.period();}
     const Initialization &initialization()const{return initialization_;}
     void imported();
     void detached();
