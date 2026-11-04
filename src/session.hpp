@@ -27,7 +27,7 @@ struct ControllerStatus {
     std::optional<Audio> audio;
     std::string authentication;
     uint8_t auth_version,peer_auth_version;
-    struct UsbTx { uint64_t packets=0,over_8ms=0,expired=0,failed=0; int64_t max_us=0,last_us=0,max_queue_us=0;int last_error_status=0;uint32_t last_native_error=0,last_error_bytes=0; } usb_tx;
+    struct UsbTx { uint64_t packets=0,over_8ms=0,expired=0,failed=0; int64_t max_us=0,last_us=0,max_queue_us=0,max_start_lateness_us=0;int last_error_status=0;uint32_t last_native_error=0,last_error_bytes=0; } usb_tx;
     uint64_t malformed_gip_packets=0;
     bool output_recovering=false;
     unsigned output_recovery_attempt=0;

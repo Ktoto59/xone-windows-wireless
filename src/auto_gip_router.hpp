@@ -74,8 +74,11 @@ public:
         if(!out.empty())first_=(first_+1)%slots_.size();return out;
     }
     void complete(uint8_t wcid,uint32_t token,int status)override{
+        complete_at(wcid,token,status,Time::clock::now());
+    }
+    void complete_at(uint8_t wcid,uint32_t token,int status,Time finished)override{
         if(wcid && wcid<=16 && owners_[wcid-1]!=-1){const auto n=static_cast<size_t>(owners_[wcid-1]);
-            try{slots_[n].peer->complete(wcid,token,status);}catch(const std::exception &e){failed(wcid,e.what());release(n);}
+            try{slots_[n].peer->complete_at(wcid,token,status,finished);}catch(const std::exception &e){failed(wcid,e.what());release(n);}
         }
     }
     std::vector<RawGipFault> faults()override{auto result=std::move(faults_);faults_.clear();return result;}

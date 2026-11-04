@@ -5,7 +5,7 @@
 #include <iostream>
 using namespace xone;using namespace std::chrono_literals;
 void require(bool ok){if(!ok)throw std::runtime_error("Native route recovery regression");}
-struct Observation {RawGipOutput::Time arrived{};uint8_t kind=0;unsigned events=0;};
+struct Observation {RawGipOutput::Time arrived{},finished{};uint8_t kind=0;unsigned events=0;uint32_t token=0;int status=0;};
 class FakePeer final:public RawGipOutput {
     std::shared_ptr<Observation> seen_;
 public:
@@ -15,6 +15,7 @@ public:
     void event_at(uint8_t kind,uint8_t,std::span<const uint8_t>,Time arrived)override{seen_->arrived=arrived;seen_->kind=kind;++seen_->events;}
     std::vector<RawGipTransmit> poll()override{return {};}
     void complete(uint8_t,uint32_t,int)override{}
+    void complete_at(uint8_t,uint32_t token,int status,Time finished)override{seen_->finished=finished;seen_->token=token;seen_->status=status;}
 };
 int main(){try{
     const auto start=std::chrono::steady_clock::time_point{}+100s;auto now=start;
@@ -30,6 +31,7 @@ int main(){try{
     RadioEventQueue events;RadioEvent event;event.kind=RadioEvent::Kind::gip;event.wcid=1;event.payload=encode_gip({0x60,32,1,0,{}});
     events.push(event,start+2s);now=start+2s+20ms;auto batch=events.drain(now);require(batch.size()==1 && batch[0].arrived==start+2s);
     router.event_at(4,1,batch[0].payload,batch[0].arrived);require(seen->arrived==start+2s && seen->kind==4);
+    router.complete_at(1,42,0,start+2s+1ms);require(seen->finished==start+2s+1ms && seen->token==42 && seen->status==0);
     now=start+4999ms;require(router.poll().empty() && router.faults().empty());
     now=start+5s;require(router.poll().empty());auto faults=router.faults();
     require(faults.size()==1 && faults[0].wcid==2 && router.active()==1 && factories==1);

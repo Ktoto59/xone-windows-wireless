@@ -44,5 +44,6 @@ public:
         return peer_?peer_->poll():std::vector<RawGipTransmit>{};
     }
     void complete(uint8_t wcid,uint32_t token,int status)override{if(peer_)peer_->complete(wcid,token,status);}
+    void complete_at(uint8_t wcid,uint32_t token,int status,Time finished)override{if(peer_)peer_->complete_at(wcid,token,status,finished);}
 };
 }

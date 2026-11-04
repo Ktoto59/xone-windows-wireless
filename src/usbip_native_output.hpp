@@ -18,5 +18,6 @@ public:
     void event_at(uint8_t kind,uint8_t wcid,std::span<const uint8_t> data,Time arrived)override;
     std::vector<RawGipTransmit> poll()override;
     void complete(uint8_t wcid,uint32_t token,int status)override;
+    void complete_at(uint8_t wcid,uint32_t token,int status,Time finished)override;
 };
 }

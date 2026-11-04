@@ -11,6 +11,7 @@ struct RawGipTransmit {
     uint8_t wcid;uint32_t token;Bytes data;bool audio=false;
     std::chrono::steady_clock::time_point media_deadline=std::chrono::steady_clock::time_point::max();
     std::stop_token cancellation;
+    std::chrono::steady_clock::time_point scheduled_at{};
 };
 struct RawGipFault {uint8_t wcid;std::string error;};
 inline void prioritize_control(std::vector<RawGipTransmit> &requests){
@@ -28,6 +29,7 @@ public:
     virtual void event_at(uint8_t kind,uint8_t wcid,std::span<const uint8_t> data,Time arrived){(void)arrived;event(kind,wcid,data);}
     virtual std::vector<RawGipTransmit> poll()=0;
     virtual void complete(uint8_t wcid,uint32_t token,int status)=0;
+    virtual void complete_at(uint8_t wcid,uint32_t token,int status,Time finished){(void)finished;complete(wcid,token,status);}
     virtual std::vector<RawGipFault> faults(){return {};}
     virtual uint64_t failures()const{return 0;}
 };

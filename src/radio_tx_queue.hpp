@@ -20,15 +20,15 @@ class RadioTxQueue {
 public:
     using Clock=std::chrono::steady_clock;
     using Sender=std::function<UsbTransmitResult(std::span<const uint8_t>,std::stop_token,Clock::time_point)>;
-    struct Work {uint8_t wcid;uint32_t token;uint64_t epoch;bool audio;Clock::time_point deadline;std::vector<Bytes> packets;Clock::time_point queued=Clock::now();std::stop_token cancellation;};
-    struct Result {uint8_t wcid;uint32_t token;uint64_t epoch;bool audio;int status;uint64_t packets=0,over_8ms=0;int64_t last_us=0,max_us=0,queue_us=0;uint32_t native_error=0,transferred=0;};
+    struct Work {uint8_t wcid;uint32_t token;uint64_t epoch;bool audio;Clock::time_point deadline;std::vector<Bytes> packets;Clock::time_point queued=Clock::now();std::stop_token cancellation;Clock::time_point scheduled_at{};};
+    struct Result {uint8_t wcid;uint32_t token;uint64_t epoch;bool audio;int status;uint64_t packets=0,over_8ms=0;int64_t last_us=0,max_us=0,queue_us=0,start_lateness_us=0;uint32_t native_error=0,transferred=0;Clock::time_point finished{};};
 private:
     Sender sender_;std::mutex mutex_;std::condition_variable wake_;
     std::deque<Work> control_,media_;std::vector<Result> done_;
     size_t controls_=0,medias_=0;bool closing_=false;
     uint8_t active_wcid_=0;uint64_t active_epoch_=0;std::stop_source active_stop_;
     std::jthread worker_;
-    static Result result(const Work &w,int status){return {w.wcid,w.token,w.epoch,w.audio,status};}
+    static Result result(const Work &w,int status){auto r=Result{w.wcid,w.token,w.epoch,w.audio,status};r.finished=Clock::now();return r;}
     void run(){
         for(;;){
             Work work{};std::stop_token stop;std::stop_source active;
@@ -43,7 +43,9 @@ private:
                 for(const auto &packet:work.packets){
                     if(stop.stop_requested()){completed.status=-19;break;}
                     if(work.audio && Clock::now()>work.deadline){completed.status=-18;break;}
-                    const auto before=Clock::now();const auto sent=sender_(packet,stop,work.audio?work.deadline:Clock::time_point::max());
+                    const auto before=Clock::now();
+                    if(work.audio && work.scheduled_at!=Clock::time_point{})completed.start_lateness_us=std::max(int64_t(0),std::chrono::duration_cast<std::chrono::microseconds>(before-work.scheduled_at).count());
+                    const auto sent=sender_(packet,stop,work.audio?work.deadline:Clock::time_point::max());
                     completed.status=sent.status;completed.native_error=sent.native_error;completed.transferred=sent.transferred;
                     completed.last_us=std::chrono::duration_cast<std::chrono::microseconds>(Clock::now()-before).count();
                     completed.max_us=std::max(completed.max_us,completed.last_us);
@@ -51,6 +53,7 @@ private:
                     ++completed.packets;if(completed.last_us>8000)++completed.over_8ms;
                 }
             }catch(...){completed.status=-19;}
+            completed.finished=Clock::now();
             {std::lock_guard lock(mutex_);active_wcid_=0;done_.push_back(std::move(completed));}
         }
     }

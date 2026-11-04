@@ -141,3 +141,33 @@ Two RAM-only fields, `RenderPendingHighWater` and `RenderPeriodNs`, expose the
 queue depth and learned period for the next hardware observation without enabling
 journals, packet capture or file polling. All remaining real-device artifacts
 still require an audible check of the next RC followed by a longer soak.
+
+## RC4 hardware correction: transient queue depth is ten
+
+The new RAM counter on installed RC4 measured `RenderPendingHighWater=10` while
+instantaneous render depth was seven/eight. The earlier eight-request assumption
+described steady state, not the peak. During the next 110.079-second interval,
+38 more requests expired on the same import. RC4 therefore improved the symptom
+but did not pass hardware acceptance. Increasing the bound without measuring the
+queue peak would not have been sufficient evidence for a further adjustment.
+
+The fixed 2024 lifetime is now `8 * (10 + 1) = 88 ms`, using the measured peak plus
+one dispatch block. It is not adjusted upward automatically. The original RC3
+64-ms cutoff can now retain up to 24 ms less source age than this candidate's
+worst-case limit; the 32-frame PCM capacity, normal pacing and absence of an
+additional prefill remain unchanged. Long stalls still discard expired data;
+the stall tests now also exercise 100 ms, beyond the new bound.
+
+Regression coverage holds both eight and ten URBs continuously queued, rather
+than only visiting the transient peak. All forty-two dispatch/completion timing
+combinations and both +/-50-us clock cases at each queue depth require zero
+expired requests and zero dropped render frames. Differential stale/fresh tests
+are sampled at 100/140 ms to stay beyond both relevant age boundaries while
+retaining the unchanged Python baseline policy.
+
+The next candidate still requires the user's longer audible playback test. A
+successful CI or an initial clean second is not treated as hardware acceptance.
+
+See [residual diagnosis](AUDIO-RESIDUAL-DIAGNOSIS.md) for the new hardware deltas,
+controlled 72/88-ms comparison, full-path audit, separate RAM telemetry and
+60-second blackout/recovery tests.

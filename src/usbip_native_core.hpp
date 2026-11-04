@@ -24,6 +24,8 @@ public:
         uint64_t render_dropped_frames=0,render_predicted=0,render_rephased=0,max_radio_gap_us=0;
         size_t render_high_water=0,render_pending_high_water=0;
         uint64_t stale_audio=0,malformed_audio=0,audio_resyncs=0;
+        uint64_t render_expired_before_tx=0,render_tx_expired=0,render_tx_failed=0,render_pcm_expired=0;
+        uint64_t max_render_lateness_us=0,max_render_pcm_age_us=0,render_success_after_deadline=0;
     };
 private:
     enum class Kind {irq_in,irq_out,capture,render};

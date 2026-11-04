@@ -23,6 +23,8 @@ struct Client {
     SOCKET socket=INVALID_SOCKET;WSAEVENT event=WSA_INVALID_EVENT;
     UsbipClientProgress progress;
     Bytes input,output;size_t sent=0;unsigned phase=0;bool dead=false;
+    std::optional<usbip::Core::Clock::time_point> reply_queued;
+    uint64_t max_reply_flush_us=0;
     usbip::Core::Clock::time_point last=usbip::Core::Clock::now();
     explicit Client(SOCKET s):socket(s){
         event=WSACreateEvent();
@@ -30,12 +32,12 @@ struct Client {
         BOOL nodelay=TRUE;setsockopt(socket,IPPROTO_TCP,TCP_NODELAY,reinterpret_cast<const char *>(&nodelay),sizeof(nodelay));
     }
     ~Client(){closesocket(socket);WSACloseEvent(event);}
-    void send(Bytes bytes){if(output.size()-sent+bytes.size()>4*1024*1024)throw usbip::Error("USB response queue overflow");if(sent){output.erase(output.begin(),output.begin()+sent);sent=0;}output.insert(output.end(),bytes.begin(),bytes.end());if(sent<output.size())progress.queued(usbip::Core::Clock::now());}
+    void send(Bytes bytes){if(output.size()-sent+bytes.size()>4*1024*1024)throw usbip::Error("USB response queue overflow");if(sent){output.erase(output.begin(),output.begin()+sent);sent=0;}output.insert(output.end(),bytes.begin(),bytes.end());if(sent<output.size()){const auto now=usbip::Core::Clock::now();if(!reply_queued)reply_queued=now;progress.queued(now);}}
     void flush(){
         while(sent<output.size()){
             const auto n=::send(socket,reinterpret_cast<const char *>(output.data()+sent),static_cast<int>(output.size()-sent),0);
             if(n==SOCKET_ERROR){if(WSAGetLastError()==WSAEWOULDBLOCK)return;dead=true;return;}if(!n){dead=true;return;}sent+=static_cast<size_t>(n);progress.sent(usbip::Core::Clock::now(),sent<output.size());
-        }output.clear();sent=0;if(phase==3)dead=true;
+        }if(reply_queued){max_reply_flush_us=std::max(max_reply_flush_us,static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(usbip::Core::Clock::now()-*reply_queued).count()));reply_queued.reset();}output.clear();sent=0;if(phase==3)dead=true;
     }
     void read(){
         std::array<uint8_t,32768> bytes{};
@@ -59,6 +61,7 @@ struct NativeUsbOutput::Impl {
     std::unique_ptr<LatestSnapshot> status_writer;NativeUsbOutput::StateSink state_sink;
     usbip::Core::Clock::time_point last_status{};bool mmcss=false,mmcss_requested=false,peer_error=false;DWORD mmcss_error=0;
     uint64_t worker_iterations=0,max_mailbox_delay_us=0,max_radio_batch_us=0,max_socket_dispatch_us=0;
+    uint64_t timer_wakes=0,timer_late_1ms=0,timer_late_8ms=0,max_timer_lateness_us=0,max_tx_completion_dispatch_us=0;
     std::atomic_uint64_t address_revision=0;
     std::atomic_bool streaming_audio=false;
     uint64_t association_id=0,snapshot_sequence=0;
@@ -133,6 +136,10 @@ struct NativeUsbOutput::Impl {
             <<",\"CaptureQueueHighWater\":"<<s.capture_high_water<<",\"RenderExpiredRequests\":"<<s.render_expired<<",\"CaptureConcealedFrames\":"<<s.concealed
             <<",\"RenderDroppedFrames\":"<<s.render_dropped_frames<<",\"RenderPredictedPackets\":"<<s.render_predicted<<",\"RenderRephases\":"<<s.render_rephased
             <<",\"RenderQueueHighWater\":"<<s.render_high_water<<",\"RenderPendingHighWater\":"<<s.render_pending_high_water<<",\"RenderPeriodNs\":"<<core.render_period().count()<<",\"MaxRadioAudioGapUs\":"<<s.max_radio_gap_us
+            <<",\"RenderExpiredBeforeTx\":"<<s.render_expired_before_tx<<",\"RenderTxExpired\":"<<s.render_tx_expired<<",\"RenderTxFailed\":"<<s.render_tx_failed<<",\"RenderPcmExpiredFrames\":"<<s.render_pcm_expired
+            <<",\"MaxRenderLatenessUs\":"<<s.max_render_lateness_us<<",\"MaxRenderPcmAgeUs\":"<<s.max_render_pcm_age_us<<",\"RenderSuccessAfterDeadline\":"<<s.render_success_after_deadline
+            <<",\"TimerWakes\":"<<timer_wakes<<",\"TimerLate1ms\":"<<timer_late_1ms<<",\"TimerLate8ms\":"<<timer_late_8ms<<",\"MaxTimerLatenessUs\":"<<max_timer_lateness_us
+            <<",\"MaxTxCompletionDispatchUs\":"<<max_tx_completion_dispatch_us<<",\"MaxUsbReplyFlushUs\":"<<(imported?imported->max_reply_flush_us:0)
             <<",\"StaleAudioEvents\":"<<s.stale_audio<<",\"MalformedAudioPackets\":"<<s.malformed_audio<<",\"AudioResyncs\":"<<s.audio_resyncs<<",\"UsbModeSwitchSuppressed\":"<<s.mode_suppressed<<"}";
         if(state_sink && !state_sink(json.str(),published_life!=current_life))return;
         if(status_writer)status_writer->publish(json.str());published_life=current_life;last_status=now;
@@ -199,7 +206,7 @@ struct NativeUsbOutput::Impl {
                     if(m.kind==1 || m.kind==3){std::lock_guard lock(mutex);tx.clear();}
                     if(m.kind==1 || m.kind==3)for(auto &client:clients)client->dead=true;
                     try{
-                        if(m.kind==17)core.complete(m.wcid,m.token,m.status);else core.radio(m.kind,m.wcid,m.data,usbip::Core::Clock::now(),m.arrived);
+                        if(m.kind==17){max_tx_completion_dispatch_us=std::max(max_tx_completion_dispatch_us,static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(usbip::Core::Clock::now()-m.arrived).count()));core.complete(m.wcid,m.token,m.status);}else core.radio(m.kind,m.wcid,m.data,usbip::Core::Clock::now(),m.arrived);
                         if(m.kind==1)peer_error=false;
                     }catch(const usbip::Error &e){
                         diagnostic("peer_protocol_error",{{"association",association_id},{"wcid",m.wcid},{"error",e.what()}},true);
@@ -219,6 +226,11 @@ struct NativeUsbOutput::Impl {
                 const auto ready=WaitForMultipleObjects(static_cast<DWORD>(handles.size()),handles.data(),FALSE,INFINITE);
                 if(ready==WAIT_FAILED || ready>=WAIT_OBJECT_0+handles.size())throw usbip::Error("Native USB wait failed");
                 const auto index=ready-WAIT_OBJECT_0;
+                if(index==1){
+                    ++timer_wakes;const auto late=std::max(int64_t(0),std::chrono::duration_cast<std::chrono::microseconds>(usbip::Core::Clock::now()-deadline).count());
+                    max_timer_lateness_us=std::max(max_timer_lateness_us,static_cast<uint64_t>(late));
+                    if(late>=1000)++timer_late_1ms;if(late>=8000)++timer_late_8ms;
+                }
                 if(index==2){
                     WSANETWORKEVENTS flags{};if(WSAEnumNetworkEvents(listener,accept_event,&flags))throw usbip::Error("Native USB listener failed");
                     for(;;){auto s=accept(listener,nullptr,nullptr);if(s==INVALID_SOCKET){if(WSAGetLastError()!=WSAEWOULDBLOCK)throw usbip::Error("USB accept failed");break;}if(clients.size()>=16){closesocket(s);continue;}clients.push_back(std::make_unique<Client>(s));}
@@ -252,5 +264,6 @@ void NativeUsbOutput::event_at(uint8_t kind,uint8_t wcid,std::span<const uint8_t
     impl_->post({kind,wcid,0,0,{data.begin(),data.end()},arrived});
 }
 std::vector<RawGipTransmit> NativeUsbOutput::poll(){std::lock_guard lock(impl_->mutex);if(!impl_->error.empty())throw usbip::Error(impl_->error);auto out=std::move(impl_->tx);impl_->tx.clear();return out;}
-void NativeUsbOutput::complete(uint8_t wcid,uint32_t token,int status){impl_->post({17,wcid,token,status,{}});}
+void NativeUsbOutput::complete(uint8_t wcid,uint32_t token,int status){complete_at(wcid,token,status,usbip::Core::Clock::now());}
+void NativeUsbOutput::complete_at(uint8_t wcid,uint32_t token,int status,Time finished){impl_->post({17,wcid,token,status,{},finished});}
 }

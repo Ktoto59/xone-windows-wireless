@@ -19,8 +19,9 @@ units of the same model have not been tested.
 
 The 2021 connector uses an independent eight-millisecond render clock and a
 96 ms render age limit. Its exact observed USB-only mode-6 initialization is
-consumed to preserve wireless pairing. The 2024 connector uses fresh radio
-credits and a 64 ms render age limit. Capture is bounded to 32 ms; old-headset
+consumed to preserve wireless pairing. The 2024 connector uses bounded radio-derived
+pacing and an 88 ms render age limit, including its measured transient USB queue
+and dispatch margin. Capture is bounded to 32 ms; old-headset
 silence concealment stops after 128 ms without RF. Expired audio is discarded,
 not replayed as an indefinitely growing backlog. Round-robin radio submission
 keeps devices separate at the shared physical transmitter.

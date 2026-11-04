@@ -11,9 +11,10 @@ struct DeviceConnector {
 inline DeviceConnector device_connector(uint16_t pid){
     switch(pid){
     case 0x0b17:case 0x0b31:return {0x0b17,"headset-2021",true,true,true,std::chrono::milliseconds(96)};
-    // Windows queues eight 8-ms render URBs. Allow one additional block for
-    // bounded dispatch/completion jitter; this is an age limit, not prebuffer.
-    case 0x0b32:return {0x0b32,"headset-2024",true,false,false,std::chrono::milliseconds(8*(8+1))};
+    // Measured Windows depth peaks at ten 8-ms render URBs (eight steady).
+    // Allow one additional block for bounded dispatch/completion jitter.
+    // This fixed age limit adds no prebuffer or automatic queue growth.
+    case 0x0b32:return {0x0b32,"headset-2024",true,false,false,std::chrono::milliseconds(8*(10+1))};
     case 0x0b12:case 0x0b13:return {0x0b12,"series-controller",false,false,false,std::chrono::milliseconds(64)};
     default:throw std::runtime_error("Unsupported Xbox radio model");
     }

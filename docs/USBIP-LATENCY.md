@@ -9,10 +9,12 @@ particular end-to-end latency has been achieved.
 - Each association owns separate USB/control/audio state and completion tokens.
 - Capture retains at most 32 one-millisecond frames and drops data older than
   32 ms. A delayed consumer cannot accumulate seconds of stale capture.
-- Render expires after 64 ms on the 2024 connector and 96 ms on the 2021 connector.
+- Native render expires after 88 ms on the 2024 connector and 96 ms on the 2021
+  connector. The 2024 bound includes the measured ten-request USB queue plus one
+  block of dispatch margin; PCM storage capacity remains 32 one-ms frames.
   The 2021 model has its own eight-millisecond clock. The experimental C++ 2024
   candidate uses bounded RX-derived pacing and short timer prediction; Python
-  retains the previous RX-paced policy. PCM frames expire individually in the
+  retains the previous RX-paced policy and 64-ms 2024 age limit. PCM frames expire individually in the
   candidate. See [audio recovery](AUDIO-RECOVERY.md) for limits and test status.
 - Old-headset capture concealment ends after 128 ms without RF. It does not keep
   a lost radio session alive with unlimited fabricated samples.

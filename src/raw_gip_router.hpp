@@ -62,5 +62,8 @@ public:
     void complete(uint8_t wcid,uint32_t token,int status)override{
         if(wcid && wcid<=16 && owners_[wcid-1])owners_[wcid-1]->complete(wcid,token,status);
     }
+    void complete_at(uint8_t wcid,uint32_t token,int status,Time finished)override{
+        if(wcid && wcid<=16 && owners_[wcid-1])owners_[wcid-1]->complete_at(wcid,token,status,finished);
+    }
 };
 }

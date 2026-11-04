@@ -38,14 +38,14 @@ int main(int argc,char **argv){
             // Consume the initial render credit; keep the same live RF session.
             core.submit(render(10),t);auto tx=core.outbound();if(tx.size()!=1)return 5;core.complete(1,tx[0].token,0,t);core.replies();
             if(mode=="expiry"){
-                core.submit(render(11),t+40ms);core.tick(t+120ms);auto replies=core.replies();if(replies.size()!=1)return 6;
+                core.submit(render(11),t+40ms);core.tick(t+140ms);auto replies=core.replies();if(replies.size()!=1)return 6;
                 std::cout<<"{\"status\":"<<static_cast<int32_t>(be(replies[0],20))<<",\"iso_status\":"<<static_cast<int32_t>(be(replies[0],60))<<",\"frame\":"<<be(replies[0],28)<<",\"tx\":"<<core.outbound().size()<<"}\n";
             }else if(mode=="pcm_age"){
                 core.submit(render(11,4),t);if(core.replies().size()!=1)return 7;
                 core.submit(render(12,4),t+60ms);if(!core.outbound().empty())return 8;
-                core.radio(4,1,audio(),t+80ms);auto old_tx=core.outbound();
+                core.radio(4,1,audio(),t+100ms);auto old_tx=core.outbound();
                 auto done=core.replies();if(done.size()!=1)return 10;
-                std::cout<<"{\"tx\":"<<old_tx.size()<<",\"expired\":"<<core.stats().render_expired<<",\"dropped_frames\":"<<core.stats().render_dropped_frames<<",\"oldest_pcm_age_ms\":80,\"status\":"<<static_cast<int32_t>(be(done[0],20))<<",\"iso_status\":"<<static_cast<int32_t>(be(done[0],60))<<",\"actual\":"<<be(done[0],24)<<"}\n";
+                std::cout<<"{\"tx\":"<<old_tx.size()<<",\"expired\":"<<core.stats().render_expired<<",\"dropped_frames\":"<<core.stats().render_dropped_frames<<",\"oldest_pcm_age_ms\":100,\"status\":"<<static_cast<int32_t>(be(done[0],20))<<",\"iso_status\":"<<static_cast<int32_t>(be(done[0],60))<<",\"actual\":"<<be(done[0],24)<<"}\n";
             }else return 9;
         }
         return 0;

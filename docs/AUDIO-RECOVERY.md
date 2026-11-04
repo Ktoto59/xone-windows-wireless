@@ -8,8 +8,8 @@ scheduling the bridge worker. No claim of uninterrupted audio during a stall.
 ## Behavior and limits
 
 - Retain at most 32 aligned 192-byte PCM frames. Each frame keeps its own USB
-  arrival deadline: 72 ms for 2024, 96 ms for 2021. The 2024 limit allows its
-  observed eight queued 8-ms USB requests plus one block of dispatch margin.
+  arrival deadline: 88 ms for 2024, 96 ms for 2021. The 2024 limit allows its
+  measured peak of ten queued 8-ms USB requests plus one block of dispatch margin.
   These are maximum ages, not a new prebuffer or a promise of end-to-end latency.
 - Expire individual frames and preserve fresh fragments from other requests.
   Unlink removes only the active request's PCM. Disown completed fragments
@@ -104,7 +104,7 @@ physical adapter or driver changes:
 - Worker/callback pauses of 10, 20, 40 and 80 ms, fresh output after resumption,
   no immediate catch-up bursts and no media-induced RF reset.
 - Ordinary timer jitter without cumulative phase drift.
-- Eight queued render URBs with 0.5/1/2-ms dispatch jitter and 50/100/400-us
+- Eight and ten queued render URBs with 0.5/1/2-ms dispatch jitter and 50/100/400-us
   physical completions, plus queued +/-50-us clock drift: no artificial expiry.
 - Old/fresh partial PCM, verifying retained bytes after selective expiry.
 - Reused request sequences and unlink ownership.

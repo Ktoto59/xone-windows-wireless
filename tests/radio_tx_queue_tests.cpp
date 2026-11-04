@@ -17,11 +17,14 @@ int main(){try{
         queue.push(work(1));{std::unique_lock lock(mutex);require(changed.wait_for(lock,1s,[&]{return entered;}));}
         require(queue.poll().empty()); // An accepted request is not USB success.
         const auto before=RadioTxQueue::Clock::now();
-        require(queue.push(work(2,true)));require(queue.push(work(3)));auto expired=work(4,true);expired.deadline=RadioTxQueue::Clock::now()-1ms;require(queue.push(std::move(expired)));
+        auto media=work(2,true);media.scheduled_at=before-10ms;
+        require(queue.push(std::move(media)));require(queue.push(work(3)));auto expired=work(4,true);expired.deadline=RadioTxQueue::Clock::now()-1ms;require(queue.push(std::move(expired)));
         require(RadioTxQueue::Clock::now()-before<100ms); // Slow USB cannot hold producers.
         {std::lock_guard lock(mutex);release=true;}changed.notify_all();
         std::vector<RadioTxQueue::Result> results;until([&]{auto r=queue.poll();results.insert(results.end(),r.begin(),r.end());return results.size()==4;});
         require((sent==std::vector<int>{1,3,2}));
+        require(std::all_of(results.begin(),results.end(),[&](const auto &r){return r.finished>=before && r.finished<=RadioTxQueue::Clock::now();}));
+        require(std::any_of(results.begin(),results.end(),[](const auto &r){return r.token==2 && r.start_lateness_us>=10000;}));
         require(std::any_of(results.begin(),results.end(),[](const auto &r){return r.token==4 && r.status==-18 && !r.packets;}));
     }
     {

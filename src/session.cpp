@@ -374,9 +374,10 @@ void Session::tick(std::chrono::steady_clock::time_point now) {
         auto &stats=clients_[result.wcid-1]->usb_tx;stats.packets+=result.packets;stats.over_8ms+=result.over_8ms;
         stats.last_us=result.last_us;stats.max_us=std::max(stats.max_us,result.max_us);
         stats.max_queue_us=std::max(stats.max_queue_us,result.queue_us);
+        stats.max_start_lateness_us=std::max(stats.max_start_lateness_us,result.start_lateness_us);
         if(result.status==-18)++stats.expired;else if(result.status)++stats.failed;
         if(result.status && result.status!=-18){stats.last_error_status=result.status;stats.last_native_error=result.native_error;stats.last_error_bytes=result.transferred;}
-        if(raw_output_)raw_output_->complete(result.wcid,result.token,result.status);
+        if(raw_output_)raw_output_->complete_at(result.wcid,result.token,result.status,result.finished);
     }
     auto requests=raw_output_?raw_output_->poll():std::vector<RawGipTransmit>{};
     if(raw_output_)for(auto &fault:raw_output_->faults()){
@@ -410,6 +411,7 @@ void Session::tick(std::chrono::steady_clock::time_point now) {
         if(tx_queue_){
             auto &client=*clients_[request.wcid-1];RadioTxQueue::Work work{request.wcid,request.token,client.tx_epoch,request.audio,request.media_deadline,{}};
             work.cancellation=request.cancellation;
+            work.scheduled_at=request.scheduled_at;
             for(const auto &p:packets)work.packets.push_back(client.prepare(p,request.audio));
             if(!tx_queue_->push(std::move(work)))raw_output_->complete(request.wcid,request.token,request.audio?-18:-19);
         }else{

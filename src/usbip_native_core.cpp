@@ -48,6 +48,7 @@ void Core::trim_render(Clock::time_point now){
     const auto before=pcm_.size();
     std::erase_if(pcm_,[&](const auto &frame){return now>=frame.expires;});
     stats_.render_dropped_frames+=before-pcm_.size();
+    stats_.render_pcm_expired+=before-pcm_.size();
 }
 void Core::trim_capture(Clock::time_point now){
     while(!capture_.empty() && (capture_.size()>32 || now-capture_times_.front()>std::chrono::milliseconds(32))){capture_.pop_front();capture_times_.pop_front();++stats_.dropped;}
@@ -100,7 +101,9 @@ void Core::fail(uint32_t seq,int32_t status){const auto it=pending_.find(seq);if
 void Core::expire_render(uint32_t seq,Clock::time_point now){
     const auto it=pending_.find(seq);if(it==pending_.end())return;
     auto result=render_result(it->second,true);
-    if(!it->second.media_lost && std::any_of(result.iso.begin(),result.iso.end(),[](const auto &slot){return slot.status!=0;}))++stats_.render_expired;
+    if(!it->second.media_lost && std::any_of(result.iso.begin(),result.iso.end(),[](const auto &slot){return slot.status!=0;})){
+        ++stats_.render_expired;++stats_.render_expired_before_tx;
+    }
     trim_render(now);
     report_media_drops(now);
     finish(seq,std::move(result));
@@ -246,6 +249,9 @@ void Core::pump(Clock::time_point now){
         // Re-anchor after a stall, rather than replaying missed timer slots in
         // a burst when asynchronous completions arrive at the same timestamp.
         const auto period=connector_.independent_clock?std::chrono::nanoseconds(std::chrono::milliseconds(8)):render_timing_.period();
+        const auto scheduled_at=render_deadline_==Clock::time_point{}?now:render_deadline_;
+        if(render_deadline_!=Clock::time_point{} && now>render_deadline_)
+            stats_.max_render_lateness_us=std::max(stats_.max_render_lateness_us,static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(now-render_deadline_).count()));
         if(render_deadline_==Clock::time_point{})render_deadline_=now+period;
         else if(now-render_deadline_>=period){++stats_.render_rephased;render_deadline_=now+period;}
         else render_deadline_+=period;
@@ -253,11 +259,12 @@ void Core::pump(Clock::time_point now){
         auto media_deadline=p.media_deadline;
         p.sending_slots=0;p.sending_frames.fill(0);
         for(unsigned i=0;i<8;++i){const auto &frame=pcm_[i];if(frame.owner==*seq){p.sending_slots|=uint32_t(1)<<frame.slot;++p.sending_frames[frame.slot];}media_deadline=std::min(media_deadline,frame.expires);wire.insert(wire.end(),frame.data.begin(),frame.data.end());}
+        stats_.max_render_pcm_age_us=std::max(stats_.max_render_pcm_age_us,static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(now-(media_deadline-connector_.render_age)).count()));
         pcm_.erase(pcm_.begin(),pcm_.begin()+8);
         transmit(*seq,std::move(wire),true,now);
         // The oldest constituent frame bounds this physical send only. Keep
         // the request's own deadline for its remaining, possibly fresher PCM.
-        outbound_.back().media_deadline=media_deadline;break;
+        outbound_.back().media_deadline=media_deadline;outbound_.back().scheduled_at=scheduled_at;break;
     }
 }
 void Core::radio(uint8_t kind,uint8_t wcid,std::span<const uint8_t> data,Clock::time_point now,std::optional<Clock::time_point> arrived){
@@ -302,6 +309,7 @@ void Core::complete(uint8_t wcid,uint32_t token,int32_t status,Clock::time_point
     const auto seq=t->second;tokens_.erase(t);auto it=pending_.find(seq);if(it==pending_.end())return;auto &p=it->second;p.token=0;
     // A deliberately expired, unsent PCM block is media loss, not RF failure.
     if(status==-18 && p.kind==Kind::render){
+        ++stats_.render_tx_expired;
         if(!p.media_lost){p.media_lost=true;++stats_.render_expired;}
         p.lost_slots|=p.sending_slots;
         p.sending_slots=0;p.sending_frames.fill(0);stats_.render_dropped_frames+=8;report_media_drops(now);
@@ -311,7 +319,8 @@ void Core::complete(uint8_t wcid,uint32_t token,int32_t status,Clock::time_point
         if(now>=p.media_deadline)expire_render(seq,now);
         pump(now);return;
     }
-    if(status){const bool control=p.kind==Kind::irq_out;fail(seq,status);recover_usb(control?"control-tx-failed":"audio-tx-failed");pump(now);return;}
+    if(status){const bool control=p.kind==Kind::irq_out;if(p.kind==Kind::render)++stats_.render_tx_failed;fail(seq,status);recover_usb(control?"control-tx-failed":"audio-tx-failed");pump(now);return;}
+    if(p.kind==Kind::render && now>=p.media_deadline)++stats_.render_success_after_deadline;
     if(p.kind==Kind::render){for(size_t i=0;i<p.sent_frames.size();++i)p.sent_frames[i]+=p.sending_frames[i];p.sending_frames.fill(0);p.sending_slots=0;++stats_.audio_tx;p.deadline=now+std::chrono::seconds(5);}
     else {stats_.tx+=packets(p.request.data).size();Completion c;c.actual=static_cast<uint32_t>(p.request.length);finish(seq,c);}
     pump(now);
