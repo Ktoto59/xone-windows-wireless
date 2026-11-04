@@ -175,6 +175,54 @@ class NativeTransportTests(unittest.TestCase):
         wait_for(lambda value: not value['UsbImported'] and value['UsbClosed'] == 1)
         self.stop()
 
+    def test_failed_control_recovers_usb_and_publishes_progress(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        status = Path(directory.name)/'status.json'
+        self.start('0b32', status)
+        owner = self.connect(0x8003)
+        exact(owner, 320)
+        owner.sendall(submit(1, 0, 0, setup=bytes.fromhex('0009010000000000')))
+        self.assertEqual(struct.unpack_from('!i', exact(owner, 48), 20)[0], 0)
+        self.process.stdin.write('fail-next\n')
+        self.process.stdin.flush()
+        self.assertEqual(self.process.stdout.readline().strip(), 'ARMED')
+        owner.sendall(submit(2, 0, 1, data=bytes((4, 32, 1, 0))))
+        self.assertEqual(struct.unpack_from('!i', exact(owner, 48), 20)[0], -5)
+        deadline = time.monotonic()+4
+        while time.monotonic() < deadline:
+            try:
+                state = json.loads(status.read_text(encoding='utf-8'))
+                if state.get('RecoveryRequired'):
+                    break
+            except (OSError, ValueError):
+                pass
+            time.sleep(.01)
+        else:
+            self.fail('Control failure did not request local recovery')
+        self.assertTrue(state['RadioAssociated'])
+        self.assertGreater(state['SnapshotSequence'], 0)
+        self.assertEqual(state['UsbPending']['ControlOut'], 0)
+        owner.close()
+        # Wait for the server's TCP close transition, then import the same RF
+        # association. Exclusive imports reject clients until EOF is serviced.
+        deadline = time.monotonic()+4
+        while time.monotonic() < deadline:
+            try:
+                if not json.loads(status.read_text(encoding='utf-8'))['UsbImported']:
+                    break
+            except (OSError, ValueError):
+                pass
+            time.sleep(.01)
+        else:
+            self.fail('TCP close was not serviced')
+        restored = self.connect(0x8003)
+        self.assertEqual(exact(restored, 320)[:8], bytes.fromhex('0111000300000000'))
+        restored.sendall(submit(3, 0, 0, setup=bytes.fromhex('0009010000000000')))
+        self.assertEqual(struct.unpack_from('!i', exact(restored, 48), 20)[0], 0)
+        restored.sendall(submit(4, 0, 1, data=bytes((4, 32, 2, 0))))
+        self.assertEqual(struct.unpack_from('!ii', exact(restored, 48), 20), (0, 4))
+
     def test_audio_error_reimports_without_new_rf_and_is_journaled(self):
         directory=tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)

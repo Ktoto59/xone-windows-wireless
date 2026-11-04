@@ -32,6 +32,8 @@ struct ControllerStatus {
     bool output_recovering=false;
     unsigned output_recovery_attempt=0;
     std::string output_error;
+    uint64_t session_generation=0,repeated_associations=0;
+    std::optional<uint16_t> association_sequence,last_association_sequence;
 };
 class Session {
     struct Client;
@@ -55,6 +57,7 @@ class Session {
     std::vector<Removal> removals_;
     struct OutputRecovery {unsigned attempts=0;std::chrono::steady_clock::time_point last{};};
     std::map<Bytes,OutputRecovery> output_retries_;
+    std::map<Bytes,std::chrono::steady_clock::time_point> association_retries_;
     void check(int result,const char *operation);
     void pairing(bool enabled);
     void remove(uint8_t wcid,const char *reason="session-close");

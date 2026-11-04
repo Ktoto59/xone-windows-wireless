@@ -52,7 +52,7 @@ int main(){try{
         c.complete(1,tx.token,0,now+40ms);require(c.ready() && !c.stats().recovery_required);
     }
     // Virtual-time fault injection; no sleeps, real adapter, drivers or files.
-    for(auto pause:{10ms,20ms,40ms,80ms}){
+    for(auto pause:{10ms,20ms,40ms,80ms,250ms,500ms}){
         Core c(profile2024,true);connect(c,now);c.radio(4,1,mic,now);
         c.submit(render(30,8,1),now);auto first=take(c);
         c.submit(render(31,8,2),now+1ms);c.submit(render(32,8,3),now+1ms);
@@ -215,6 +215,6 @@ int main(){try{
         if(rx_period>8000us)require(sent-received<=3 && received-sent<=3);
         require(sent<=received+3 && c.ready() && c.stats().render_high_water<=32);
     }
-    std::cout<<"PASS: bounded prediction, 10/20/40/80 ms stalls, no catch-up bursts, per-frame expiry, unlink ownership and transport recovery\n";
+    std::cout<<"PASS: bounded prediction, 10/20/40/80/250/500 ms stalls, no catch-up bursts, per-frame expiry, unlink ownership and transport recovery\n";
     return 0;
 }catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}}

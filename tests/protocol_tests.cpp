@@ -130,6 +130,12 @@ int main() {
             const std::array<uint8_t,4> c{0x20,0,1,14}; rejects([&] { xone::parse_gip(c); });
             const std::array<uint8_t,13> d{}; rejects([&] { xone::parse_gamepad(d); });
         });
+        test("Association retains sequence control and retry flag",[]{
+            auto raw=radio_gip();raw[36]=0;raw[37]=8;raw[58]=0x30;raw[59]=0x12;
+            const auto event=xone::parse_radio(raw);
+            check(event.kind==xone::RadioEvent::Kind::association && event.association_sequence==0x1230 && event.association_retry,"Association identity lost");
+            raw[37]=0;check(!xone::parse_radio(raw).association_retry,"Retry flag was invented");
+        });
         test("MT76 radio frame strips RXWI and L2 padding",[] {
             for (bool padding : {false,true}) {
                 const auto r=xone::parse_radio(radio_gip(padding));

@@ -17,6 +17,9 @@
 #include "adapter_catalog.hpp"
 #include "usb_import_recovery.hpp"
 #include "radio_restart_backoff.hpp"
+#include "host_cleanup.hpp"
+#include "owned_usb_port.hpp"
+#include "peer_recovery_backoff.hpp"
 #include "diagnostic_log.hpp"
 #include "runtime_state.hpp"
 #include <iostream>
@@ -43,6 +46,7 @@ Json identity(HANDLE process,DWORD pid){return {{"Pid",pid},{"StartTicks",ticks(
 struct Child {
     Handle process,job;DWORD pid=0;
     void start(const fs::path &exe,std::wstring arguments,HANDLE output=nullptr){
+        if(process.value || job.value)throw std::runtime_error("Child is already owned");
         SECURITY_ATTRIBUTES security{sizeof(security),nullptr,TRUE};Handle nul(CreateFileW(L"NUL",GENERIC_READ|GENERIC_WRITE,FILE_SHARE_READ|FILE_SHARE_WRITE,&security,OPEN_EXISTING,0,nullptr));
         STARTUPINFOW startup{};startup.cb=sizeof(startup);startup.dwFlags=STARTF_USESTDHANDLES;startup.hStdInput=nul.value;startup.hStdOutput=output?output:nul.value;startup.hStdError=nul.value;
         auto command=quote(exe.wstring())+L" "+arguments;PROCESS_INFORMATION info{};
@@ -50,23 +54,37 @@ struct Child {
         process.value=info.hProcess;pid=info.dwProcessId;Handle thread(info.hThread);job.value=CreateJobObjectW(nullptr,nullptr);
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};limits.BasicLimitInformation.LimitFlags=JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
         if(!job.value || !SetInformationJobObject(job.value,JobObjectExtendedLimitInformation,&limits,sizeof(limits)) || !AssignProcessToJobObject(job.value,process.value)){TerminateProcess(process.value,1);throw std::runtime_error("Cannot own application child");}
-        ResumeThread(thread.value);
+        if(ResumeThread(thread.value)==DWORD(-1)){close();throw std::runtime_error("Cannot resume application child");}
     }
     bool alive()const{return process.value && WaitForSingleObject(process.value,0)==WAIT_TIMEOUT;}
-    void close(){if(process.value){if(alive()){TerminateProcess(process.value,1);WaitForSingleObject(process.value,3000);}CloseHandle(process.value);process.value=nullptr;}if(job.value){CloseHandle(job.value);job.value=nullptr;}}
+    bool close()noexcept{
+        // Close the entire job first, including descendants of an exited CLI.
+        // Retain the process handle until its termination has been observed.
+        if(job.value){CloseHandle(job.value);job.value=nullptr;}
+        bool stopped=true;
+        if(process.value){
+            if(WaitForSingleObject(process.value,0)!=WAIT_OBJECT_0){TerminateProcess(process.value,1);stopped=WaitForSingleObject(process.value,3000)==WAIT_OBJECT_0;}
+            CloseHandle(process.value);process.value=nullptr;
+        }
+        pid=0;return stopped;
+    }
     ~Child(){close();}
 };
 fs::path usbip_path(){wchar_t folder[32768]{};const auto length=GetEnvironmentVariableW(L"ProgramW6432",folder,32768);if(!length || length>=32768)throw std::runtime_error("Cannot locate USBip installation");return fs::path(folder)/L"USBip/usbip.exe";}
-int usbip(std::wstring arguments,bool get_port,std::string *captured=nullptr){
+int run_usbip(const fs::path &exe,std::wstring arguments,bool get_port,std::string *captured,Clock::time_point deadline,HANDLE cancellation=nullptr){
+    if(Clock::now()>=deadline)throw std::runtime_error("USBip cleanup deadline exhausted");
     SECURITY_ATTRIBUTES security{sizeof(security),nullptr,TRUE};HANDLE r=nullptr,w=nullptr;if(!CreatePipe(&r,&w,&security,4096))throw std::runtime_error("Cannot create dependency response pipe");Handle reader(r),writer(w);SetHandleInformation(r,HANDLE_FLAG_INHERIT,0);
-    Child child;child.start(usbip_path(),std::move(arguments),w);CloseHandle(writer.value);writer.value=nullptr;
-    const auto deadline=Clock::now()+std::chrono::seconds(15);std::string output;
-    while(child.alive() && Clock::now()<deadline){DWORD available=0;if(PeekNamedPipe(r,nullptr,0,nullptr,&available,nullptr) && available){char bytes[512];DWORD got=0;if(!ReadFile(r,bytes,std::min<DWORD>(available,sizeof(bytes)),&got,nullptr))break;output.append(bytes,got);if(output.size()>4096)throw std::runtime_error("Invalid dependency response");}WaitForSingleObject(child.process.value,50);}
+    Child child;child.start(exe,std::move(arguments),w);CloseHandle(writer.value);writer.value=nullptr;
+    std::string output;
+    while(child.alive() && Clock::now()<deadline){if(cancellation && WaitForSingleObject(cancellation,0)==WAIT_OBJECT_0)throw std::runtime_error("USBip operation cancelled");DWORD available=0;if(PeekNamedPipe(r,nullptr,0,nullptr,&available,nullptr) && available){char bytes[512];DWORD got=0;if(!ReadFile(r,bytes,std::min<DWORD>(available,sizeof(bytes)),&got,nullptr))break;output.append(bytes,got);if(output.size()>4096)throw std::runtime_error("Invalid dependency response");}WaitForSingleObject(child.process.value,50);}
     if(child.alive())throw std::runtime_error("USBip operation timed out");
     char bytes[512];DWORD available=0,got=0;while(PeekNamedPipe(r,nullptr,0,nullptr,&available,nullptr) && available && ReadFile(r,bytes,std::min<DWORD>(available,sizeof(bytes)),&got,nullptr)){output.append(bytes,got);if(output.size()>4096)throw std::runtime_error("Invalid dependency response");}
-    if(captured)*captured=output;DWORD code=1;GetExitCodeProcess(child.process.value,&code);if(code)throw std::runtime_error("USBip operation failed");if(!get_port)return 0;
+    if(captured)*captured=output;DWORD code=1;GetExitCodeProcess(child.process.value,&code);if(code)throw std::runtime_error("USBip operation failed (exit "+std::to_string(code)+")");if(!get_port)return 0;
     const auto first=output.find_first_not_of(" \t\r\n"),last=output.find_last_not_of(" \t\r\n");if(first==output.npos)throw std::runtime_error("Missing imported port");const auto number=output.substr(first,last-first+1);
     if(number.size()>4 || !std::all_of(number.begin(),number.end(),[](char c){return c>='0'&&c<='9';}))throw std::runtime_error("Invalid imported port");const int port=std::stoi(number);if(port<1 || port>65535)throw std::runtime_error("Invalid imported port");return port;
+}
+int usbip(std::wstring arguments,bool get_port,std::string *captured=nullptr,Clock::time_point deadline=Clock::now()+std::chrono::seconds(15),HANDLE cancellation=nullptr){
+    return run_usbip(usbip_path(),std::move(arguments),get_port,captured,deadline,cancellation);
 }
 LRESULT CALLBACK events(HWND window,UINT message,WPARAM w,LPARAM l){
     if(message==WM_DEVICECHANGE)hardware_changed=true;
@@ -80,17 +98,17 @@ struct Window {
     void pump(){MSG message{};while(PeekMessageW(&message,nullptr,0,0,PM_REMOVE)){TranslateMessage(&message);DispatchMessageW(&message);}}
 };
 bool healthy(const std::wstring &id){DEVINST node=0;ULONG status=0,problem=0;return CM_Locate_DevNodeW(&node,const_cast<PWSTR>(id.c_str()),CM_LOCATE_DEVNODE_NORMAL)==CR_SUCCESS && CM_Get_DevNode_Status(&status,&problem,node,0)==CR_SUCCESS && (status&DN_STARTED) && !(status&DN_HAS_PROBLEM);}
-struct Peer {xone::ApplianceDevice model;int port=0;uint64_t generation=0;bool ready=false;Clock::time_point attached_at{},retry_at{};};
+struct Peer {xone::ApplianceDevice model;int port=0;uint64_t generation=0;bool ready=false;Clock::time_point attached_at{};xone::PeerRecoveryBackoff retry;std::string error;xone::UsbImportRecovery import;};
 class Host {
     std::array<Peer,8> peers_;Json config_,previous_state_;Child radio_;std::wstring adapter_;Window window_;
     xone::RuntimeState memory_{root,true};Json registry_;bool registry_dirty_=false;
     Clock::time_point adapter_check_{};xone::RadioRestartBackoff radio_retry_;std::string retry_reason_;
-    DWORD last_radio_exit_=0;
+    DWORD last_radio_exit_=0;Json cleanup_errors_=Json::array();
     fs::path work=root/L"work";Json me_=identity(GetCurrentProcess(),GetCurrentProcessId());
     fs::path peer_status(const Peer &peer)const{return work/xone::wide("native-"+peer.model.name+".json");}
     void state(std::string phase,std::string error={}){
-        Json ready=Json::array(),devices=Json::array();for(const auto &p:peers_){if(p.ready && p.port)ready.push_back(p.model.name);devices.push_back({{"Name",p.model.name},{"Mac",p.model.mac},{"Audio",p.model.audio},{"Port",p.port},{"Generation",p.generation},{"Status",xone::narrow(peer_status(p).wstring())},{"UsbPort",p.model.port}});}
-        Json status={{"Phase",phase},{"Error",error.empty()?Json(nullptr):Json(error)},{"Process",me_},{"WorkerActive",radio_.alive()},{"RadioActive",radio_.alive()},{"DevicesReady",ready},{"Devices",devices},{"AudioSelected",false},{"RetryCount",radio_retry_.failures()},{"RetryDelaySeconds",radio_retry_.delay().count()},{"LastRadioExit",last_radio_exit_},{"Backend","cpp-headless"}};
+        Json ready=Json::array(),devices=Json::array();for(const auto &p:peers_){if(p.ready && p.port)ready.push_back(p.model.name);devices.push_back({{"Name",p.model.name},{"Mac",p.model.mac},{"Audio",p.model.audio},{"Port",p.port},{"Generation",p.generation},{"Status",xone::narrow(peer_status(p).wstring())},{"UsbPort",p.model.port},{"Error",p.error},{"RetryCount",p.retry.failures()}});}
+        Json status={{"Phase",phase},{"Error",error.empty()?Json(nullptr):Json(error)},{"Process",me_},{"WorkerActive",radio_.alive()},{"RadioActive",radio_.alive()},{"DevicesReady",ready},{"Devices",devices},{"AudioSelected",false},{"RetryCount",radio_retry_.failures()},{"RetryDelaySeconds",radio_retry_.delay().count()},{"LastRadioExit",last_radio_exit_},{"Backend","cpp-headless"},{"CleanupErrors",cleanup_errors_}};
         if(status==previous_state_)return;
         xone::diagnostic("host_state",{{"phase",phase},{"error",error},{"ready",ready},{"last_radio_exit",last_radio_exit_}},!error.empty());
         if(!memory_.publish(xone::RuntimeState::host,status.dump()))return;
@@ -98,17 +116,31 @@ class Host {
         if(!memory_.publish(xone::RuntimeState::running,running.dump()))return;
         previous_state_=status;
     }
-    void detach(Peer &peer){
-        if(peer.port){try{usbip(L"detach -p "+std::to_wstring(peer.port),false);}catch(const std::exception &){
-            std::string listing;usbip(L"port",false,&listing);std::istringstream lines(listing);std::string line;
-            while(std::getline(lines,line))if(line.starts_with("Port ")){std::istringstream number(line.substr(5));int port=0;number>>port;if(port==peer.port)throw;}
-        }peer.port=0;}peer.ready=false;
+    void detach(Peer &peer,Clock::time_point deadline=Clock::now()+std::chrono::seconds(15),bool stopping=false){
+        peer.ready=false;
+        // The CLI serial is empty: attach deliberately has no --serial override.
+        // It differs from the server VirtualSerial (which Windows still reads).
+        xone::detach_owned_usb_port(peer.port,peer.model.port,"",[&](const std::wstring &args,std::string *captured){
+            usbip(args,false,captured,deadline,stopping?nullptr:memory_.stop_event());
+        },[&](const std::string &error){
+            if(cleanup_errors_.size()<64)cleanup_errors_.push_back({{"Resource",peer.model.name},{"Error",error}});
+            xone::diagnostic("usb_detach_failed",{{"slot",peer.model.name},{"port",peer.port},{"error",error}},true);
+        });
+        peer.port=0;peer.import={};peer.retry.interrupted();
     }
     void stop_radio(){
-        radio_retry_.stopped();
+        radio_retry_.stopped();cleanup_errors_=Json::array();
         xone::diagnostic("radio_stop_requested");
-        for(auto &p:peers_)detach(p);
-        if(radio_.alive()){memory_.request_radio_stop();WaitForSingleObject(radio_.process.value,8000);}radio_.close();
+        auto cleanup_deadline=Clock::time_point::max();
+        xone::stop_owned_radio(peers_,[&]{
+            if(radio_.alive()){memory_.request_radio_stop();WaitForSingleObject(radio_.process.value,8000);}
+        },[&]{cleanup_deadline=Clock::now()+std::chrono::seconds(16);if(!radio_.close())throw std::runtime_error("Radio termination was not confirmed");},[&](Peer &p){
+            // All eight hung USBip calls still fit the --stop 35 second bound.
+            detach(p,std::min(cleanup_deadline,Clock::now()+std::chrono::seconds(2)),true);
+        },[&](const std::string &resource,const std::string &error){
+            cleanup_errors_.push_back({{"Resource",resource},{"Error",error}});
+            xone::diagnostic("radio_cleanup_failed",{{"resource",resource},{"error",error}},true);
+        });
     }
     void save_devices(){
         auto &registry=registry_;
@@ -121,7 +153,7 @@ class Host {
     }
     void start_radio(){
         xone::diagnostic("radio_start_requested");
-        memory_.clear_radio();for(auto &p:peers_){p.ready=false;p.generation=0;}
+        memory_.clear_radio();for(auto &p:peers_){p.ready=false;p.generation=0;p.retry.interrupted();}
         std::wstring arguments=L"run --output usb-gip --native-usb --usb-auto-slots 8 --usb-gip-port 33400 --seconds 0 --instance "+quote(adapter_)+L" --firmware "+quote((work/L"firmware/FW_ACC_00U.bin").wstring())+L" --runtime-root "+quote(root.wstring());
         if(!config_.value("IdlePowerEnabled",true))arguments+=L" --no-idle-power";
         radio_.start(binary_dir/L"xone-probe-cpp.exe",std::move(arguments));SetPriorityClass(radio_.process.value,ABOVE_NORMAL_PRIORITY_CLASS);radio_retry_.started(Clock::now());retry_reason_.clear();state("StartingRadio");
@@ -158,21 +190,28 @@ public:
                     else if(!fs::exists(work/L"firmware/FW_ACC_00U.bin"))state("SetupRequired","Adapter firmware is missing");else start_radio();
                 }else{
                     if(radio_retry_.observe_running(Clock::now()))xone::diagnostic("radio_recovery_stable");
-                    for(auto &p:peers_){const auto s=memory_.read(static_cast<size_t>(&p-peers_.data()));
+                    xone::service_peers(peers_,[&](Peer &p){
+                        window_.pump();if(memory_.stopped() || resumed || !p.retry.ready(Clock::now()))return;
+                        if(p.port && !p.generation)detach(p); // retry failed cleanup even before RF reconnect
+                        const auto s=memory_.read(static_cast<size_t>(&p-peers_.data()));
                         // An unavailable/partially observed status file is not
                         // a radio disconnect. Only an explicit snapshot may
                         // detach this slot's imported USB device.
-                        if(!s.is_object() || !s.contains("Generation") || !s["Generation"].is_number_unsigned() || !s.contains("Ready") || !s["Ready"].is_boolean())continue;
+                        if(!s.is_object() || !s.contains("Generation") || !s["Generation"].is_number_unsigned() || !s.contains("Ready") || !s["Ready"].is_boolean())return;
                         const auto generation=s.value("Generation",uint64_t(0));const bool ready=s.value("Ready",false);
                         const bool recovery=s.value("RecoveryRequired",false),associated=s.value("RadioAssociated",ready);
                         const bool known_import=s.contains("UsbImported") && s["UsbImported"].is_boolean();
-                        if(p.port && xone::UsbImportRecovery::detach(ready,recovery,generation,p.generation,s.value("UsbImported",false),known_import,p.attached_at,Clock::now())){
+                        if(p.port && p.import.detach(ready,recovery,generation,p.generation,s.value("UsbImported",false),known_import,s.value("SnapshotSequence",uint64_t(0)),s.value("UsbImports",uint64_t(0)),s.value("UsbClosed",uint64_t(0)),Clock::now(),s.value("AssociationId",uint64_t(0)),s.value("PublishedTickMs",uint64_t(0)))){
                             xone::diagnostic("usb_reimport_required",{{"slot",p.model.name},{"port",p.port},{"generation",generation},{"previous_generation",p.generation},{"ready",ready},{"recovery",recovery},{"imported",s.value("UsbImported",false)}},true);
-                            detach(p);p.retry_at=Clock::now()+std::chrono::seconds(1);
+                            detach(p);throw std::runtime_error("USB import lost; local retry scheduled");
                         }
                         p.ready=ready;if(xone::UsbImportRecovery::attach(ready,recovery,associated)){const auto pid=s.value("Pid",uint16_t(0));if(pid!=0x0b17 && pid!=0x0b32 && pid!=0x0b12)throw std::runtime_error("Unknown native slot model");p.model.pid=pid;p.model.audio=pid!=0x0b12;p.model.profile=pid==0x0b17?"headset-0b17-usb.json":pid==0x0b32?"headset-0b32-usb.json":"controller-0b12-usb.json";}
-                        if(xone::UsbImportRecovery::attach(ready,recovery,associated) && !p.port && Clock::now()>=p.retry_at){p.retry_at=Clock::now()+std::chrono::seconds(10);p.port=usbip(L"-t "+std::to_wstring(p.model.port)+L" attach -r 127.0.0.1 -b 1-1 --once --terse",true);p.generation=generation;p.attached_at=Clock::now();const auto mac=s.value("Mac",p.model.mac);if(mac.size()==12 && std::all_of(mac.begin(),mac.end(),[](char c){return (c>='0'&&c<='9')||(c>='a'&&c<='f');}))p.model.mac=mac;save_devices();}
-                    }
+                        if(xone::UsbImportRecovery::attach(ready,recovery,associated) && !p.port && p.retry.ready(Clock::now())){p.port=usbip(L"-t "+std::to_wstring(p.model.port)+L" attach -r 127.0.0.1 -b 1-1 --once --terse",true,nullptr,Clock::now()+std::chrono::seconds(15),memory_.stop_event());p.generation=generation;p.attached_at=Clock::now();p.import.begin(s.value("SnapshotSequence",uint64_t(0)),s.value("UsbImports",uint64_t(0)),s.value("UsbClosed",uint64_t(0)),p.attached_at,s.value("AssociationId",uint64_t(0)),GetTickCount64());const auto mac=s.value("Mac",p.model.mac);if(mac.size()==12 && std::all_of(mac.begin(),mac.end(),[](char c){return (c>='0'&&c<='9')||(c>='a'&&c<='f');}))p.model.mac=mac;save_devices();}
+                        if(p.retry.observe_healthy(p.port && ready && !recovery && known_import && s.value("UsbImported",false),Clock::now()))p.error.clear();
+                    },[&](Peer &p,const std::string &error){
+                        p.retry.failed(Clock::now());p.ready=false;p.error=error;
+                        xone::diagnostic("slot_retry",{{"slot",p.model.name},{"error",error},{"attempt",p.retry.failures()},{"retry_seconds",p.retry.delay().count()}},true);
+                    });
                     // Audio endpoint choice belongs to Windows and the user.
                     // Connecting another peer must not change global defaults.
                     state(std::any_of(peers_.begin(),peers_.end(),[](const auto &p){return p.ready && p.port!=0;})?"DevicesReady":"WaitingForDevices");

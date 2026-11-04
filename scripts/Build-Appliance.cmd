@@ -68,5 +68,9 @@ cl /nologo /std:c++20 /EHsc /O2 /DNDEBUG /W4 /WX /utf-8 /I src tests\usb_write_c
 if errorlevel 1 exit /b 1
 "%XONE_APPLIANCE_OUTPUT%\usb-write-completion-tests.exe"
 if errorlevel 1 exit /b 1
+cl /nologo /std:c++20 /EHsc /O2 /W4 /WX /utf-8 /DNDEBUG %XONE_APPLIANCE_DIAGNOSTICS% /I src tests\host_recovery_tests.cpp build\appliance\winusb_transport.obj /Fobuild\appliance\host_recovery_tests.obj /Fe"%XONE_APPLIANCE_OUTPUT%\host-recovery-tests.exe" /link /subsystem:console ole32.lib uuid.lib propsys.lib setupapi.lib winusb.lib cfgmgr32.lib user32.lib advapi32.lib
+if errorlevel 1 exit /b 1
+"%XONE_APPLIANCE_OUTPUT%\host-recovery-tests.exe"
+if errorlevel 1 exit /b 1
 > "%XONE_APPLIANCE_OUTPUT%\runtime-capabilities.json" echo {"RuntimeState":"memory-v1"}
 exit /b 0

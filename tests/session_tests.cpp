@@ -397,7 +397,7 @@ int main() {
                 usb.control=[](void *,u8,u8 type,u16,u16,void *data,u16 n,unsigned)->int{if(type&128)std::memset(data,0,n);return n;};
                 usb.bulk=[](void *,u8,void *,int n,int *actual,unsigned)->int{if(actual)*actual=n;return 0;};
                 Session session(mt,nullptr,false,nullptr,&raw);RadioEvent e;e.kind=RadioEvent::Kind::association;e.address={2,0,0,0,0,1};session.process(e);
-                e.address={2,0,0,0,0,2};session.process(e);e.kind=RadioEvent::Kind::gip;e.wcid=1;
+                e.address={2,0,0,0,0,2};session.process(e);e.kind=RadioEvent::Kind::gip;e.wcid=1;e.address={2,0,0,0,0,1};
                 const auto valid=encode_gip({2,32,1,0,Bytes(28)});
                 for(const auto &bad:std::vector<Bytes>{{2},{2,32,1,128,128,128,128},{2,32,1,4,0},{2,128,1,0}}){
                     e.payload=bad;session.process(e);
@@ -407,7 +407,7 @@ int main() {
                 check(raw.packets.empty(),"Partially parsed transfer was delivered");
                 auto status=session.status();check(status.size()==2 && status[0].malformed_gip_packets==5 && status[1].malformed_gip_packets==0,
                     "Parse failure removed a device or affected the sibling counter");
-                e.wcid=2;e.payload=valid;session.process(e);e.wcid=1;session.process(e);
+                e.wcid=2;e.address={2,0,0,0,0,2};e.payload=valid;session.process(e);e.wcid=1;e.address={2,0,0,0,0,1};session.process(e);
                 if(passthrough)check(raw.packets.size()==2 && raw.packets[0].first==2 && raw.packets[1].first==1,"A malformed peer blocked later input or its sibling");
                 e.wcid=0;e.payload={2};session.process(e);e.wcid=17;session.process(e);
                 check(session.status()[0].malformed_gip_packets==5,"Unknown WCID changed an active counter");
@@ -565,7 +565,7 @@ int main() {
             const auto guid=unhex("77ce347ae27dc6458ca40042c08bd94a");identify.insert(identify.end(),guid.begin(),guid.end());deliver(4,identify);
             const auto now=std::chrono::steady_clock::now();session.tick(now+std::chrono::seconds(2));deliver(8,{2,9,16});session.tick(now+std::chrono::seconds(2));deliver(8,{3,4,80,50,70,0,0,0});session.tick(now+std::chrono::seconds(3));
             deliver(0x60,Bytes(386));check(audio.connects==1 && audio.playbacks==1 && audio.captures==1 && raw.events==1,"Fallback audio disappeared with a raw USB sibling");
-            e.wcid=1;deliver(0x60,Bytes(386));check(raw.events==2 && audio.captures==1,"Raw PCM reached the fallback output");
+            e.wcid=1;e.address={1,2,3,4,5,6};deliver(0x60,Bytes(386));check(raw.events==2 && audio.captures==1,"Raw PCM reached the fallback output");
             e.kind=RadioEvent::Kind::lost;session.process(e);check(session.status().size()==1 && session.status()[0].wcid==2 && session.audio_active(),"Raw disconnect removed fallback audio");
             session.close();
         });
@@ -637,7 +637,7 @@ int main() {
             session.tick(std::chrono::steady_clock::now()+std::chrono::seconds(16));
             check(session.status()[1].authentication=="timeout" && !session.status()[1].encrypted,"Silent authentication did not time out independently");
             e.kind=RadioEvent::Kind::lost;e.wcid=2;session.process(e);
-            e.kind=RadioEvent::Kind::gip;e.wcid=1;e.payload=encode_gip({3,32,5,0,{0,0,0,0}});session.process(e);
+            e.kind=RadioEvent::Kind::gip;e.wcid=1;e.address={1,2,3,4,5,6};e.payload=encode_gip({3,32,5,0,{0,0,0,0}});session.process(e);
             check(session.status().size()==1,"Client removed during active dispatch");session.tick();check(session.status().empty(),"Status disconnect not processed on tick");
             e.kind=RadioEvent::Kind::lost;session.process(e);const auto after=mock.writes.size();session.process(e);check(mock.writes.size()==after,"Duplicate removal");session.close();
         });
@@ -665,6 +665,32 @@ int main() {
             e.kind=RadioEvent::Kind::lost;session.process(e);e.kind=RadioEvent::Kind::association;e.address={2,2,3,4,5,6};session.process(e);
             release=true;raw.requests={{1,3,data}};wait([&]{session.tick();return raw.results.size()>=2;});
             check(raw.results.size()==2 && raw.results.back()==std::pair<uint32_t,int>{3,0},"Old completion reached reused WCID");session.close();
+        });
+        test("Failed association can reconnect without pairing; healthy repeats and stale WCID events are retained safely",[]{
+            usb_device usb{};device dev{};xone_mt76 mt{};mt.dev=&dev;mt.udev=&usb;mt.channel=&mt.channels[0];mt.channel->index=165;
+            usb.control=[](void *,u8,u8 type,u16,u16,void *data,u16 n,unsigned)->int{if(type&128)std::memset(data,0,n);return n;};
+            usb.bulk=[](void *,u8,void *,int n,int *actual,unsigned)->int{if(actual)*actual=n;return 0;};
+            Session session(mt,nullptr,false);const auto t=std::chrono::steady_clock::now();
+            RadioEvent e;e.kind=RadioEvent::Kind::association;e.address={1,2,3,4,5,6};e.association_sequence=uint16_t(10);e.arrived=t;session.process(e);
+            const auto initial=session.status_revision(),epoch=session.status()[0].session_generation;e.association_sequence=uint16_t(11);e.arrived=t+std::chrono::seconds(1);session.process(e);
+            check(session.status_revision()==initial && session.status()[0].session_generation==epoch && session.status()[0].repeated_associations==1 && session.status()[0].last_association_sequence==11,"Changed sequence reset healthy association or lost telemetry");
+            for(unsigned n=1;n<=5;++n)session.tick(t+std::chrono::seconds(n+1));
+            e.arrived=t+std::chrono::seconds(9);e.association_retry=true;session.process(e);
+            check(session.status_revision()==initial,"Retry bit reset a failed association");
+            e.association_retry=false;e.association_sequence=uint16_t(10);session.process(e);
+            check(session.status_revision()==initial,"Repeated original request reset a failed association");
+            e.association_sequence=uint16_t(11);session.process(e);
+            check(session.status_revision()>initial && session.status().size()==1 && session.status()[0].session_generation!=epoch && session.status()[0].repeated_associations==0 && session.removals().back().reason=="new-association-after-failure","New attempt left exhausted identification behind");
+            e.kind=RadioEvent::Kind::lost;e.wcid=1;e.arrived=t+std::chrono::seconds(8);session.process(e);
+            check(session.status().size()==1,"Delayed queued lost removed new association");
+            e.kind=RadioEvent::Kind::gip;e.payload=encode_gip({3,32,1,0,{0,0,0,0}});session.process(e);session.tick(t+std::chrono::seconds(9));
+            check(session.status().size()==1,"Old GIP status affected new client");
+            e.kind=RadioEvent::Kind::lost;e.arrived=t+std::chrono::seconds(10);session.process(e);
+            e.kind=RadioEvent::Kind::association;e.address={6,5,4,3,2,1};e.association_sequence=uint16_t(12);e.address={2,0,0,0,0,2};e.arrived=t+std::chrono::seconds(11);session.process(e);
+            e.kind=RadioEvent::Kind::disassociation;e.address={1,2,3,4,5,6};e.arrived=t+std::chrono::seconds(12);session.process(e);
+            check(session.status().size()==1 && session.status()[0].mac=="020000000002","Foreign MAC removed reused WCID");
+            e.kind=RadioEvent::Kind::gip;session.process(e);session.tick(t+std::chrono::hours(1));
+            check(session.status().size()==1,"Silence or foreign GIP reset healthy occupant");session.close();
         });
         std::cout<<passed<<" session tests passed\n"; return 0;
     }catch(const std::exception &e){std::cerr<<"FAIL: "<<e.what()<<"\n";return 1;}

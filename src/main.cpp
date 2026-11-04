@@ -427,6 +427,7 @@ int radio_test(const Options &opt,bool controller=false,bool run=false) {
             {std::ofstream file(temporary,std::ios::binary|std::ios::trunc);if(!file || !file.write(text.data(),static_cast<std::streamsize>(text.size())))throw std::runtime_error("Cannot write controller status");}
             if(!MoveFileExW(temporary.c_str(),destination.c_str(),MOVEFILE_REPLACE_EXISTING))throw std::runtime_error("Cannot replace controller status file");
         },[&]{return !opt.stop_file.empty() && std::filesystem::exists(opt.stop_file);});
+        uint64_t session_ticks=0;
         std::string previous_status;
         xone::StatusSchedule status_schedule(opt.verbose?std::chrono::milliseconds(100):std::chrono::milliseconds(2000));
         auto save_status=[&](bool running){
@@ -450,6 +451,9 @@ int radio_test(const Options &opt,bool controller=false,bool run=false) {
                     constexpr const char *levels[]={"low","normal","high","full"};
                     json<<"{\"Type\":\""<<types[c.battery->type]<<"\",\"Level\":\""<<(c.battery->type?levels[c.battery->level]:"unknown")<<"\",\"RawType\":"<<unsigned(c.battery->type)<<",\"RawLevel\":"<<unsigned(c.battery->level)<<'}';
                 }else json<<"null";
+                json<<",\"SessionGeneration\":"<<c.session_generation<<",\"RepeatedAssociations\":"<<c.repeated_associations
+                    <<",\"AssociationSequence\":"<<(c.association_sequence?std::to_string(*c.association_sequence):"null")
+                    <<",\"LastAssociationSequence\":"<<(c.last_association_sequence?std::to_string(*c.last_association_sequence):"null");
                 json<<",\"MalformedGipPackets\":"<<c.malformed_gip_packets
                     <<",\"OutputRecovering\":"<<c.output_recovering<<",\"OutputRecoveryAttempt\":"<<c.output_recovery_attempt<<",\"OutputError\":"<<xone::Json(c.output_error).dump();
                 json<<",\"UsbTx\":{\"Packets\":"<<c.usb_tx.packets<<",\"Over8ms\":"<<c.usb_tx.over_8ms
@@ -461,7 +465,7 @@ int radio_test(const Options &opt,bool controller=false,bool run=false) {
             }
             json<<"],\"RecentRadioRemovals\":[";bool first_removal=true;
             for(const auto &r:session.removals()){if(!first_removal)json<<',';first_removal=false;json<<"{\"Mac\":\""<<r.mac<<"\",\"Reason\":\""<<r.reason<<"\",\"Wcid\":"<<unsigned(r.wcid)<<",\"TickMs\":"<<r.tick_ms<<'}';}
-            json<<"],\"RadioPower\":\""<<radio_power<<"\",\"OutputRouteFailures\":"<<(raw_output?raw_output->failures():0)<<",\"RuntimeFileIoErrors\":"<<(runtime_files?runtime_files->io_errors():0)<<"}\n";const auto text=json.str();if(text==previous_status)return;
+            json<<"],\"RadioPower\":\""<<radio_power<<"\",\"OutputRouteFailures\":"<<(raw_output?raw_output->failures():0)<<",\"SessionTicks\":"<<session_ticks<<",\"RuntimeFileIoErrors\":"<<(runtime_files?runtime_files->io_errors():0)<<"}\n";const auto text=json.str();if(text==previous_status)return;
             if(memory && !memory->publish(xone::RuntimeState::radio,text))return;
             if(runtime_files && !opt.status_file.empty())runtime_files->publish(text);
             previous_status=text;
@@ -481,7 +485,7 @@ int radio_test(const Options &opt,bool controller=false,bool run=false) {
                     power_observed_at=now;
                     if(usb.idle_wake_observed())idle_power->wake(now,"usb-remote-wake");
                 }
-                session.tick();
+                session.tick();++session_ticks;
                 if(idle_power)idle_power->update(std::chrono::steady_clock::now(),session.has_clients() || session.pairing_active());
                 save_status(true);
                 std::cout.flush();tick_timer.wait(idle_power && idle_power->armed()?100:session.audio_active() || opt.output==L"usb-gip"?1:5);

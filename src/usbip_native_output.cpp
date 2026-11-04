@@ -10,6 +10,7 @@
 #include "appliance_config.hpp"
 #include "diagnostic_log.hpp"
 #include "control_media_queue.hpp"
+#include "usbip_client_progress.hpp"
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -20,6 +21,7 @@ namespace xone {
 namespace {
 struct Client {
     SOCKET socket=INVALID_SOCKET;WSAEVENT event=WSA_INVALID_EVENT;
+    UsbipClientProgress progress;
     Bytes input,output;size_t sent=0;unsigned phase=0;bool dead=false;
     usbip::Core::Clock::time_point last=usbip::Core::Clock::now();
     explicit Client(SOCKET s):socket(s){
@@ -28,11 +30,11 @@ struct Client {
         BOOL nodelay=TRUE;setsockopt(socket,IPPROTO_TCP,TCP_NODELAY,reinterpret_cast<const char *>(&nodelay),sizeof(nodelay));
     }
     ~Client(){closesocket(socket);WSACloseEvent(event);}
-    void send(Bytes bytes){if(output.size()-sent+bytes.size()>4*1024*1024)throw usbip::Error("USB response queue overflow");if(sent){output.erase(output.begin(),output.begin()+sent);sent=0;}output.insert(output.end(),bytes.begin(),bytes.end());}
+    void send(Bytes bytes){if(output.size()-sent+bytes.size()>4*1024*1024)throw usbip::Error("USB response queue overflow");if(sent){output.erase(output.begin(),output.begin()+sent);sent=0;}output.insert(output.end(),bytes.begin(),bytes.end());if(sent<output.size())progress.queued(usbip::Core::Clock::now());}
     void flush(){
         while(sent<output.size()){
             const auto n=::send(socket,reinterpret_cast<const char *>(output.data()+sent),static_cast<int>(output.size()-sent),0);
-            if(n==SOCKET_ERROR){if(WSAGetLastError()==WSAEWOULDBLOCK)return;dead=true;return;}if(!n){dead=true;return;}sent+=static_cast<size_t>(n);
+            if(n==SOCKET_ERROR){if(WSAGetLastError()==WSAEWOULDBLOCK)return;dead=true;return;}if(!n){dead=true;return;}sent+=static_cast<size_t>(n);progress.sent(usbip::Core::Clock::now(),sent<output.size());
         }output.clear();sent=0;if(phase==3)dead=true;
     }
     void read(){
@@ -59,7 +61,7 @@ struct NativeUsbOutput::Impl {
     uint64_t worker_iterations=0,max_mailbox_delay_us=0,max_radio_batch_us=0,max_socket_dispatch_us=0;
     std::atomic_uint64_t address_revision=0;
     std::atomic_bool streaming_audio=false;
-    uint64_t association_id=0;
+    uint64_t association_id=0,snapshot_sequence=0;
     std::optional<std::tuple<bool,uint8_t,uint64_t,bool,uint64_t,bool,uint64_t,std::string,bool>> published_life;
     Impl(uint16_t port,Bytes address,uint16_t pid,bool with_audio,const std::wstring &status,bool auto_select,bool trace,NativeUsbOutput::StateSink sink):mac(std::move(address)),profile(usbip::profile(pid,with_audio)),core(profile,with_audio),audio(with_audio),automatic(auto_select),diagnostics(trace),product(pid){
         state_sink=std::move(sink);
@@ -109,11 +111,16 @@ struct NativeUsbOutput::Impl {
         if(published_life==current_life && now-last_status<std::chrono::seconds(2))return;
         FILETIME created{},exited{},kernel{},user{};uint64_t cpu_100ns=0;
         if(GetThreadTimes(GetCurrentThread(),&created,&exited,&kernel,&user))cpu_100ns=(uint64_t(kernel.dwHighDateTime)<<32|kernel.dwLowDateTime)+(uint64_t(user.dwHighDateTime)<<32|user.dwLowDateTime);
-        const auto &init=core.initialization();
+        const auto &init=core.initialization();const auto progress=core.progress();
         std::ostringstream json;json<<std::boolalpha<<"{\"Pid\":"<<product<<",\"Connector\":\""<<device_connector(product).name<<"\",\"UsbImported\":"<<(imported!=nullptr)<<",\"VirtualSerial\":\""<<profile.virtual_serial<<"\",\"AssociationId\":"<<association_id<<",\"RadioConnected\":"<<connected<<",\"Ready\":"<<(connected && core.ready())<<",\"Wcid\":"<<unsigned(s.wcid)<<",\"Generation\":"<<(association_id*100+s.generation)
             <<",\"Backend\":\"cpp\",\"PeerProtocolError\":"<<peer_error<<",\"Mac\":\"";
         {std::lock_guard lock(mutex);constexpr char hex[]="0123456789abcdef";for(auto b:mac)json<<hex[b>>4]<<hex[b&15];}
         json<<"\",\"PowerCommands\":"<<s.power_commands<<",\"LastPower\":\""<<s.last_power<<"\",\"UsbModeSwitchSuppressed\":"<<s.mode_suppressed<<",\"UsbClosed\":"<<usb_closed<<",\"LastUsbError\":"<<Json(last_usb_error).dump();
+        json<<",\"SnapshotSequence\":"<<++snapshot_sequence<<",\"PublishedTickMs\":"<<GetTickCount64()
+            <<",\"UsbPending\":{\"InterruptIn\":"<<progress.interrupt_in<<",\"ControlOut\":"<<progress.control_out
+            <<",\"Capture\":"<<progress.capture<<",\"Render\":"<<progress.render
+            <<",\"ResponseBytes\":"<<(imported?imported->output.size()-imported->sent:0)
+            <<",\"PartialRequestBytes\":"<<(imported?imported->input.size():0)<<'}';
         json<<",\"RecoveryRequired\":"<<s.recovery_required<<",\"RadioAssociated\":"<<(connected && core.associated())<<",\"MailboxDroppedAudio\":"<<mailbox_dropped.load()
             <<",\"UsbImports\":"<<s.usb_imports<<",\"AnnounceReplays\":"<<s.announce_replays<<",\"CaptureWithoutUsb\":"<<s.capture_without_usb
             <<",\"Mmcss\":"<<mmcss<<",\"MmcssRequested\":"<<mmcss_requested<<",\"MmcssError\":"<<mmcss_error
@@ -171,7 +178,7 @@ struct NativeUsbOutput::Impl {
         const auto now=usbip::Core::Clock::now();
         // A live USB interrupt URB may wait indefinitely on an idle device.
         // Limit only incomplete imports; TCP close and RF generation own lifetime.
-        for(auto &c:clients){if(c->phase!=2 && now-c->last>std::chrono::seconds(5))c->dead=true;if(!c->dead)c->flush();}
+        for(auto &c:clients){if(c->phase!=2 && now-c->last>std::chrono::seconds(5))c->dead=true;if(c->progress.stalled(now)){c->dead=true;last_usb_error="USB response write stalled";}if(c->phase==2 && !c->input.empty() && now-c->last>std::chrono::seconds(15)){c->dead=true;last_usb_error="Incomplete USB request timed out";}if(!c->dead)c->flush();}
         std::erase_if(clients,[&](const auto &c){if(!c->dead)return false;if(c.get()==imported){++usb_closed;diagnostic("usb_import_closed",{{"association",association_id},{"wcid",core.stats().wcid},{"count",usb_closed}},core.associated());core.detached();imported=nullptr;std::lock_guard lock(mutex);tx.clear();}return true;});
         publish();
     }

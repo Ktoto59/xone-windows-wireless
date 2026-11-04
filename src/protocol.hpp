@@ -35,6 +35,8 @@ struct RadioEvent {
     enum class Kind { ignored, button, lost, association, disassociation, client_command, gip } kind=Kind::ignored;
     uint8_t wcid=0,command=0;
     std::vector<uint8_t> address, payload;
+    std::optional<uint16_t> association_sequence;
+    bool association_retry=false;
     std::chrono::steady_clock::time_point arrived=std::chrono::steady_clock::now();
 };
 RadioEvent parse_radio(std::span<const uint8_t> bytes);

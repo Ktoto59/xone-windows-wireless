@@ -37,7 +37,7 @@ int main(){try{
         const auto prof=profile(pid,true);Core reconnect(prof,true);Bytes body(28);body[8]=0x5e;body[9]=4;body[10]=static_cast<uint8_t>(pid);body[11]=static_cast<uint8_t>(pid>>8);
         const auto announce=encode_gip({2,32,7,0,body});const auto stale=encode_gip({3,32,9,0,{1,2,3,4}});
         reconnect.radio(1,1,mac,start);reconnect.radio(2,1,announce,start);configured(reconnect);
-        Request input;input.command=1;input.direction=1;input.ep=pid==0x0b17?6:1;input.length=64;input.seq=80;reconnect.submit(input,start);
+        Request input;input.command=1;input.direction=1;input.ep=pid==0x0b17?6:pid==0x0b12?2:1;input.length=64;input.seq=80;reconnect.submit(input,start);
         auto read=reconnect.replies();require(read.size()==1 && Bytes(read[0].begin()+48,read[0].end())==announce);
         require(reconnect.initialization().configurations==1 && reconnect.initialization().interfaces==1 && reconnect.initialization().irq_in==1 && reconnect.initialization().irq_delivered==1);
         reconnect.radio(2,1,stale,start);reconnect.detached();
@@ -61,6 +61,27 @@ int main(){try{
         Request cancel_output;cancel_output.command=2;cancel_output.seq=101;cancel_output.unlink_target=100;lifetime.submit(cancel_output);require(pending[0].cancellation.stop_requested());
         output.seq=102;lifetime.submit(output);pending=lifetime.outbound();require(pending.size()==1 && !pending[0].cancellation.stop_requested());
         lifetime.detached();require(pending[0].cancellation.stop_requested());
+    }
+    // A failed control completion must recover USB with RF intact, just as an
+    // audio failure does. Silence, an idle IN read and subsecond pauses must not.
+    for(auto pid:{uint16_t(0x0b17),uint16_t(0x0b32),uint16_t(0x0b12)})for(bool timeout:{false,true}){
+        const auto prof=profile(pid,pid!=0x0b12);Core local(prof,pid!=0x0b12),sibling(prof,pid!=0x0b12);
+        auto t=Core::Clock::time_point{}+std::chrono::hours(1);
+        local.radio(1,1,mac,t);configured(local);sibling.radio(1,2,mac,t);configured(sibling);
+        Request input;input.command=1;input.direction=1;input.seq=200;input.ep=pid==0x0b17?6:pid==0x0b12?2:1;input.length=64;
+        local.submit(input,t);local.tick(t+std::chrono::hours(1));require(local.ready() && local.progress().interrupt_in==1);t+=std::chrono::hours(1);
+        Request output;output.command=1;output.seq=201;output.ep=pid==0x0b17?10:pid==0x0b12?2:1;output.data=encode_gip({4,32,1,0,{}});output.length=static_cast<int32_t>(output.data.size());
+        local.submit(output,t);auto control_tx=local.outbound();require(control_tx.size()==1 && local.progress().control_out==1);
+        const auto control_generation=local.stats().generation;
+        for(auto pause:{10,20,40,80,250,500}){local.tick(t+std::chrono::milliseconds(pause));require(local.ready() && local.stats().generation==control_generation);}
+        if(timeout)local.tick(t+std::chrono::seconds(5));else local.complete(1,control_tx[0].token,-5,t+std::chrono::seconds(1));
+        require(local.associated() && !local.ready() && local.stats().recovery_required && local.stats().generation==control_generation+1);
+        require(control_tx[0].cancellation.stop_requested() && sibling.ready() && sibling.stats().wcid==2);
+        configured(local);local.complete(1,control_tx[0].token,0,t+std::chrono::seconds(6));require(local.replies().empty());
+        require(local.ready() && !local.stats().recovery_required);
+        output.seq=202;local.submit(output,t+std::chrono::seconds(7));control_tx=local.outbound();require(control_tx.size()==1);
+        local.complete(1,control_tx[0].token,0,t+std::chrono::seconds(7));require(local.replies().size()==1);
+        for(unsigned minute=1;minute<=120;++minute)local.tick(t+std::chrono::minutes(minute));require(local.ready() && sibling.ready());
     }
     std::cout<<"PASS: RF audio, real TX ACK, bounded media, generation reset, 2021 clock, isolated expiry, clean identity-only reimport and coalesced drops\n";return 0;
 }catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}}

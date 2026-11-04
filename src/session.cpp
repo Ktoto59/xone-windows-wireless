@@ -42,6 +42,10 @@ std::vector<std::string> identification_classes(std::span<const uint8_t> data) {
 }
 struct Session::Client {
     Session &owner; uint8_t wcid; Bytes address; bool encrypted=false;uint64_t tx_epoch=0;
+    std::chrono::steady_clock::time_point associated_at{};
+    std::optional<uint16_t> association_sequence;
+    std::optional<uint16_t> last_association_sequence;
+    uint64_t repeated_associations=0;
     GamepadInput input{};bool guide=false,rumble_pending=false;
     GamepadCapabilities capabilities{};
     std::optional<BatteryStatus> battery;
@@ -278,16 +282,43 @@ void Session::pairing(bool enabled) {
 }
 void Session::remove(uint8_t wcid,const char *reason) { if(wcid && wcid<=16 && clients_[wcid-1]) { if(tx_queue_)tx_queue_->cancel(wcid,clients_[wcid-1]->tx_epoch);if(removals_.size()==32)removals_.erase(removals_.begin());removals_.push_back({hex(clients_[wcid-1]->address),reason,wcid,static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count())}); if(raw_output_ && raw_output_->target(clients_[wcid-1]->address))raw_output_->event(3,wcid);if(audio_output_)audio_output_->disconnect(wcid);if(output_)output_->disconnect(wcid);clients_[wcid-1].reset();++status_revision_; check(xone_mt76_remove_client(&mt_,wcid),"Remove client"); std::cout<<"DISCONNECTED WCID="<<unsigned(wcid)<<"\n"; } }
 void Session::process(const RadioEvent &e) {
+    // Arrival is stamped by the USB receiver, before queueing. Events already
+    // queued for a former occupant must not reach a reused WCID. Firmware lost
+    // notifications carry no MAC/epoch, so later arrivals remain ambiguous.
+    const bool addressed=e.kind==RadioEvent::Kind::gip || e.kind==RadioEvent::Kind::lost ||
+        e.kind==RadioEvent::Kind::disassociation || (e.kind==RadioEvent::Kind::client_command && e.command==16);
+    if(addressed && e.wcid && e.wcid<=16 && clients_[e.wcid-1]){
+        const auto &c=*clients_[e.wcid-1];
+        if(e.arrived<c.associated_at || (!e.address.empty() && e.address!=c.address))return;
+    }
     if(e.kind!=RadioEvent::Kind::ignored)resume_idle_radio();
     if(e.kind==RadioEvent::Kind::association || e.kind==RadioEvent::Kind::gip || e.kind==RadioEvent::Kind::client_command)
         pair_scan_last_=std::chrono::steady_clock::now();
     switch(e.kind) {
     case RadioEvent::Kind::button: std::cout<<"ADAPTER BUTTON\n";pairing(true); pair_deadline_=std::chrono::steady_clock::now()+std::chrono::seconds(30); break;
     case RadioEvent::Kind::association: {
-        for(const auto &c:clients_) if(c && c->address==e.address) return;
+        if(e.address.size()!=6)throw std::runtime_error("Invalid association MAC");
+        for(const auto &c:clients_) if(c && c->address==e.address){
+            if(e.arrived>=c->associated_at){++c->repeated_associations;c->last_association_sequence=e.association_sequence;}
+            const bool failed=c->status_disconnected ||
+                (!c->output_error.empty() && e.arrived>=c->output_retry) ||
+                (c->logical[0] && c->logical[0]->auth_failed) ||
+                (c->identify_attempts==5 && e.arrived>=c->identify_retry && (!c->logical[0] || !c->logical[0]->identified));
+            const bool new_request=e.association_sequence && c->association_sequence &&
+                e.association_sequence!=c->association_sequence && !e.association_retry && e.arrived>c->associated_at;
+            // A repeated MAC or changed 802.11 sequence alone never resets a
+            // healthy authentication/audio/USB route. Require a failed stage.
+            if(!failed || !new_request)return;
+            const auto previous=association_retries_.find(e.address);
+            if(previous!=association_retries_.end() && e.arrived-previous->second<std::chrono::seconds(5))return;
+            if(association_retries_.size()>=64 && previous==association_retries_.end())association_retries_.erase(association_retries_.begin());
+            association_retries_[e.address]=e.arrived;
+            remove(c->wcid,"new-association-after-failure");break;
+        }
         const auto at=std::find_if(clients_.begin(),clients_.end(),[](const auto &c){return !c;});
         if(at==clients_.end()) throw std::runtime_error("Client table full");
         const auto wcid=static_cast<uint8_t>(at-clients_.begin()+1); auto client=std::make_unique<Client>(*this,wcid,e.address);
+        client->associated_at=e.arrived;client->association_sequence=client->last_association_sequence=e.association_sequence;
         check(xone_mt76_associate_client(&mt_,wcid,client->address.data()),"Associate client"); *at=std::move(client);
         ++status_revision_;
         if(raw_output_ && raw_output_->target(e.address))raw_output_->event_at(1,wcid,e.address,e.arrived);
@@ -426,6 +457,8 @@ std::vector<ControllerStatus> Session::status() const {
     for(const auto &c:clients_)if(c){
         ControllerStatus s{c->wcid,hex(c->address),c->encrypted,c->input.share,c->capabilities,c->battery,c->kind,{},"not-started",0,0,c->usb_tx};
         s.malformed_gip_packets=c->malformed_gip_packets;
+        s.session_generation=c->tx_epoch;s.repeated_associations=c->repeated_associations;
+        s.association_sequence=c->association_sequence;s.last_association_sequence=c->last_association_sequence;
         s.output_recovering=!c->output_error.empty();s.output_recovery_attempt=c->output_recovery_attempt;s.output_error=c->output_error;
         if(c->logical[0]){const auto &l=*c->logical[0];s.authentication=l.auth_stage;s.auth_version=l.auth.version();s.peer_auth_version=l.auth.peer_version();}
         for(const auto &l:c->logical)if(l && l->audio){s.audio=ControllerStatus::Audio{l->auth_failed?"authentication-failed":l->audio_connected?"streaming-native":l->audio->stage_name(),l->audio->input().rate,l->audio->output().rate,l->audio->input().channels,l->audio->output().channels,l->audio_received,l->audio_silence,l->audio_playback,l->audio_capture,l->audio_connected?audio_output_->endpoints(c->wcid,l->id):AudioEndpoints{},l->audio_connected};break;}

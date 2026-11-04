@@ -63,7 +63,7 @@ private:
     void expire_render(uint32_t seq,Clock::time_point now);
     Completion render_result(const Pending &p,bool expired)const;
     void bad_audio(Clock::time_point now);
-    void recover_audio();
+    void recover_usb(const char *reason);
     bool cancel(uint32_t seq);
     uint32_t transmit(uint32_t seq,Bytes data,bool audio,Clock::time_point now);
     void clear_audio();
@@ -74,6 +74,14 @@ public:
     ~Core(){for(auto &[seq,p]:pending_){(void)seq;p.cancellation.request_stop();}}
     bool associated()const{return stats_.wcid!=0;}
     bool ready()const{return associated() && !stats_.recovery_required;}
+    struct Progress {size_t interrupt_in=0,control_out=0,capture=0,render=0;};
+    Progress progress()const{
+        Progress result;
+        for(const auto &[seq,p]:pending_){(void)seq;switch(p.kind){
+            case Kind::irq_in:++result.interrupt_in;break;case Kind::irq_out:++result.control_out;break;
+            case Kind::capture:++result.capture;break;case Kind::render:++result.render;break;
+        }}return result;
+    }
     const Stats &stats()const{return stats_;}
     const Initialization &initialization()const{return initialization_;}
     void imported();

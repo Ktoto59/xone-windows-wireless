@@ -120,14 +120,14 @@ void Core::bad_audio(Clock::time_point now){
     if(++bad_audio_streak_<8)return;
     // One corrupt/unsupported media frame is not a broken RF association.
     // Sustained bad layout requests USB/audio reinitialization only, at most
-    // once per ten seconds. Preserve this cooldown across recover_audio/reset.
+    // once per ten seconds. Preserve this cooldown across recover_usb/reset.
     if(last_audio_resync_ && now-*last_audio_resync_<std::chrono::seconds(10))return;
-    ++stats_.audio_resyncs;recover_audio();last_audio_resync_=now;
+    ++stats_.audio_resyncs;recover_usb("malformed-audio");last_audio_resync_=now;
 }
-void Core::recover_audio(){
+void Core::recover_usb(const char *reason){
     const auto wcid=stats_.wcid;auto announce=announce_;const auto was_imported=imported_once_;
     reset();announce_=std::move(announce);imported_once_=was_imported;stats_.wcid=wcid;stats_.recovery_required=wcid!=0;
-    diagnostic("audio_recovery_required",{{"wcid",wcid},{"generation",stats_.generation}},true);
+    diagnostic(std::string_view(reason).starts_with("control")?"usb_recovery_required":"audio_recovery_required",{{"wcid",wcid},{"generation",stats_.generation},{"reason",reason}},true);
 }
 uint32_t Core::transmit(uint32_t seq,Bytes data,bool audio,Clock::time_point now){
     do{if(++next_token_==0)++next_token_;}while(tokens_.contains(next_token_));
@@ -311,16 +311,18 @@ void Core::complete(uint8_t wcid,uint32_t token,int32_t status,Clock::time_point
         if(now>=p.media_deadline)expire_render(seq,now);
         pump(now);return;
     }
-    if(status){const bool audio=p.kind==Kind::render;fail(seq,status);if(audio)recover_audio();pump(now);return;}
+    if(status){const bool control=p.kind==Kind::irq_out;fail(seq,status);recover_usb(control?"control-tx-failed":"audio-tx-failed");pump(now);return;}
     if(p.kind==Kind::render){for(size_t i=0;i<p.sent_frames.size();++i)p.sent_frames[i]+=p.sending_frames[i];p.sending_frames.fill(0);p.sending_slots=0;++stats_.audio_tx;p.deadline=now+std::chrono::seconds(5);}
     else {stats_.tx+=packets(p.request.data).size();Completion c;c.actual=static_cast<uint32_t>(p.request.length);finish(seq,c);}
     pump(now);
 }
 void Core::tick(Clock::time_point now){
     std::vector<uint32_t> expired;for(const auto &[seq,p]:pending_)if((p.kind==Kind::irq_out || (p.kind==Kind::render && p.token)) && now>=p.deadline)expired.push_back(seq);
-    bool audio_timeout=false;
-    for(auto seq:expired){const auto p=pending_.find(seq);if(p!=pending_.end())audio_timeout|=p->second.kind==Kind::render;fail(seq,-19);}
-    if(audio_timeout)recover_audio();pump(now);
+    bool control_timeout=false;
+    for(auto seq:expired){control_timeout|=pending_.at(seq).kind==Kind::irq_out;fail(seq,-19);}
+    // Only an actual outbound request with an expired completion deadline is
+    // evidence of failure. Idle interrupt IN/audio silence have no deadline.
+    if(!expired.empty())recover_usb(control_timeout?"control-tx-timeout":"audio-tx-timeout");pump(now);
 }
 std::optional<Core::Clock::time_point> Core::wake_at(Clock::time_point now)const{
     std::optional<Clock::time_point> result;

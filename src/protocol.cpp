@@ -148,7 +148,7 @@ RadioEvent parse_radio(std::span<const uint8_t> bytes) {
     const auto payload=body.subspan(header+padding,mpdu-header);
     result.payload.assign(payload.begin(),payload.end());
     if (type==0x0088) result.kind=RadioEvent::Kind::gip;
-    else if (type==0x0000) result.kind=RadioEvent::Kind::association;
+    else if (type==0x0000) {result.kind=RadioEvent::Kind::association;result.association_sequence=le16(body,22);result.association_retry=(fc&0x0800)!=0;}
     else if (type==0x00a0) result.kind=RadioEvent::Kind::disassociation;
     else if (type==0x0070) {
         if (payload.size()<2 || payload[0]!=0x70) throw std::runtime_error("Invalid wireless client command");
