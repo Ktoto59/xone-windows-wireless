@@ -30,10 +30,12 @@ scheduling the bridge worker. No claim of uninterrupted audio during a stall.
   Sending, timers and USB requests never refresh that horizon. The existing
   two RX-derived credits remain a bounded local pacing heuristic, not proven
   receiver flow-control grants. Predicted sends need hardware validation.
-- Smooth the 2024 period and phase from regular RX timestamps. Bound the period
-  to 7.5-8.5 ms and phase correction to 100 microseconds per observation; ignore
-  batches, duplicate timestamps and loss-sized gaps when learning the rate.
-  A gap of at least 32 ms resets the rate estimate to its nominal 8 ms.
+- Estimate the 2024 period from a fitted slope over at least 64 packets and
+  16 arrival observations. Include short and coalesced arrivals in that fit;
+  selectively discarding short intervals biases the rate downward. Bound the
+  learned period to 7.5-8.5 ms and keep TX phase independent of individual RX
+  delivery jitter. A gap of at least 32 ms resets the estimate to nominal 8 ms.
+  See [the RC stutter regression](AUDIO-STUTTER-RC.md) for the reproduction.
 - Preserve timer phase across ordinary jitter. After missing a whole render
   period, re-anchor in the present instead of replaying missed timer slots in
   a burst. Apply this burst bound to 2021's existing independent clock, keeping

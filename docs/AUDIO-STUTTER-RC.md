@@ -1,0 +1,91 @@
+# Playback stutter in the first recovery RC builds
+
+Date: 2026-11-04. Parent: `33da530` on `audio-recovery-stock-driver`.
+
+## Hardware observations
+
+The user reported continuous crackling and interruptions with diagnostic
+`0.1.0-rc.1.33da530`. The same symptoms persisted with diagnostics disabled in
+`0.1.0-rc.2.33da530`. The remembered last good installation was alpha.6.1.
+Consequently the earlier assumption that the current audio path was already
+hardware-validated could not be used to exclude changes after alpha.6.1.
+
+Installed binary hashes matched the RC1 package. During a 124.094-second
+observation interval, the same RF association/import accumulated 842 expired
+render requests and 6,736 dropped render frames. There were no new USB closes,
+imports, audio resyncs, stale audio events or mailbox audio drops. MMCSS was
+active. A subsequent RC2 snapshot again showed render expiry without recovery;
+its physical transmit counters reported zero failed writes and a maximum write
+duration of 376 microseconds. These observations locate sustained loss on the
+render path; they do not establish the cause of every audible artifact.
+
+No installed runtime, driver binding, audio setting or adapter power policy was
+changed by the investigation. Status snapshots and existing journals were read;
+private evidence is retained only in ignored local work directories.
+
+## Deterministically reproduced defect
+
+The 2024 clock estimator introduced after alpha.6.1 smoothed individual RX gaps
+between 4 and 12 ms, ignoring shorter intervals and packet batches. A lossless
+stream arriving at intervals of 12, 1 and 11 ms has an actual average of 8 ms.
+Ignoring the 1-ms intervals trains the estimator toward its upper 8.5-ms limit.
+Playback consequently runs at about 117.65 packets/second instead of 125.
+The per-arrival phase corrections also turn delivery jitter into TX timing
+changes; simply averaging whole windows did not eliminate the queued-URB loss.
+
+The new virtual-time regression keeps eight USB ISO render requests queued,
+replaces completed requests immediately, supplies the lossless 12/1/11-ms RX
+pattern and completes every physical send successfully after 100 microseconds.
+It uses the production `Core`, without sockets, a real adapter or sleeps.
+
+| 30-second scenario | Parent code | Corrected code |
+| --- | --- | --- |
+| Received audio packets | 3,750 | 3,750 |
+| Successfully sent audio packets | 3,530 | 3,750 |
+| Expired render requests | 441 | 0 |
+| Dropped render frames | 3,528 | 0 |
+
+The previous constant-rate drift tests had no realistic eight-request USB
+backlog and did not exercise asymmetric burst delivery. They therefore passed
+while this steady-state loss was possible.
+
+## Targeted correction
+
+`RadioRenderTiming` now fits elapsed arrival time against cumulative packet
+position over at least 64 packets and 16 observations, including short intervals,
+duplicate arrival timestamps and multi-packet arrivals. A fitted slope is less
+sensitive than endpoint-only averaging to jitter at a window boundary. Valid
+7.5-8.5-ms estimates update the existing frequency gradually. Individual RX
+arrival phases no longer move the TX deadline. Out-of-order observations are
+ignored; the existing 32-ms gap reset remains.
+
+The default period remains 8 ms. This preserves adaptation to genuine clock
+drift without learning only the slow half of delivery jitter. The core's bounded
+prediction horizon, no-catch-up policy, PCM age limits, buffer sizes, per-frame
+ownership/expiry, microphone path, physical completion/cancellation, MMCSS,
+priorities, RF protocol and GIP authentication are unchanged. The host backoff
+and partial-attach fixes from `33da530` are retained in full.
+
+## Regression coverage and acceptance
+
+The audio recovery suite additionally checks 30-second queued render streams
+with 12/1/11-ms delivery, 7/1/12/12-ms delivery, 16/0-ms coalesced timestamps,
+ordinary 8-ms delivery, and two packets per 16-ms arrival. All must have zero
+render expiry/dropped frames and normal send throughput. Direct estimator tests
+cover nominal frequency, real +/-50-microsecond drift, out-of-order timestamps,
+32-ms gap reset and clear/reset. Existing 80-second drift, worker-stall,
+prediction-horizon, per-frame expiry, unlink, microphone/transport and independent
+2021 clock tests remain required.
+
+Validation includes the baseline C++ suites, rebuilt native bridge/recovery
+suites, full Python discovery, a fresh diagnostics-disabled appliance build and
+the branch's Windows CI. The new installer is a local RC for an audible hardware
+check; it is not a published release. The actual CI result and installer path
+are provided with delivery.
+
+The reproduction proves the clock-estimation defect and its correction for the
+tested schedules. The user's physical crackling is not marked resolved until
+the corrected RC is installed and listened to. Confirm playback first with the
+same application/source and topology, then microphone use, a normal reconnect,
+two-device isolation and a longer soak. A remaining artifact requires fresh
+status evidence; do not mask it with larger buffers or recovery watchdogs.

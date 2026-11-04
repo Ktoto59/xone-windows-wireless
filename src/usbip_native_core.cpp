@@ -286,7 +286,7 @@ void Core::radio(uint8_t kind,uint8_t wcid,std::span<const uint8_t> data,Clock::
         });
         if(parsed.empty()){pump(now);return;}
         if(radio_last_!=Clock::time_point{} && received>radio_last_)stats_.max_radio_gap_us=std::max(stats_.max_radio_gap_us,static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(received-radio_last_).count()));
-        if(!connector_.independent_clock)render_deadline_+=render_timing_.observe(received,parsed.size(),render_deadline_);
+        if(!connector_.independent_clock)render_timing_.observe(received,parsed.size());
         stats_.layout=true;radio_last_=received;if(!audio_)return;
         if(!control_){stats_.capture_without_usb+=parsed.size()*8;return;}
         if(parsed.size()>8){stats_.dropped+=(parsed.size()-8)*8;parsed.erase(parsed.begin(),parsed.end()-8);}

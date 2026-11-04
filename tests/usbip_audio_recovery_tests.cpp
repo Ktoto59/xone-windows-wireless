@@ -29,11 +29,55 @@ Request render(uint32_t seq,size_t frames,uint8_t value,uint32_t ep=2){
 RawGipTransmit take(Core &c){auto out=c.outbound();require(out.size()==1 && out[0].audio);return std::move(out[0]);}
 Bytes payload(const RawGipTransmit &tx){auto p=parse_gip(tx.data);require(p.size()==1 && p[0].payload.size()==1536);return p[0].payload;}
 void unlink(Core &c,uint32_t seq,uint32_t target,Core::Clock::time_point now){Request r;r.command=2;r.seq=seq;r.unlink_target=target;c.submit(r,now);c.replies();}
+Core::Stats bursty_render_stream(std::span<const std::chrono::nanoseconds> gaps,size_t batch=1){
+    const auto start=Core::Clock::time_point{}+1h;const auto p=profile(0x0b32,true);
+    Bytes mic;for(size_t n=0;n<batch;++n){const auto packet=microphone();mic.insert(mic.end(),packet.begin(),packet.end());}
+    Core c(p,true);connect(c,start);c.radio(4,1,mic,start);
+    uint32_t seq=1000;for(unsigned n=0;n<8;++n)c.submit(render(seq++,8,5),start);
+    auto tx=take(c);auto completion=100us+0ns;auto rx=gaps.front(),at=0ns;
+    size_t gap=1;unsigned iterations=0;auto last_sent=0ns;
+    for(;;){
+        require(++iterations<100000);
+        auto next=std::min(rx,completion);
+        if(const auto wake=c.wake_at(start+at))next=std::min(next,std::max(at+1ns,std::chrono::duration_cast<std::chrono::nanoseconds>(*wake-start)));
+        at=next;if(at>=30s)break;
+        if(rx==at){c.radio(4,1,mic,start+at);rx+=gaps[gap++%gaps.size()];}
+        if(completion==at){completion=60s;c.complete(1,tx.token,0,start+at);}
+        c.tick(start+at);
+        // Windows keeps eight ISO render requests queued. Complete physical
+        // sends after 100 us and replace each finished USB request immediately.
+        for(const auto &reply:c.replies()){(void)reply;c.submit(render(seq++,8,5),start+at);}
+        for(auto &out:c.outbound()){
+            require(completion==60s && at-last_sent>=7500us);last_sent=at;
+            tx=std::move(out);completion=at+100us;
+        }
+    }
+    return c.stats();
+}
 }
 int main(){try{
     const auto now=Core::Clock::time_point{}+100s;
     const auto profile2024=profile(0x0b32,true),profile2021=profile(0x0b17,true);
     const auto mic=microphone();
+    const std::vector<std::vector<std::chrono::nanoseconds>> burst_patterns{{12ms,1ms,11ms},{7ms,1ms,12ms,12ms},{16ms,0ms},{8ms}};
+    for(const auto &gaps:burst_patterns){
+        const auto s=bursty_render_stream(gaps);
+        require(s.render_expired==0 && s.render_dropped_frames==0 && s.audio_tx>=3740 && s.audio_tx<=3760);
+        require(!s.recovery_required && s.generation==1 && s.render_high_water<=32);
+    }
+    {
+        const std::array<std::chrono::nanoseconds,1> gaps{16ms};
+        const auto s=bursty_render_stream(gaps,2);
+        require(s.render_expired==0 && s.render_dropped_frames==0 && s.audio_tx>=3740 && s.audio_tx<=3760 && !s.recovery_required);
+    }
+    for(auto actual:{7950us,8000us,8050us}){
+        RadioRenderTiming timing;auto arrived=now;timing.observe(arrived,1);
+        for(unsigned n=0;n<4096;++n){arrived+=actual;timing.observe(arrived,1);}
+        const auto difference=timing.period()-actual;require(difference>=-1us && difference<=1us);
+        const auto saved=timing.period();timing.observe(arrived-1ms,1);require(timing.period()==saved);
+        arrived+=32ms;timing.observe(arrived,1);require(timing.period()==8ms);
+        timing.clear();require(timing.period()==8ms);
+    }
     {
         Core c(profile2024,true);connect(c,now);c.radio(4,1,mic,now);
         c.submit(render(10,8,1),now);auto tx=take(c);c.complete(1,tx.token,0,now);c.replies();
@@ -215,6 +259,6 @@ int main(){try{
         if(rx_period>8000us)require(sent-received<=3 && received-sent<=3);
         require(sent<=received+3 && c.ready() && c.stats().render_high_water<=32);
     }
-    std::cout<<"PASS: bounded prediction, 10/20/40/80/250/500 ms stalls, no catch-up bursts, per-frame expiry, unlink ownership and transport recovery\n";
+    std::cout<<"PASS: burst jitter, queued render, clock drift, bounded prediction, 10/20/40/80/250/500 ms stalls, no catch-up bursts, per-frame expiry, unlink ownership and transport recovery\n";
     return 0;
 }catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}}
