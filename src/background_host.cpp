@@ -19,6 +19,7 @@
 #include "radio_restart_backoff.hpp"
 #include "host_cleanup.hpp"
 #include "owned_usb_port.hpp"
+#include "usb_attach_recovery.hpp"
 #include "peer_recovery_backoff.hpp"
 #include "diagnostic_log.hpp"
 #include "runtime_state.hpp"
@@ -98,7 +99,46 @@ struct Window {
     void pump(){MSG message{};while(PeekMessageW(&message,nullptr,0,0,PM_REMOVE)){TranslateMessage(&message);DispatchMessageW(&message);}}
 };
 bool healthy(const std::wstring &id){DEVINST node=0;ULONG status=0,problem=0;return CM_Locate_DevNodeW(&node,const_cast<PWSTR>(id.c_str()),CM_LOCATE_DEVNODE_NORMAL)==CR_SUCCESS && CM_Get_DevNode_Status(&status,&problem,node,0)==CR_SUCCESS && (status&DN_STARTED) && !(status&DN_HAS_PROBLEM);}
-struct Peer {xone::ApplianceDevice model;int port=0;uint64_t generation=0;bool ready=false;Clock::time_point attached_at{};xone::PeerRecoveryBackoff retry;std::string error;xone::UsbImportRecovery import;};
+struct Peer {xone::ApplianceDevice model;int port=0;uint64_t generation=0;bool ready=false;Clock::time_point attached_at{};xone::PeerRecoveryBackoff retry;std::string error;xone::UsbImportRecovery import;xone::UsbAttachRecovery attach;};
+void peer_failed(Peer &p,const std::string &error,Clock::time_point now){
+    p.retry.failed(now);p.ready=false;p.error=error;
+    xone::diagnostic("slot_retry",{{"slot",p.model.name},{"error",error},{"attempt",p.retry.failures()},{"retry_seconds",p.retry.delay().count()}},true);
+}
+// Shared by the host and fault-injection tests; callbacks replace only the OS
+// boundary. Normal lifecycle changes never enter the exception/failure path.
+template<class Attach,class Detach,class Save>
+void service_peer_snapshot(Peer &p,const Json &s,Clock::time_point now,Attach attach,Detach detach,Save save){
+    if(!s.is_object() || !s.contains("Generation") || !s["Generation"].is_number_unsigned() || !s.contains("Ready") || !s["Ready"].is_boolean()){
+        p.retry.interrupted();return;
+    }
+    const auto generation=s.value("Generation",uint64_t(0));const bool ready=s.value("Ready",false);
+    const bool recovery=s.value("RecoveryRequired",false),associated=s.value("RadioAssociated",ready);
+    const bool known_import=s.contains("UsbImported") && s["UsbImported"].is_boolean();
+    if(p.port){
+        const auto reason=p.import.detach_reason(ready,recovery,generation,p.generation,s.value("UsbImported",false),known_import,s.value("SnapshotSequence",uint64_t(0)),s.value("UsbImports",uint64_t(0)),s.value("UsbClosed",uint64_t(0)),now,s.value("AssociationId",uint64_t(0)),s.value("PublishedTickMs",uint64_t(0)));
+        if(reason!=xone::UsbDetachReason::none){
+            xone::diagnostic("usb_reimport_required",{{"slot",p.model.name},{"port",p.port},{"reason",xone::usb_detach_name(reason)},{"generation",generation},{"previous_generation",p.generation}},xone::usb_detach_failed(reason));
+            // Invalidate before cleanup, so a throwing detach is retried even
+            // if the RF snapshot later disappears or becomes healthy again.
+            p.generation=0;p.ready=false;p.retry.interrupted();detach(p);
+            // Schedule actual failures at completion of the synchronous cleanup,
+            // so time spent in USBip cannot consume the retry delay.
+            if(xone::usb_detach_failed(reason))throw xone::UsbImportFailure(reason);
+            return; // observe the next RF snapshot before a new attach
+        }
+    }
+    p.ready=ready;
+    if(xone::UsbImportRecovery::attach(ready,recovery,associated)){
+        const auto pid=s.value("Pid",uint16_t(0));if(pid!=0x0b17 && pid!=0x0b32 && pid!=0x0b12)throw std::runtime_error("Unknown native slot model");
+        p.model.pid=pid;p.model.audio=pid!=0x0b12;p.model.profile=pid==0x0b17?"headset-0b17-usb.json":pid==0x0b32?"headset-0b32-usb.json":"controller-0b12-usb.json";
+    }
+    if(xone::UsbImportRecovery::attach(ready,recovery,associated) && !p.port && p.retry.ready(now)){
+        p.retry.interrupted();attach(p);p.generation=generation;
+        const auto mac=s.value("Mac",p.model.mac);if(mac.size()==12 && std::all_of(mac.begin(),mac.end(),[](char c){return (c>='0'&&c<='9')||(c>='a'&&c<='f');}))p.model.mac=mac;
+        save();return; // the pre-attach snapshot cannot prove a healthy import
+    }
+    if(p.retry.observe_healthy(p.port && p.import.seen_import && ready && !recovery && known_import && s.value("UsbImported",false),now))p.error.clear();
+}
 class Host {
     std::array<Peer,8> peers_;Json config_,previous_state_;Child radio_;std::wstring adapter_;Window window_;
     xone::RuntimeState memory_{root,true};Json registry_;bool registry_dirty_=false;
@@ -117,7 +157,10 @@ class Host {
         previous_state_=status;
     }
     void detach(Peer &peer,Clock::time_point deadline=Clock::now()+std::chrono::seconds(15),bool stopping=false){
-        peer.ready=false;
+        peer.ready=false;peer.generation=0;peer.retry.interrupted();
+        peer.attach.reconcile(peer.port,peer.model.port,[&](const std::wstring &args,bool get_port,std::string *captured){
+            return usbip(args,get_port,captured,deadline,stopping?nullptr:memory_.stop_event());
+        });
         // The CLI serial is empty: attach deliberately has no --serial override.
         // It differs from the server VirtualSerial (which Windows still reads).
         xone::detach_owned_usb_port(peer.port,peer.model.port,"",[&](const std::wstring &args,std::string *captured){
@@ -192,26 +235,19 @@ public:
                     if(radio_retry_.observe_running(Clock::now()))xone::diagnostic("radio_recovery_stable");
                     xone::service_peers(peers_,[&](Peer &p){
                         window_.pump();if(memory_.stopped() || resumed || !p.retry.ready(Clock::now()))return;
-                        if(p.port && !p.generation)detach(p); // retry failed cleanup even before RF reconnect
+                        if(p.attach.pending || (p.port && !p.generation))detach(p); // retry failed cleanup even before RF reconnect
                         const auto s=memory_.read(static_cast<size_t>(&p-peers_.data()));
                         // An unavailable/partially observed status file is not
                         // a radio disconnect. Only an explicit snapshot may
                         // detach this slot's imported USB device.
-                        if(!s.is_object() || !s.contains("Generation") || !s["Generation"].is_number_unsigned() || !s.contains("Ready") || !s["Ready"].is_boolean())return;
-                        const auto generation=s.value("Generation",uint64_t(0));const bool ready=s.value("Ready",false);
-                        const bool recovery=s.value("RecoveryRequired",false),associated=s.value("RadioAssociated",ready);
-                        const bool known_import=s.contains("UsbImported") && s["UsbImported"].is_boolean();
-                        if(p.port && p.import.detach(ready,recovery,generation,p.generation,s.value("UsbImported",false),known_import,s.value("SnapshotSequence",uint64_t(0)),s.value("UsbImports",uint64_t(0)),s.value("UsbClosed",uint64_t(0)),Clock::now(),s.value("AssociationId",uint64_t(0)),s.value("PublishedTickMs",uint64_t(0)))){
-                            xone::diagnostic("usb_reimport_required",{{"slot",p.model.name},{"port",p.port},{"generation",generation},{"previous_generation",p.generation},{"ready",ready},{"recovery",recovery},{"imported",s.value("UsbImported",false)}},true);
-                            detach(p);throw std::runtime_error("USB import lost; local retry scheduled");
-                        }
-                        p.ready=ready;if(xone::UsbImportRecovery::attach(ready,recovery,associated)){const auto pid=s.value("Pid",uint16_t(0));if(pid!=0x0b17 && pid!=0x0b32 && pid!=0x0b12)throw std::runtime_error("Unknown native slot model");p.model.pid=pid;p.model.audio=pid!=0x0b12;p.model.profile=pid==0x0b17?"headset-0b17-usb.json":pid==0x0b32?"headset-0b32-usb.json":"controller-0b12-usb.json";}
-                        if(xone::UsbImportRecovery::attach(ready,recovery,associated) && !p.port && p.retry.ready(Clock::now())){p.port=usbip(L"-t "+std::to_wstring(p.model.port)+L" attach -r 127.0.0.1 -b 1-1 --once --terse",true,nullptr,Clock::now()+std::chrono::seconds(15),memory_.stop_event());p.generation=generation;p.attached_at=Clock::now();p.import.begin(s.value("SnapshotSequence",uint64_t(0)),s.value("UsbImports",uint64_t(0)),s.value("UsbClosed",uint64_t(0)),p.attached_at,s.value("AssociationId",uint64_t(0)),GetTickCount64());const auto mac=s.value("Mac",p.model.mac);if(mac.size()==12 && std::all_of(mac.begin(),mac.end(),[](char c){return (c>='0'&&c<='9')||(c>='a'&&c<='f');}))p.model.mac=mac;save_devices();}
-                        if(p.retry.observe_healthy(p.port && ready && !recovery && known_import && s.value("UsbImported",false),Clock::now()))p.error.clear();
-                    },[&](Peer &p,const std::string &error){
-                        p.retry.failed(Clock::now());p.ready=false;p.error=error;
-                        xone::diagnostic("slot_retry",{{"slot",p.model.name},{"error",error},{"attempt",p.retry.failures()},{"retry_seconds",p.retry.delay().count()}},true);
-                    });
+                        service_peer_snapshot(p,s,Clock::now(),[&](Peer &peer){
+                            const auto deadline=Clock::now()+std::chrono::seconds(15);
+                            peer.attach.attach(peer.port,peer.model.port,[&](const std::wstring &args,bool get_port,std::string *captured){
+                                return usbip(args,get_port,captured,deadline,memory_.stop_event());
+                            });
+                            peer.attached_at=Clock::now();peer.import.begin(s.value("SnapshotSequence",uint64_t(0)),s.value("UsbImports",uint64_t(0)),s.value("UsbClosed",uint64_t(0)),peer.attached_at,s.value("AssociationId",uint64_t(0)),GetTickCount64());
+                        },[&](Peer &peer){detach(peer);},[&]{save_devices();});
+                    },[&](Peer &p,const std::string &error){peer_failed(p,error,Clock::now());});
                     // Audio endpoint choice belongs to Windows and the user.
                     // Connecting another peer must not change global defaults.
                     state(std::any_of(peers_.begin(),peers_.end(),[](const auto &p){return p.ready && p.port!=0;})?"DevicesReady":"WaitingForDevices");
